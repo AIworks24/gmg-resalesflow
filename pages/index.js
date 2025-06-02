@@ -67,20 +67,49 @@ export default function GMGResaleFlow() {
     }
   };
 
-  const loadHOAProperties = async () => {
-    try {
-      const { data, error } = await supabase
-        .from('hoa_properties')
-        .select('*')
-        .eq('active', true)
-        .order('name');
-      
-      if (error) throw error;
-      setHoaProperties(data || []);
-    } catch (error) {
-      console.error('Error loading HOA properties:', error);
+  // Find the loadHOAProperties function in your pages/index.js file 
+// and replace it with this exact code:
+
+const loadHOAProperties = async () => {
+  console.log('🏠 Loading HOA Properties (fixed version)...');
+  
+  try {
+    // Simple query without any filters that cause 401
+    const { data, error } = await supabase
+      .from('hoa_properties')
+      .select('id, name, location')
+      .order('name');
+    
+    console.log('🔍 Raw query result:', { data, error });
+    
+    if (error) {
+      console.error('❌ Supabase error details:', error);
+      console.error('Error message:', error.message);
+      console.error('Error code:', error.code);
+      return;
     }
-  };
+    
+    if (!data) {
+      console.warn('⚠️ Data is null/undefined');
+      return;
+    }
+    
+    if (data.length === 0) {
+      console.warn('⚠️ Data array is empty');
+      return;
+    }
+    
+    console.log('✅ SUCCESS! Loaded', data.length, 'HOA properties');
+    console.log('📋 First 3 properties:', data.slice(0, 3));
+    
+    setHoaProperties(data);
+    
+  } catch (error) {
+    console.error('💥 Catch block error:', error);
+    console.error('Error type:', typeof error);
+    console.error('Error details:', JSON.stringify(error, null, 2));
+  }
+};
 
   const loadApplications = async () => {
     if (!user) return;
