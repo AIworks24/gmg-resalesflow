@@ -1,4 +1,4 @@
-# gmg-resalesflow
+# gmg-resalesflow 
 Goodman Management Group - Resale Certificate System
 # GMG ResaleFlow - Resale Certificate Management System
 
