@@ -33,39 +33,81 @@ export default function GMGResaleFlow() {
     paymentMethod: '',
     totalAmount: 317.95
   });
-
-  useEffect(() => {
-    checkUser();
-    loadHOAProperties();
+const [userRole, setUserRole] = useState(null);
+const [isAdmin, setIsAdmin] = useState(false);
+  
+const checkUserRole = async (userId) => {
+  if (!userId) return;
+  
+  try {
+    const { data: profile, error } = await supabase
+      .from('profiles')
+      .select('role, email')
+      .eq('id', userId)
+      .single();
     
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      (event, session) => {
-        setUser(session?.user || null);
-        setIsAuthenticated(!!session?.user);
-        if (session?.user) {
-          setShowAuthModal(false);
-          loadApplications();
-        }
-      }
-    );
-
-    return () => subscription.unsubscribe();
-  }, []);
-
-  const checkUser = async () => {
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      setUser(session?.user || null);
-      setIsAuthenticated(!!session?.user);
-      if (session?.user) {
-        await loadApplications();
-      }
-    } catch (error) {
-      console.error('Error checking user:', error);
-    } finally {
-      setLoading(false);
+    if (error) {
+      console.error('Error checking user role:', error);
+      return;
     }
-  };
+    
+    console.log('👤 User profile:', profile);
+    setUserRole(profile?.role || 'external');
+    setIsAdmin(['admin', 'staff'].includes(profile?.role || ''));
+    
+    // Special case for aaron@gmgva.com - make admin automatically
+    if (profile?.email === 'aaron@gmgva.com') {
+      setIsAdmin(true);
+      setUserRole('admin');
+      
+      // Update the database to make sure aaron is admin
+      await supabase
+        .from('profiles')
+        .update({ role: 'admin' })
+        .eq('id', userId);
+    }
+    
+  } catch (error) {
+    console.error('Error in checkUserRole:', error);
+  }
+};
+
+// Update your checkUser function to include role checking:
+const checkUser = async () => {
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    const currentUser = session?.user || null;
+    setUser(currentUser);
+    setIsAuthenticated(!!currentUser);
+    
+    if (currentUser) {
+      await checkUserRole(currentUser.id);
+      await loadApplications();
+    }
+  } catch (error) {
+    console.error('Error checking user:', error);
+  } finally {
+    setLoading(false);
+  }
+};
+
+// Update the auth state change listener in useEffect:
+const { data: { subscription } } = supabase.auth.onAuthStateChange(
+  async (event, session) => {
+    const currentUser = session?.user || null;
+    setUser(currentUser);
+    setIsAuthenticated(!!currentUser);
+    
+    if (currentUser) {
+      setShowAuthModal(false);
+      await checkUserRole(currentUser.id);
+      await loadApplications();
+    } else {
+      setUserRole(null);
+      setIsAdmin(false);
+    }
+  }
+);
 
   // Find the loadHOAProperties function in your pages/index.js file 
 // and replace it with this exact code:
@@ -169,12 +211,17 @@ const loadHOAProperties = async () => {
     return total;
   };
 
-  const handleInputChange = (field, value) => {
-    setFormData(prev => ({
-      ...prev,
+const handleInputChange = (field, value) => {
+  console.log('🔧 Input change:', field, '=', value);
+  setFormData(prevData => {
+    const newData = {
+      ...prevData,
       [field]: value
-    }));
-  };
+    };
+    console.log('📝 Updated form data:', newData);
+    return newData;
+  });
+};
 
   const nextStep = () => {
     if (currentStep < 5) setCurrentStep(currentStep + 1);
@@ -983,73 +1030,147 @@ const loadHOAProperties = async () => {
   }
 
   // Main application render
-  if (currentStep === 0) {
-    return (
-      <div className="min-h-screen bg-gray-50">
-        {/* Header */}
-        <div className="bg-white shadow-sm border-b">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div className="flex justify-between items-center py-4">
-              <div className="flex items-center space-x-4">
-                <div className="flex items-center space-x-3">
-                  <div className="w-10 h-10 bg-gmg-green-700 rounded-lg flex items-center justify-center">
-                    <Building2 className="h-6 w-6 text-white" />
+ if (currentStep === 0) {
+  return (
+    <div className="min-h-screen bg-gray-50">
+      {/* Header - same as before */}
+      <div className="bg-white shadow-sm border-b">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex justify-between items-center py-4">
+            <div className="flex items-center space-x-4">
+              <div className="flex items-center space-x-3">
+                <div className="w-10 h-10 bg-gmg-green-700 rounded-lg flex items-center justify-center">
+                  <Building2 className="h-6 w-6 text-white" />
+                </div>
+                <div>
+                  <h1 className="text-xl font-bold text-gmg-green-900">Goodman Management Group</h1>
+                  <p className="text-sm text-gray-600">Resale Certificate System</p>
+                </div>
+              </div>
+            </div>
+            <div className="flex items-center space-x-4">
+              {isAuthenticated ? (
+                <div className="flex items-center space-x-4">
+                  <span className="text-sm text-gray-600">
+                    Welcome, {user?.email} {isAdmin && <span className="text-gmg-green-600 font-semibold">(Admin)</span>}
+                  </span>
+                  {isAdmin && (
+                    <button
+                      onClick={() => window.location.href = '/admin'}
+                      className="text-gmg-green-600 hover:text-gmg-green-800 px-3 py-2 rounded-md text-sm font-medium transition-colors"
+                    >
+                      Admin Panel
+                    </button>
+                  )}
+                  <button
+                    onClick={signOut}
+                    className="text-gray-600 hover:text-gmg-green-700 px-3 py-2 rounded-md text-sm font-medium transition-colors"
+                  >
+                    Sign Out
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setShowAuthModal(true)}
+                  className="bg-gmg-green-700 text-white px-4 py-2 rounded-lg hover:bg-gmg-green-800 transition-colors"
+                >
+                  Sign In
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* CONDITIONAL CONTENT BASED ON USER ROLE */}
+        {isAdmin ? (
+          // Admin sees full dashboard
+          <Dashboard />
+        ) : (
+          // Regular users see welcome page with "New Application" button
+          <div className="text-center py-16">
+            <div className="max-w-3xl mx-auto">
+              <div className="w-20 h-20 bg-gmg-green-700 rounded-lg flex items-center justify-center mx-auto mb-6">
+                <Building2 className="h-10 w-10 text-white" />
+              </div>
+              <h2 className="text-3xl font-bold text-gray-900 mb-4">
+                Virginia HOA Resale Certificate Service
+              </h2>
+              <p className="text-lg text-gray-600 mb-8">
+                Professional resale certificate processing for Virginia homeowners associations. 
+                Get your complete resale package processed quickly and efficiently.
+              </p>
+              
+              <div className="bg-white rounded-lg shadow p-8 mb-8">
+                <h3 className="text-xl font-semibold text-gray-900 mb-4">Our Service Includes:</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-left">
+                  <div className="flex items-center">
+                    <CheckCircle className="h-5 w-5 text-gmg-green-600 mr-3" />
+                    <span>Complete Virginia State Resale Certificate</span>
                   </div>
-                  <div>
-                    <h1 className="text-xl font-bold text-gmg-green-900">Goodman Management Group</h1>
-                    <p className="text-sm text-gray-600">Resale Certificate System</p>
+                  <div className="flex items-center">
+                    <CheckCircle className="h-5 w-5 text-gmg-green-600 mr-3" />
+                    <span>All HOA Governing Documents</span>
+                  </div>
+                  <div className="flex items-center">
+                    <CheckCircle className="h-5 w-5 text-gmg-green-600 mr-3" />
+                    <span>Property Compliance Inspection</span>
+                  </div>
+                  <div className="flex items-center">
+                    <CheckCircle className="h-5 w-5 text-gmg-green-600 mr-3" />
+                    <span>Digital & Print Delivery</span>
                   </div>
                 </div>
               </div>
-              <div className="flex items-center space-x-4">
-                {isAuthenticated ? (
-                  <div className="flex items-center space-x-4">
-                    <span className="text-sm text-gray-600">Welcome, {user?.email}</span>
-                    <button
-                      onClick={signOut}
-                      className="text-gray-600 hover:text-gmg-green-700 px-3 py-2 rounded-md text-sm font-medium transition-colors"
+
+              <div className="space-y-4">
+                <button
+                  onClick={() => setCurrentStep(1)}
+                  className="bg-gmg-green-700 text-white px-8 py-4 rounded-lg hover:bg-gmg-green-800 transition-colors text-lg font-semibold flex items-center justify-center mx-auto"
+                >
+                  <FileText className="h-6 w-6 mr-3" />
+                  Start New Resale Application
+                </button>
+                
+                {!isAuthenticated && (
+                  <p className="text-sm text-gray-500">
+                    Have an account? 
+                    <button 
+                      onClick={() => setShowAuthModal(true)}
+                      className="text-gmg-green-600 hover:text-gmg-green-800 ml-1"
                     >
-                      Sign Out
+                      Sign in to track your applications
                     </button>
-                  </div>
-                ) : (
-                  <button
-                    onClick={() => setShowAuthModal(true)}
-                    className="bg-gmg-green-700 text-white px-4 py-2 rounded-lg hover:bg-gmg-green-800 transition-colors"
-                  >
-                    Sign In
-                  </button>
+                  </p>
                 )}
               </div>
             </div>
           </div>
-        </div>
+        )}
+      </div>
 
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-          <Dashboard />
-        </div>
-
-        {/* Footer */}
-        <div className="bg-gmg-green-900 text-white py-8 mt-12">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div className="flex flex-col md:flex-row justify-between items-center">
-              <div className="mb-4 md:mb-0">
-                <h3 className="text-lg font-semibold">Goodman Management Group</h3>
-                <p className="text-gmg-green-200">Professional HOA Management & Resale Services</p>
-              </div>
-              <div className="text-center md:text-right">
-                <p className="text-gmg-green-200">Questions? Contact us:</p>
-                <p className="font-medium">resales@gmgva.com</p>
-              </div>
+      {/* Footer - same as before */}
+      <div className="bg-gmg-green-900 text-white py-8 mt-12">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex flex-col md:flex-row justify-between items-center">
+            <div className="mb-4 md:mb-0">
+              <h3 className="text-lg font-semibold">Goodman Management Group</h3>
+              <p className="text-gmg-green-200">Professional HOA Management & Resale Services</p>
+            </div>
+            <div className="text-center md:text-right">
+              <p className="text-gmg-green-200">Questions? Contact us:</p>
+              <p className="font-medium">resales@gmgva.com</p>
             </div>
           </div>
         </div>
-
-        {/* Auth Modal */}
-        {showAuthModal && <AuthModal />}
       </div>
-    );
-  }
+
+      {/* Auth Modal */}
+      {showAuthModal && <AuthModal />}
+    </div>
+  );
+}
 
   // Form view
   return (
