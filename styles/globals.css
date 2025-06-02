@@ -32,12 +32,52 @@ a {
   box-sizing: border-box;
 }
 
-@media (prefers-color-scheme: dark) {
-  html {
-    color-scheme: dark;
-  }
-  
-  body {
-    color: white;
-    background: black;
-  }
+/* Ensure Tailwind classes work */
+.bg-gmg-green-50 { background-color: var(--gmg-green-50); }
+.bg-gmg-green-100 { background-color: var(--gmg-green-100); }
+.bg-gmg-green-200 { background-color: var(--gmg-green-200); }
+.bg-gmg-green-300 { background-color: var(--gmg-green-300); }
+.bg-gmg-green-400 { background-color: var(--gmg-green-400); }
+.bg-gmg-green-500 { background-color: var(--gmg-green-500); }
+.bg-gmg-green-600 { background-color: var(--gmg-green-600); }
+.bg-gmg-green-700 { background-color: var(--gmg-green-700); }
+.bg-gmg-green-800 { background-color: var(--gmg-green-800); }
+.bg-gmg-green-900 { background-color: var(--gmg-green-900); }
+
+.text-gmg-green-50 { color: var(--gmg-green-50); }
+.text-gmg-green-100 { color: var(--gmg-green-100); }
+.text-gmg-green-200 { color: var(--gmg-green-200); }
+.text-gmg-green-300 { color: var(--gmg-green-300); }
+.text-gmg-green-400 { color: var(--gmg-green-400); }
+.text-gmg-green-500 { color: var(--gmg-green-500); }
+.text-gmg-green-600 { color: var(--gmg-green-600); }
+.text-gmg-green-700 { color: var(--gmg-green-700); }
+.text-gmg-green-800 { color: var(--gmg-green-800); }
+.text-gmg-green-900 { color: var(--gmg-green-900); }
+
+.border-gmg-green-50 { border-color: var(--gmg-green-50); }
+.border-gmg-green-100 { border-color: var(--gmg-green-100); }
+.border-gmg-green-200 { border-color: var(--gmg-green-200); }
+.border-gmg-green-300 { border-color: var(--gmg-green-300); }
+.border-gmg-green-400 { border-color: var(--gmg-green-400); }
+.border-gmg-green-500 { border-color: var(--gmg-green-500); }
+.border-gmg-green-600 { border-color: var(--gmg-green-600); }
+.border-gmg-green-700 { border-color: var(--gmg-green-700); }
+.border-gmg-green-800 { border-color: var(--gmg-green-800); }
+.border-gmg-green-900 { border-color: var(--gmg-green-900); }
+
+.ring-gmg-green-50 { --tw-ring-color: var(--gmg-green-50); }
+.ring-gmg-green-100 { --tw-ring-color: var(--gmg-green-100); }
+.ring-gmg-green-200 { --tw-ring-color: var(--gmg-green-200); }
+.ring-gmg-green-300 { --tw-ring-color: var(--gmg-green-300); }
+.ring-gmg-green-400 { --tw-ring-color: var(--gmg-green-400); }
+.ring-gmg-green-500 { --tw-ring-color: var(--gmg-green-500); }
+.ring-gmg-green-600 { --tw-ring-color: var(--gmg-green-600); }
+.ring-gmg-green-700 { --tw-ring-color: var(--gmg-green-700); }
+.ring-gmg-green-800 { --tw-ring-color: var(--gmg-green-800); }
+.ring-gmg-green-900 { --tw-ring-color: var(--gmg-green-900); }
+
+.focus\:ring-gmg-green-500:focus { --tw-ring-color: var(--gmg-green-500); }
+.focus\:border-gmg-green-500:focus { border-color: var(--gmg-green-500); }
+
+.hover\:bg-gmg-green-800:hover { background-color: var(--gmg-green-800); }
