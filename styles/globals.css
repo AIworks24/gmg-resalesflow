@@ -1,0 +1,43 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --gmg-green-50: #f0f9f4;
+  --gmg-green-100: #dcf2e4;
+  --gmg-green-200: #bce5cd;
+  --gmg-green-300: #8dd2ab;
+  --gmg-green-400: #57b882;
+  --gmg-green-500: #339d63;
+  --gmg-green-600: #26804e;
+  --gmg-green-700: #1f6641;
+  --gmg-green-800: #1b5236;
+  --gmg-green-900: #17432d;
+}
+
+html,
+body {
+  padding: 0;
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Oxygen,
+    Ubuntu, Cantarell, Fira Sans, Droid Sans, Helvetica Neue, sans-serif;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+@media (prefers-color-scheme: dark) {
+  html {
+    color-scheme: dark;
+  }
+  
+  body {
+    color: white;
+    background: black;
+  }
