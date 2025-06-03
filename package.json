@@ -1,4 +1,3 @@
-npm install lucide-react @supabase/auth-helpers-nextjs
 {
   "name": "gmg-resaleflow",
   "version": "1.0.0",
