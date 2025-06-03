@@ -11,7 +11,7 @@ export default function GMGResaleFlow() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [authMode, setAuthMode] = useState('signin');
-  const [userRole, setUserRole] = useState(null); // Added user role state
+  const [userRole, setUserRole] = useState(null);
   
   const [formData, setFormData] = useState({
     hoaProperty: '',
@@ -34,6 +34,38 @@ export default function GMGResaleFlow() {
     paymentMethod: '',
     totalAmount: 317.95
   });
+
+  // Memoize the input change handler to prevent recreation
+  const handleInputChange = React.useCallback((field, value) => {
+    console.log('Input change:', field, value);
+    setFormData(prev => {
+      if (prev[field] === value) {
+        return prev;
+      }
+      const newData = {
+        ...prev,
+        [field]: value
+      };
+      console.log('New form data:', newData);
+      return newData;
+    });
+  }, []);
+
+  // Memoize other handlers
+  const nextStep = React.useCallback(() => {
+    if (currentStep < 5) setCurrentStep(currentStep + 1);
+  }, [currentStep]);
+
+  const prevStep = React.useCallback(() => {
+    if (currentStep > 1) setCurrentStep(currentStep - 1);
+  }, [currentStep]);
+
+  const calculateTotal = React.useCallback(() => {
+    let total = 317.95;
+    if (formData.packageType === 'rush') total += 70.66;
+    if (formData.paymentMethod === 'credit_card') total += 9.95;
+    return total;
+  }, [formData.packageType, formData.paymentMethod]);
 
   useEffect(() => {
     checkUser();
@@ -168,7 +200,7 @@ export default function GMGResaleFlow() {
     }
   }, [user?.id, userRole]); // Only reload when user ID or role changes
 
-  const handleAuth = async (email, password, userData = {}) => {
+  const handleAuth = React.useCallback(async (email, password, userData = {}) => {
     try {
       if (authMode === 'signin') {
         const { error } = await supabase.auth.signInWithPassword({
@@ -190,15 +222,15 @@ export default function GMGResaleFlow() {
     } catch (error) {
       alert(error.message);
     }
-  };
+  }, [authMode]);
 
-  const signOut = async () => {
+  const signOut = React.useCallback(async () => {
     await supabase.auth.signOut();
     setUser(null);
     setIsAuthenticated(false);
     setUserRole(null);
     setCurrentStep(0);
-  };
+  }, []);
 
   const calculateTotal = () => {
     let total = 317.95;
@@ -207,31 +239,33 @@ export default function GMGResaleFlow() {
     return total;
   };
 
-  const handleInputChange = (field, value) => {
-    console.log('Input change:', field, value); // Debug log
-    setFormData(prev => {
-      // Only update if the value actually changed
-      if (prev[field] === value) {
-        return prev;
-      }
-      const newData = {
-        ...prev,
-        [field]: value
-      };
-      console.log('New form data:', newData); // Debug log
-      return newData;
-    });
-  };
+  // Test component to isolate input issue
+  if (currentStep === 99) {
+    return (
+      <div className="p-8">
+        <h2>Input Test</h2>
+        <input
+          type="text"
+          value={formData.propertyAddress}
+          onChange={(e) => {
+            console.log('Direct onChange:', e.target.value);
+            setFormData(prev => ({
+              ...prev,
+              propertyAddress: e.target.value
+            }));
+          }}
+          className="border border-gray-300 rounded px-4 py-2"
+          placeholder="Test input"
+        />
+        <p>Current value: {formData.propertyAddress}</p>
+        <button onClick={() => setCurrentStep(0)} className="mt-4 px-4 py-2 bg-blue-500 text-white rounded">
+          Back to App
+        </button>
+      </div>
+    );
+  }
 
-  const nextStep = () => {
-    if (currentStep < 5) setCurrentStep(currentStep + 1);
-  };
-
-  const prevStep = () => {
-    if (currentStep > 1) setCurrentStep(currentStep - 1);
-  };
-
-  const submitApplication = async () => {
+  const submitApplication = React.useCallback(async () => {
     if (!user) {
       setShowAuthModal(true);
       return;
@@ -302,7 +336,7 @@ export default function GMGResaleFlow() {
     } catch (error) {
       alert('Error submitting application: ' + error.message);
     }
-  };
+  }, [user, hoaProperties, formData, calculateTotal]);
 
   // Authentication Modal Component
   const AuthModal = () => {
@@ -1177,6 +1211,12 @@ export default function GMGResaleFlow() {
                         </span>
                       )}
                     </span>
+                    <button
+                      onClick={() => setCurrentStep(99)}
+                      className="text-blue-600 hover:text-blue-800 px-3 py-1 text-sm"
+                    >
+                      Test Input
+                    </button>
                     <button
                       onClick={signOut}
                       className="text-gray-600 hover:text-green-700 px-3 py-2 rounded-md text-sm font-medium transition-colors"
