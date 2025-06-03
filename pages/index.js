@@ -2,6 +2,155 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import { Building2, FileText, CreditCard, CheckCircle, Clock, AlertCircle, Upload, User, Users, DollarSign, Search, Menu, X } from 'lucide-react';
 
+// Move form step components outside the main component to prevent recreation
+const HOASelectionStep = React.memo(({ formData, handleInputChange, hoaProperties }) => (
+  <div className="space-y-6">
+    <div className="text-center mb-8">
+      <h3 className="text-2xl font-bold text-green-900 mb-2">Select HOA Property</h3>
+      <p className="text-gray-600">Choose the HOA community for your resale certificate application</p>
+    </div>
+
+    <div className="bg-white p-6 rounded-lg border border-green-200">
+      <label className="block text-sm font-medium text-gray-700 mb-3">HOA Community *</label>
+      <div className="relative">
+        <Search className="absolute left-3 top-3 h-5 w-5 text-gray-400" />
+        <select
+          value={formData.hoaProperty}
+          onChange={(e) => handleInputChange('hoaProperty', e.target.value)}
+          className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500"
+        >
+          <option value="">Select an HOA Community</option>
+          {hoaProperties.map((hoa) => (
+            <option key={hoa.id} value={hoa.name}>
+              {hoa.name} {hoa.location && `- ${hoa.location}`}
+            </option>
+          ))}
+        </select>
+      </div>
+    </div>
+
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+      <div>
+        <label className="block text-sm font-medium text-gray-700 mb-2">Property Address *</label>
+        <input
+          type="text"
+          value={formData.propertyAddress}
+          onChange={(e) => handleInputChange('propertyAddress', e.target.value)}
+          className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500"
+          placeholder="123 Main Street"
+        />
+      </div>
+      <div>
+        <label className="block text-sm font-medium text-gray-700 mb-2">Unit Number (if applicable)</label>
+        <input
+          type="text"
+          value={formData.unitNumber}
+          onChange={(e) => handleInputChange('unitNumber', e.target.value)}
+          className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500"
+          placeholder="4B"
+        />
+      </div>
+    </div>
+
+    {formData.hoaProperty && (
+      <div className="bg-green-50 p-4 rounded-lg border border-green-200">
+        <div className="flex items-start">
+          <CheckCircle className="h-5 w-5 text-green-600 mt-0.5 mr-2" />
+          <div>
+            <h4 className="font-medium text-green-900">HOA Documents Ready</h4>
+            <p className="text-sm text-green-700 mt-1">
+              All required HOA documents for {formData.hoaProperty} will be automatically included in your resale package.
+            </p>
+          </div>
+        </div>
+      </div>
+    )}
+  </div>
+));
+
+const SubmitterInfoStep = React.memo(({ formData, handleInputChange }) => (
+  <div className="space-y-6">
+    <div className="text-center mb-8">
+      <h3 className="text-2xl font-bold text-green-900 mb-2">Who is Submitting?</h3>
+      <p className="text-gray-600">Tell us about yourself and your role in this transaction</p>
+    </div>
+
+    <div className="bg-white p-6 rounded-lg border border-green-200">
+      <label className="block text-sm font-medium text-gray-700 mb-3">I am the: *</label>
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        {[
+          { value: 'seller', label: 'Property Owner/Seller', icon: User },
+          { value: 'realtor', label: 'Licensed Realtor', icon: FileText },
+          { value: 'builder', label: 'Builder/Developer', icon: Building2 },
+          { value: 'admin', label: 'GMG Staff', icon: CheckCircle }
+        ].map((type) => {
+          const Icon = type.icon;
+          return (
+            <button
+              key={type.value}
+              onClick={() => handleInputChange('submitterType', type.value)}
+              className={`p-4 rounded-lg border-2 transition-all ${
+                formData.submitterType === type.value
+                  ? 'border-green-500 bg-green-50 text-green-900'
+                  : 'border-gray-200 hover:border-green-300'
+              }`}
+            >
+              <Icon className="h-8 w-8 mx-auto mb-2" />
+              <div className="text-sm font-medium">{type.label}</div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+
+    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+      <div>
+        <label className="block text-sm font-medium text-gray-700 mb-2">Full Name *</label>
+        <input
+          type="text"
+          value={formData.submitterName}
+          onChange={(e) => handleInputChange('submitterName', e.target.value)}
+          className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+          placeholder="John Smith"
+        />
+      </div>
+      <div>
+        <label className="block text-sm font-medium text-gray-700 mb-2">Email Address *</label>
+        <input
+          type="email"
+          value={formData.submitterEmail}
+          onChange={(e) => handleInputChange('submitterEmail', e.target.value)}
+          className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+          placeholder="john@example.com"
+        />
+      </div>
+      <div>
+        <label className="block text-sm font-medium text-gray-700 mb-2">Phone Number *</label>
+        <input
+          type="tel"
+          value={formData.submitterPhone}
+          onChange={(e) => handleInputChange('submitterPhone', e.target.value)}
+          className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+          placeholder="(555) 123-4567"
+        />
+      </div>
+    </div>
+
+    {formData.submitterType === 'realtor' && (
+      <div>
+        <label className="block text-sm font-medium text-gray-700 mb-2">Virginia Real Estate License Number *</label>
+        <input
+          type="text"
+          value={formData.realtorLicense}
+          onChange={(e) => handleInputChange('realtorLicense', e.target.value)}
+          className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+          placeholder="License #"
+        />
+      </div>
+    )}
+  </div>
+));
+
 export default function GMGResaleFlow() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -708,163 +857,6 @@ export default function GMGResaleFlow() {
     { number: 5, title: 'Review & Submit', icon: CheckCircle }
   ];
 
-  const HOASelectionStep = () => (
-    <div className="space-y-6">
-      <div className="text-center mb-8">
-        <h3 className="text-2xl font-bold text-green-900 mb-2">Select HOA Property</h3>
-        <p className="text-gray-600">Choose the HOA community for your resale certificate application</p>
-      </div>
-
-      <div className="bg-white p-6 rounded-lg border border-green-200">
-        <label className="block text-sm font-medium text-gray-700 mb-3">HOA Community *</label>
-        <div className="relative">
-          <Search className="absolute left-3 top-3 h-5 w-5 text-gray-400" />
-          <select
-            value={formData.hoaProperty}
-            onChange={(e) => handleInputChange('hoaProperty', e.target.value)}
-            className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500"
-          >
-            <option value="">Select an HOA Community</option>
-            {hoaProperties.map((hoa) => (
-              <option key={hoa.id} value={hoa.name}>
-                {hoa.name} {hoa.location && `- ${hoa.location}`}
-              </option>
-            ))}
-          </select>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">Property Address *</label>
-          <input
-            type="text"
-            value={formData.propertyAddress}
-            onChange={(e) => {
-              const newValue = e.target.value;
-              console.log('Property Address onChange:', newValue);
-              setFormData(prev => {
-                console.log('Previous formData:', prev);
-                const updated = { ...prev, propertyAddress: newValue };
-                console.log('Updated formData:', updated);
-                return updated;
-              });
-            }}
-            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500"
-            placeholder="123 Main Street"
-          />
-        </div>
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">Unit Number (if applicable)</label>
-          <input
-            type="text"
-            value={formData.unitNumber}
-            onChange={(e) => handleInputChange('unitNumber', e.target.value)}
-            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500"
-            placeholder="4B"
-          />
-        </div>
-      </div>
-
-      {formData.hoaProperty && (
-        <div className="bg-green-50 p-4 rounded-lg border border-green-200">
-          <div className="flex items-start">
-            <CheckCircle className="h-5 w-5 text-green-600 mt-0.5 mr-2" />
-            <div>
-              <h4 className="font-medium text-green-900">HOA Documents Ready</h4>
-              <p className="text-sm text-green-700 mt-1">
-                All required HOA documents for {formData.hoaProperty} will be automatically included in your resale package.
-              </p>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-
-  const SubmitterInfoStep = () => (
-    <div className="space-y-6">
-      <div className="text-center mb-8">
-        <h3 className="text-2xl font-bold text-green-900 mb-2">Who is Submitting?</h3>
-        <p className="text-gray-600">Tell us about yourself and your role in this transaction</p>
-      </div>
-
-      <div className="bg-white p-6 rounded-lg border border-green-200">
-        <label className="block text-sm font-medium text-gray-700 mb-3">I am the: *</label>
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          {[
-            { value: 'seller', label: 'Property Owner/Seller', icon: User },
-            { value: 'realtor', label: 'Licensed Realtor', icon: FileText },
-            { value: 'builder', label: 'Builder/Developer', icon: Building2 },
-            { value: 'admin', label: 'GMG Staff', icon: CheckCircle }
-          ].map((type) => {
-            const Icon = type.icon;
-            return (
-              <button
-                key={type.value}
-                onClick={() => handleInputChange('submitterType', type.value)}
-                className={`p-4 rounded-lg border-2 transition-all ${
-                  formData.submitterType === type.value
-                    ? 'border-green-500 bg-green-50 text-green-900'
-                    : 'border-gray-200 hover:border-green-300'
-                }`}
-              >
-                <Icon className="h-8 w-8 mx-auto mb-2" />
-                <div className="text-sm font-medium">{type.label}</div>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">Full Name *</label>
-          <input
-            type="text"
-            value={formData.submitterName}
-            onChange={(e) => handleInputChange('submitterName', e.target.value)}
-            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-            placeholder="John Smith"
-          />
-        </div>
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">Email Address *</label>
-          <input
-            type="email"
-            value={formData.submitterEmail}
-            onChange={(e) => handleInputChange('submitterEmail', e.target.value)}
-            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-            placeholder="john@example.com"
-          />
-        </div>
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">Phone Number *</label>
-          <input
-            type="tel"
-            value={formData.submitterPhone}
-            onChange={(e) => handleInputChange('submitterPhone', e.target.value)}
-            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-            placeholder="(555) 123-4567"
-          />
-        </div>
-      </div>
-
-      {formData.submitterType === 'realtor' && (
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">Virginia Real Estate License Number *</label>
-          <input
-            type="text"
-            value={formData.realtorLicense}
-            onChange={(e) => handleInputChange('realtorLicense', e.target.value)}
-            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-            placeholder="License #"
-          />
-        </div>
-      )}
-    </div>
-  );
-
   const TransactionDetailsStep = () => (
     <div className="space-y-6">
       <div className="text-center mb-8">
@@ -1196,8 +1188,21 @@ export default function GMGResaleFlow() {
 
   const renderStepContent = () => {
     switch (currentStep) {
-      case 1: return <HOASelectionStep />;
-      case 2: return <SubmitterInfoStep />;
+      case 1: 
+        return (
+          <HOASelectionStep 
+            formData={formData} 
+            handleInputChange={handleInputChange} 
+            hoaProperties={hoaProperties} 
+          />
+        );
+      case 2: 
+        return (
+          <SubmitterInfoStep 
+            formData={formData} 
+            handleInputChange={handleInputChange} 
+          />
+        );
       case 3: return <TransactionDetailsStep />;
       case 4: return <PackagePaymentStep />;
       case 5: return <ReviewSubmitStep />;
