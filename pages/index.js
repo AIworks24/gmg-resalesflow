@@ -216,26 +216,30 @@ export default function GMGResaleFlow() {
     return total;
   }, [formData.packageType, formData.paymentMethod]);
 
-  useEffect(() => {
-    checkUser();
-    loadHOAProperties();
-    
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (event, session) => {
-        setUser(session?.user || null);
-        setIsAuthenticated(!!session?.user);
-        if (session?.user) {
-          setShowAuthModal(false);
-          await loadUserProfile(session.user.id);
-          await loadApplications();
-        } else {
-          setUserRole(null);
-        }
+ useEffect(() => {
+  const initializeApp = async () => {
+    await checkUser();
+    await loadHOAProperties();
+  };
+  
+  initializeApp();
+  
+  const { data: { subscription } } = supabase.auth.onAuthStateChange(
+    async (event, session) => {
+      setUser(session?.user || null);
+      setIsAuthenticated(!!session?.user);
+      if (session?.user) {
+        setShowAuthModal(false);
+        await loadUserProfile(session.user.id);
+        await loadApplications();
+      } else {
+        setUserRole(null);
       }
-    );
+    }
+  );
 
-    return () => subscription.unsubscribe();
-  }, []); // Empty dependency array - only run once on mount
+  return () => subscription.unsubscribe();
+}, []); // Keep empty dependency array for auth setup
 
   const checkUser = async () => {
     try {
@@ -254,28 +258,27 @@ export default function GMGResaleFlow() {
   };
 
   // Load user profile to get role
-  const loadUserProfile = async (userId) => {
-    try {
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('role')
-        .eq('id', userId)
-        .single();
-      
-      if (error) {
-        console.error('Error loading user profile:', error);
-        // Default to 'customer' if no profile found
-        setUserRole('customer');
-        return;
-      }
-      
-      setUserRole(data?.role || 'customer');
-    } catch (error) {
+  const loadUserProfile = useCallback(async (userId) => {
+  try {
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('role')
+      .eq('id', userId)
+      .single();
+    
+    if (error) {
       console.error('Error loading user profile:', error);
       setUserRole('customer');
+      return;
     }
-  };
-
+    
+    setUserRole(data?.role || 'customer');
+  } catch (error) {
+    console.error('Error loading user profile:', error);
+    setUserRole('customer');
+  }
+}, []);
+  
   const loadHOAProperties = async () => {
     console.log('🏠 Loading HOA Properties (fixed version)...');
     
@@ -316,38 +319,38 @@ export default function GMGResaleFlow() {
     }
   };
 
-  const loadApplications = async () => {
-    if (!user) return;
+ const loadApplications = useCallback(async () => {
+  if (!user) return;
+  
+  try {
+    let query = supabase
+      .from('applications')
+      .select(`
+        *,
+        hoa_properties(name, location),
+        profiles(first_name, last_name, role)
+      `);
     
-    try {
-      let query = supabase
-        .from('applications')
-        .select(`
-          *,
-          hoa_properties(name, location),
-          profiles(first_name, last_name, role)
-        `);
-      
-      // If not admin, only show user's own applications
-      if (userRole !== 'admin') {
-        query = query.eq('user_id', user.id);
-      }
-      
-      const { data, error } = await query.order('created_at', { ascending: false });
-      
-      if (error) throw error;
-      setApplications(data || []);
-    } catch (error) {
-      console.error('Error loading applications:', error);
+    // If not admin, only show user's own applications
+    if (userRole !== 'admin') {
+      query = query.eq('user_id', user.id);
     }
-  };
-
-  // Add a separate useEffect for loading applications when user/userRole changes
-  useEffect(() => {
-    if (user && userRole) {
-      loadApplications();
-    }
-  }, [user?.id, userRole]); // Only reload when user ID or role changes
+    
+    const { data, error } = await query.order('created_at', { ascending: false });
+    
+    if (error) throw error;
+    setApplications(data || []);
+  } catch (error) {
+    console.error('Error loading applications:', error);
+  }
+}, [user, userRole]); // Add dependencies
+ // Add a separate useEffect for loading applications when user/userRole changes
+  
+useEffect(() => {
+  if (user && userRole) {
+    loadApplications();
+  }
+}, [user?.id, userRole, loadApplications]); // Add loadApplications to dependencies
 
   const handleAuth = React.useCallback(async (email, password, userData = {}) => {
     try {
