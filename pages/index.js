@@ -1,415 +1,13 @@
-import React, { useState, useEffect } from 'react';
-import { Building2, FileText, CreditCard, CheckCircle, Clock, AlertCircle, User, Users, DollarSign, Search, X } from 'lucide-react';
-
-// Mock supabase for demonstration
-const supabase = {
-  auth: {
-    getSession: () => Promise.resolve({ data: { session: null } }),
-    onAuthStateChange: (callback) => ({ 
-      data: { 
-        subscription: { unsubscribe: () => {} } 
-      } 
-    }),
-    signInWithPassword: ({ email, password }) => {
-      if (email === 'admin@gmgva.com' && password === 'admin123') {
-        return Promise.resolve({ error: null });
-      }
-      return Promise.resolve({ error: { message: 'Invalid credentials' } });
-    },
-    signUp: ({ email, password }) => Promise.resolve({ error: null }),
-    signOut: () => Promise.resolve()
-  },
-  from: (table) => ({
-    select: (fields) => ({
-      order: (field) => Promise.resolve({ 
-        data: table === 'hoa_properties' ? [
-          { id: 1, name: 'Maple Ridge HOA', location: 'Richmond, VA' },
-          { id: 2, name: 'Oak Hill Community', location: 'Chesterfield, VA' },
-          { id: 3, name: 'Pine Valley Estates', location: 'Henrico, VA' }
-        ] : [],
-        error: null 
-      })
-    }),
-    insert: (data) => ({
-      select: () => Promise.resolve({ data: [{ id: Date.now(), ...data[0] }], error: null })
-    })
-  })
-};
-
-export default function GMGResaleFlow() {
-  const [user, setUser] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [hoaProperties, setHoaProperties] = useState([]);
-  const [applications, setApplications] = useState([]);
-  const [currentStep, setCurrentStep] = useState(0);
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [isAdmin, setIsAdmin] = useState(false);
-  const [showAuthModal, setShowAuthModal] = useState(false);
-  const [authMode, setAuthMode] = useState('signin');
-  
-  // Simple form state - each field gets its own state
-  const [hoaProperty, setHoaProperty] = useState('');
-  const [propertyAddress, setPropertyAddress] = useState('');
-  const [unitNumber, setUnitNumber] = useState('');
-  const [submitterType, setSubmitterType] = useState('');
-  const [submitterName, setSubmitterName] = useState('');
-  const [submitterEmail, setSubmitterEmail] = useState('');
-  const [submitterPhone, setSubmitterPhone] = useState('');
-  const [realtorLicense, setRealtorLicense] = useState('');
-  const [buyerName, setBuyerName] = useState('');
-  const [buyerEmail, setBuyerEmail] = useState('');
-  const [buyerPhone, setBuyerPhone] = useState('');
-  const [sellerName, setSellerName] = useState('');
-  const [sellerEmail, setSellerEmail] = useState('');
-  const [sellerPhone, setSellerPhone] = useState('');
-  const [salePrice, setSalePrice] = useState('');
-  const [closingDate, setClosingDate] = useState('');
-  const [packageType, setPackageType] = useState('standard');
-  const [paymentMethod, setPaymentMethod] = useState('');
-
-  useEffect(() => {
-    const loadData = async () => {
-      try {
-        const { data } = await supabase.from('hoa_properties').select('id, name, location').order('name');
-        if (data) setHoaProperties(data);
-      } catch (error) {
-        console.error('Error loading HOA properties:', error);
-      } finally {
-        setLoading(false);
-      }
-    };
-    loadData();
-  }, []);
-
-  const handleAuth = async (email, password) => {
-    try {
-      const { error } = await supabase.auth.signInWithPassword({ email, password });
-      if (error) throw error;
-      
-      setUser({ email });
-      setIsAuthenticated(true);
-      setIsAdmin(email === 'admin@gmgva.com');
-      setShowAuthModal(false);
-    } catch (error) {
-      alert(error.message);
-    }
-  };
-
-  const signOut = () => {
-    setUser(null);
-    setIsAuthenticated(false);
-    setIsAdmin(false);
-    setCurrentStep(0);
-  };
-
-  const calculateTotal = () => {
-    let total = 317.95;
-    if (packageType === 'rush') total += 70.66;
-    if (paymentMethod === 'credit_card') total += 9.95;
-    return total.toFixed(2);
-  };
-
-  const resetForm = () => {
-    setHoaProperty('');
-    setPropertyAddress('');
-    setUnitNumber('');
-    setSubmitterType('');
-    setSubmitterName('');
-    setSubmitterEmail('');
-    setSubmitterPhone('');
-    setRealtorLicense('');
-    setBuyerName('');
-    setBuyerEmail('');
-    setBuyerPhone('');
-    setSellerName('');
-    setSellerEmail('');
-    setSellerPhone('');
-    setSalePrice('');
-    setClosingDate('');
-    setPackageType('standard');
-    setPaymentMethod('');
-  };
-
-  const submitApplication = async () => {
-    if (!user) {
-      setShowAuthModal(true);
-      return;
-    }
-
-    alert('Application submitted successfully! You will receive a confirmation email shortly.');
-    setCurrentStep(0);
-    resetForm();
-  };
-
-  // Authentication Modal
-  const AuthModal = () => {
-    const [email, setEmail] = useState('');
-    const [password, setPassword] = useState('');
-
-    return (
-      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-        <div className="bg-white rounded-lg p-8 max-w-md w-full mx-4">
-          <div className="flex justify-between items-center mb-6">
-            <h2 className="text-2xl font-bold text-green-800">Sign In</h2>
-            <button onClick={() => setShowAuthModal(false)}>
-              <X className="h-6 w-6 text-gray-400" />
-            </button>
-          </div>
-          
-          <form onSubmit={(e) => {
-            e.preventDefault();
-            handleAuth(email, password);
-          }}>
-            <div className="space-y-4">
-              <input
-                type="email"
-                placeholder="Email Address"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-                required
-              />
-              <input
-                type="password"
-                placeholder="Password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-                required
-              />
-            </div>
-            
-            <button
-              type="submit"
-              className="w-full mt-6 px-6 py-3 bg-green-700 text-white rounded-lg hover:bg-green-800 transition-colors"
-            >
-              Sign In
-            </button>
-          </form>
-          
-          <div className="mt-4 p-3 bg-blue-50 rounded-lg">
-            <p className="text-sm text-blue-700">
-              <strong>Demo credentials:</strong><br/>
-              Admin: admin@gmgva.com / admin123<br/>
-              User: user@example.com / password
-            </p>
-          </div>
-        </div>
-      </div>
-    );
-  };
-
-  // Admin Dashboard
-  const Dashboard = () => (
-    <div className="space-y-6">
-      <div className="flex justify-between items-center">
-        <h2 className="text-2xl font-bold text-gray-900">Admin Dashboard - Resale Applications</h2>
-        <button
-          onClick={() => setCurrentStep(1)}
-          className="bg-green-700 text-white px-6 py-3 rounded-lg hover:bg-green-800 transition-colors flex items-center gap-2"
-        >
-          <FileText className="h-5 w-5" />
-          New Resale Application
-        </button>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <div className="bg-white p-6 rounded-lg shadow border-l-4 border-green-700">
-          <div className="flex items-center">
-            <FileText className="h-8 w-8 text-green-700" />
-            <div className="ml-3">
-              <p className="text-sm font-medium text-gray-500">Total Applications</p>
-              <p className="text-2xl font-semibold text-gray-900">{applications.length}</p>
-            </div>
-          </div>
-        </div>
-        <div className="bg-white p-6 rounded-lg shadow border-l-4 border-yellow-500">
-          <div className="flex items-center">
-            <Clock className="h-8 w-8 text-yellow-500" />
-            <div className="ml-3">
-              <p className="text-sm font-medium text-gray-500">Under Review</p>
-              <p className="text-2xl font-semibold text-gray-900">3</p>
-            </div>
-          </div>
-        </div>
-        <div className="bg-white p-6 rounded-lg shadow border-l-4 border-green-500">
-          <div className="flex items-center">
-            <CheckCircle className="h-8 w-8 text-green-500" />
-            <div className="ml-3">
-              <p className="text-sm font-medium text-gray-500">Completed</p>
-              <p className="text-2xl font-semibold text-gray-900">12</p>
-            </div>
-          </div>
-        </div>
-        <div className="bg-white p-6 rounded-lg shadow border-l-4 border-green-600">
-          <div className="flex items-center">
-            <DollarSign className="h-8 w-8 text-green-600" />
-            <div className="ml-3">
-              <p className="text-sm font-medium text-gray-500">Revenue (Month)</p>
-              <p className="text-2xl font-semibold text-gray-900">$4,215</p>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div className="bg-white rounded-lg shadow">
-        <div className="px-6 py-4 border-b border-gray-200 bg-green-50">
-          <h3 className="text-lg font-medium text-green-900">Recent Applications</h3>
-        </div>
-        <div className="p-6">
-          <p className="text-gray-500">No applications to display</p>
-        </div>
-      </div>
-    </div>
-  );
-
-  // User Home Page
-  const UserHomePage = () => (
-    <div className="space-y-6">
-      <div className="text-center">
-        <h2 className="text-3xl font-bold text-gray-900 mb-4">Welcome to GMG ResaleFlow</h2>
-        <p className="text-lg text-gray-600 mb-8">Submit your HOA resale certificate application quickly and securely</p>
-        
-        <button
-          onClick={() => setCurrentStep(1)}
-          className="bg-green-700 text-white px-8 py-4 rounded-lg hover:bg-green-800 transition-colors flex items-center gap-3 mx-auto text-lg"
-        >
-          <FileText className="h-6 w-6" />
-          Start New Resale Application
-        </button>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-12">
-        <div className="bg-white p-6 rounded-lg shadow border">
-          <div className="flex items-center mb-4">
-            <Clock className="h-8 w-8 text-green-600 mr-3" />
-            <h3 className="text-lg font-semibold text-gray-900">Quick Processing</h3>
-          </div>
-          <p className="text-gray-600">Standard processing in 10-15 business days, or rush service in 5 days</p>
-        </div>
-
-        <div className="bg-white p-6 rounded-lg shadow border">
-          <div className="flex items-center mb-4">
-            <CheckCircle className="h-8 w-8 text-green-600 mr-3" />
-            <h3 className="text-lg font-semibold text-gray-900">Complete Package</h3>
-          </div>
-          <p className="text-gray-600">Includes Virginia Resale Certificate, HOA documents, and compliance inspection</p>
-        </div>
-
-        <div className="bg-white p-6 rounded-lg shadow border">
-          <div className="flex items-center mb-4">
-            <CreditCard className="h-8 w-8 text-green-600 mr-3" />
-            <h3 className="text-lg font-semibold text-gray-900">Secure Payment</h3>
-          </div>
-          <p className="text-gray-600">Safe and secure payment processing with multiple payment options</p>
-        </div>
-      </div>
-    </div>
-  );
-
-  // HOA Selection Step
-  const HOASelectionStep = () => (
-    <div className="space-y-6">
-      <div className="text-center mb-8">
-        <h3 className="text-2xl font-bold text-green-900 mb-2">Select HOA Property</h3>
-        <p className="text-gray-600">Choose the HOA community for your resale certificate application</p>
-      </div>
-
-      <div className="bg-white p-6 rounded-lg border border-green-200">
-        <label className="block text-sm font-medium text-gray-700 mb-3">HOA Community *</label>
-        <select
-          value={hoaProperty}
-          onChange={(e) => setHoaProperty(e.target.value)}
-          className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-        >
-          <option value="">Select an HOA Community</option>
-          {hoaProperties.map((hoa) => (
-            <option key={hoa.id} value={hoa.name}>
-              {hoa.name} {hoa.location && `- ${hoa.location}`}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">Property Address *</label>
-          <input
-            type="text"
-            value={propertyAddress}
-            onChange={(e) => setPropertyAddress(e.target.value)}
-            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-            placeholder="123 Main Street"
-          />
-        </div>
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">Unit Number (if applicable)</label>
-          <input
-            type="text"
-            value={unitNumber}
-            onChange={(e) => setUnitNumber(e.target.value)}
-            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-            placeholder="4B"
-          />
-        </div>
-      </div>
-
-      {hoaProperty && (
-        <div className="bg-green-50 p-4 rounded-lg border border-green-200">
-          <div className="flex items-start">
-            <CheckCircle className="h-5 w-5 text-green-600 mt-0.5 mr-2" />
-            <div>
-              <h4 className="font-medium text-green-900">HOA Documents Ready</h4>
-              <p className="text-sm text-green-700 mt-1">
-                All required HOA documents for {hoaProperty} will be automatically included in your resale package.
-              </p>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-
-  // Submitter Info Step
-  const SubmitterInfoStep = () => (
-    <div className="space-y-6">
-      <div className="text-center mb-8">
-        <h3 className="text-2xl font-bold text-green-900 mb-2">Who is Submitting?</h3>
-        <p className="text-gray-600">Tell us about yourself and your role in this transaction</p>
-      </div>
-
-      <div className="bg-white p-6 rounded-lg border border-green-200">
-        <label className="block text-sm font-medium text-gray-700 mb-3">I am the: *</label>
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          {[
-            { value: 'seller', label: 'Property Owner/Seller' },
-            { value: 'realtor', label: 'Licensed Realtor' },
-            { value: 'builder', label: 'Builder/Developer' },
-            { value: 'admin', label: 'GMG Staff' }
-          ].map((type) => (
-            <button
-              key={type.value}
-              onClick={() => setSubmitterType(type.value)}
-              className={`p-4 rounded-lg border-2 transition-all ${
-                submitterType === type.value
-                  ? 'border-green-500 bg-green-50 text-green-900'
-                  : 'border-gray-200 hover:border-green-300'
-              }`}
-            >
-              <User className="h-8 w-8 mx-auto mb-2" />
-              <div className="text-sm font-medium">{type.label}</div>
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+<div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-2">Full Name *</label>
           <input
             type="text"
-            value={submitterName}
-            onChange={(e) => setSubmitterName(e.target.value)}
+            value={formData.submitterName}
+            onChange={(e) => {
+              console.log('🔍 Submitter Name onChange triggered:', e.target.value);
+              handleInputChange('submitterName', e.target.value);
+            }}
             className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
             placeholder="John Smith"
           />
@@ -418,8 +16,11 @@ export default function GMGResaleFlow() {
           <label className="block text-sm font-medium text-gray-700 mb-2">Email Address *</label>
           <input
             type="email"
-            value={submitterEmail}
-            onChange={(e) => setSubmitterEmail(e.target.value)}
+            value={formData.submitterEmail}
+            onChange={(e) => {
+              console.log('🔍 Submitter Email onChange triggered:', e.target.value);
+              handleInputChange('submitterEmail', e.target.value);
+            }}
             className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
             placeholder="john@example.com"
           />
@@ -428,21 +29,27 @@ export default function GMGResaleFlow() {
           <label className="block text-sm font-medium text-gray-700 mb-2">Phone Number *</label>
           <input
             type="tel"
-            value={submitterPhone}
-            onChange={(e) => setSubmitterPhone(e.target.value)}
+            value={formData.submitterPhone}
+            onChange={(e) => {
+              console.log('🔍 Submitter Phone onChange triggered:', e.target.value);
+              handleInputChange('submitterPhone', e.target.value);
+            }}
             className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
             placeholder="(555) 123-4567"
           />
         </div>
       </div>
 
-      {submitterType === 'realtor' && (
+      {formData.submitterType === 'realtor' && (
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-2">Virginia Real Estate License Number *</label>
           <input
             type="text"
-            value={realtorLicense}
-            onChange={(e) => setRealtorLicense(e.target.value)}
+            value={formData.realtorLicense}
+            onChange={(e) => {
+              console.log('🔍 Realtor License onChange triggered:', e.target.value);
+              handleInputChange('realtorLicense', e.target.value);
+            }}
             className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
             placeholder="License #"
           />
@@ -451,12 +58,19 @@ export default function GMGResaleFlow() {
     </div>
   );
 
-  // Transaction Details Step
   const TransactionDetailsStep = () => (
     <div className="space-y-6">
       <div className="text-center mb-8">
         <h3 className="text-2xl font-bold text-green-900 mb-2">Transaction Details</h3>
         <p className="text-gray-600">Information about the buyer, seller, and sale details</p>
+      </div>
+
+      {/* DEBUG: Show current form values */}
+      <div className="bg-blue-50 p-4 rounded-lg border border-blue-200 mb-4">
+        <h4 className="font-semibold text-blue-900 mb-2">Debug - Current Values:</h4>
+        <p className="text-sm text-blue-800">Buyer: "{formData.buyerName}" / "{formData.buyerEmail}"</p>
+        <p className="text-sm text-blue-800">Seller: "{formData.sellerName}" / "{formData.sellerEmail}"</p>
+        <p className="text-sm text-blue-800">Sale Price: "{formData.salePrice}" / Closing: "{formData.closingDate}"</p>
       </div>
 
       <div className="bg-blue-50 p-6 rounded-lg border border-blue-200">
@@ -468,22 +82,31 @@ export default function GMGResaleFlow() {
           <input
             type="text"
             placeholder="Buyer Full Name *"
-            value={buyerName}
-            onChange={(e) => setBuyerName(e.target.value)}
+            value={formData.buyerName}
+            onChange={(e) => {
+              console.log('🔍 Buyer Name onChange triggered:', e.target.value);
+              handleInputChange('buyerName', e.target.value);
+            }}
             className="px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
           />
           <input
             type="email"
             placeholder="Buyer Email *"
-            value={buyerEmail}
-            onChange={(e) => setBuyerEmail(e.target.value)}
+            value={formData.buyerEmail}
+            onChange={(e) => {
+              console.log('🔍 Buyer Email onChange triggered:', e.target.value);
+              handleInputChange('buyerEmail', e.target.value);
+            }}
             className="px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
           />
           <input
             type="tel"
             placeholder="Buyer Phone *"
-            value={buyerPhone}
-            onChange={(e) => setBuyerPhone(e.target.value)}
+            value={formData.buyerPhone}
+            onChange={(e) => {
+              console.log('🔍 Buyer Phone onChange triggered:', e.target.value);
+              handleInputChange('buyerPhone', e.target.value);
+            }}
             className="px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
           />
         </div>
@@ -498,22 +121,31 @@ export default function GMGResaleFlow() {
           <input
             type="text"
             placeholder="Seller Full Name *"
-            value={sellerName}
-            onChange={(e) => setSellerName(e.target.value)}
+            value={formData.sellerName}
+            onChange={(e) => {
+              console.log('🔍 Seller Name onChange triggered:', e.target.value);
+              handleInputChange('sellerName', e.target.value);
+            }}
             className="px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
           />
           <input
             type="email"
             placeholder="Seller Email *"
-            value={sellerEmail}
-            onChange={(e) => setSellerEmail(e.target.value)}
+            value={formData.sellerEmail}
+            onChange={(e) => {
+              console.log('🔍 Seller Email onChange triggered:', e.target.value);
+              handleInputChange('sellerEmail', e.target.value);
+            }}
             className="px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
           />
           <input
             type="tel"
             placeholder="Seller Phone *"
-            value={sellerPhone}
-            onChange={(e) => setSellerPhone(e.target.value)}
+            value={formData.sellerPhone}
+            onChange={(e) => {
+              console.log('🔍 Seller Phone onChange triggered:', e.target.value);
+              handleInputChange('sellerPhone', e.target.value);
+            }}
             className="px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
           />
         </div>
@@ -527,20 +159,29 @@ export default function GMGResaleFlow() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">Sale Price *</label>
-            <input
-              type="number"
-              placeholder="450000"
-              value={salePrice}
-              onChange={(e) => setSalePrice(e.target.value)}
-              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-            />
+            <div className="relative">
+              <DollarSign className="absolute left-3 top-3 h-5 w-5 text-gray-400" />
+              <input
+                type="number"
+                placeholder="450000"
+                value={formData.salePrice}
+                onChange={(e) => {
+                  console.log('🔍 Sale Price onChange triggered:', e.target.value);
+                  handleInputChange('salePrice', e.target.value);
+                }}
+                className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+              />
+            </div>
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">Expected Closing Date *</label>
             <input
               type="date"
-              value={closingDate}
-              onChange={(e) => setClosingDate(e.target.value)}
+              value={formData.closingDate}
+              onChange={(e) => {
+                console.log('🔍 Closing Date onChange triggered:', e.target.value);
+                handleInputChange('closingDate', e.target.value);
+              }}
               className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
             />
           </div>
@@ -549,7 +190,6 @@ export default function GMGResaleFlow() {
     </div>
   );
 
-  // Package Payment Step
   const PackagePaymentStep = () => (
     <div className="space-y-6">
       <div className="text-center mb-8">
@@ -557,11 +197,22 @@ export default function GMGResaleFlow() {
         <p className="text-gray-600">Choose your processing speed and payment method</p>
       </div>
 
+      {/* DEBUG: Show current form values */}
+      <div className="bg-blue-50 p-4 rounded-lg border border-blue-200 mb-4">
+        <h4 className="font-semibold text-blue-900 mb-2">Debug - Current Values:</h4>
+        <p className="text-sm text-blue-800">Package Type: "{formData.packageType}"</p>
+        <p className="text-sm text-blue-800">Payment Method: "{formData.paymentMethod}"</p>
+        <p className="text-sm text-blue-800">Total: ${calculateTotal()}</p>
+      </div>
+
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div 
-          onClick={() => setPackageType('standard')}
+          onClick={() => {
+            console.log('🔍 Standard package clicked');
+            handleInputChange('packageType', 'standard');
+          }}
           className={`p-6 rounded-lg border-2 cursor-pointer transition-all ${
-            packageType === 'standard' 
+            formData.packageType === 'standard' 
               ? 'border-green-500 bg-green-50' 
               : 'border-gray-200 hover:border-green-300'
           }`}
@@ -584,19 +235,27 @@ export default function GMGResaleFlow() {
         </div>
 
         <div 
-          onClick={() => setPackageType('rush')}
+          onClick={() => {
+            console.log('🔍 Rush package clicked');
+            handleInputChange('packageType', 'rush');
+          }}
           className={`p-6 rounded-lg border-2 cursor-pointer transition-all ${
-            packageType === 'rush' 
+            formData.packageType === 'rush' 
               ? 'border-orange-500 bg-orange-50' 
               : 'border-gray-200 hover:border-orange-300'
           }`}
         >
           <div className="flex items-start justify-between mb-4">
             <div>
-              <h4 className="text-lg font-semibold text-gray-900">Rush Processing</h4>
+              <h4 className="text-lg font-semibold text-gray-900 flex items-center">
+                Rush Processing
+                <span className="ml-2 px-2 py-1 bg-orange-100 text-orange-800 text-xs rounded">PRIORITY</span>
+              </h4>
               <p className="text-sm text-gray-600">5 business days</p>
             </div>
             <div className="text-right">
+              <div className="text-lg text-gray-500">$317.95</div>
+              <div className="text-sm text-gray-500">+ $70.66</div>
               <div className="text-2xl font-bold text-orange-600">$388.61</div>
             </div>
           </div>
@@ -618,15 +277,19 @@ export default function GMGResaleFlow() {
               type="radio"
               name="paymentMethod"
               value="credit_card"
-              checked={paymentMethod === 'credit_card'}
-              onChange={(e) => setPaymentMethod(e.target.value)}
-              className="h-4 w-4 text-green-600"
+              checked={formData.paymentMethod === 'credit_card'}
+              onChange={(e) => {
+                console.log('🔍 Credit card payment selected:', e.target.value);
+                handleInputChange('paymentMethod', e.target.value);
+              }}
+              className="h-4 w-4 text-green-600 focus:ring-green-500 border-gray-300"
             />
             <div className="ml-3 flex-1">
               <div className="flex items-center justify-between">
                 <span className="text-sm font-medium text-gray-700">Credit/Debit Card</span>
                 <span className="text-sm text-gray-500">+ $9.95 convenience fee</span>
               </div>
+              <p className="text-xs text-gray-500">Secure processing via Stripe</p>
             </div>
           </label>
           
@@ -635,15 +298,19 @@ export default function GMGResaleFlow() {
               type="radio"
               name="paymentMethod"
               value="ach"
-              checked={paymentMethod === 'ach'}
-              onChange={(e) => setPaymentMethod(e.target.value)}
-              className="h-4 w-4 text-green-600"
+              checked={formData.paymentMethod === 'ach'}
+              onChange={(e) => {
+                console.log('🔍 ACH payment selected:', e.target.value);
+                handleInputChange('paymentMethod', e.target.value);
+              }}
+              className="h-4 w-4 text-green-600 focus:ring-green-500 border-gray-300"
             />
             <div className="ml-3 flex-1">
               <div className="flex items-center justify-between">
                 <span className="text-sm font-medium text-gray-700">Bank Transfer (ACH)</span>
                 <span className="text-sm text-green-600">No convenience fee</span>
               </div>
+              <p className="text-xs text-gray-500">Direct bank account transfer</p>
             </div>
           </label>
         </div>
@@ -655,13 +322,13 @@ export default function GMGResaleFlow() {
               <span>Processing Fee:</span>
               <span>$317.95</span>
             </div>
-            {packageType === 'rush' && (
+            {formData.packageType === 'rush' && (
               <div className="flex justify-between">
                 <span>Rush Processing:</span>
                 <span>+$70.66</span>
               </div>
             )}
-            {paymentMethod === 'credit_card' && (
+            {formData.paymentMethod === 'credit_card' && (
               <div className="flex justify-between">
                 <span>Convenience Fee:</span>
                 <span>+$9.95</span>
@@ -677,7 +344,6 @@ export default function GMGResaleFlow() {
     </div>
   );
 
-  // Review Submit Step
   const ReviewSubmitStep = () => (
     <div className="space-y-6">
       <div className="text-center mb-8">
@@ -687,40 +353,52 @@ export default function GMGResaleFlow() {
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div className="bg-white p-6 rounded-lg border border-gray-200">
-          <h4 className="font-semibold text-gray-900 mb-4">Property Information</h4>
+          <h4 className="font-semibold text-gray-900 mb-4 flex items-center">
+            <Building2 className="h-5 w-5 mr-2 text-green-600" />
+            Property Information
+          </h4>
           <div className="space-y-2 text-sm">
-            <div><span className="font-medium">HOA:</span> {hoaProperty}</div>
-            <div><span className="font-medium">Address:</span> {propertyAddress} {unitNumber}</div>
-            <div><span className="font-medium">Sale Price:</span> ${salePrice ? Number(salePrice).toLocaleString() : 'N/A'}</div>
-            <div><span className="font-medium">Closing Date:</span> {closingDate}</div>
+            <div><span className="font-medium">HOA:</span> {formData.hoaProperty}</div>
+            <div><span className="font-medium">Address:</span> {formData.propertyAddress} {formData.unitNumber}</div>
+            <div><span className="font-medium">Sale Price:</span> ${formData.salePrice ? Number(formData.salePrice).toLocaleString() : 'N/A'}</div>
+            <div><span className="font-medium">Closing Date:</span> {formData.closingDate}</div>
           </div>
         </div>
 
         <div className="bg-white p-6 rounded-lg border border-gray-200">
-          <h4 className="font-semibold text-gray-900 mb-4">Submitter Information</h4>
+          <h4 className="font-semibold text-gray-900 mb-4 flex items-center">
+            <User className="h-5 w-5 mr-2 text-green-600" />
+            Submitter Information
+          </h4>
           <div className="space-y-2 text-sm">
-            <div><span className="font-medium">Role:</span> {submitterType}</div>
-            <div><span className="font-medium">Name:</span> {submitterName}</div>
-            <div><span className="font-medium">Email:</span> {submitterEmail}</div>
-            <div><span className="font-medium">Phone:</span> {submitterPhone}</div>
+            <div><span className="font-medium">Role:</span> {formData.submitterType}</div>
+            <div><span className="font-medium">Name:</span> {formData.submitterName}</div>
+            <div><span className="font-medium">Email:</span> {formData.submitterEmail}</div>
+            <div><span className="font-medium">Phone:</span> {formData.submitterPhone}</div>
           </div>
         </div>
 
         <div className="bg-white p-6 rounded-lg border border-gray-200">
-          <h4 className="font-semibold text-gray-900 mb-4">Transaction Parties</h4>
+          <h4 className="font-semibold text-gray-900 mb-4 flex items-center">
+            <Users className="h-5 w-5 mr-2 text-green-600" />
+            Transaction Parties
+          </h4>
           <div className="space-y-2 text-sm">
-            <div><span className="font-medium">Buyer:</span> {buyerName}</div>
-            <div><span className="font-medium">Buyer Email:</span> {buyerEmail}</div>
-            <div><span className="font-medium">Seller:</span> {sellerName}</div>
-            <div><span className="font-medium">Seller Email:</span> {sellerEmail}</div>
+            <div><span className="font-medium">Buyer:</span> {formData.buyerName}</div>
+            <div><span className="font-medium">Buyer Email:</span> {formData.buyerEmail}</div>
+            <div><span className="font-medium">Seller:</span> {formData.sellerName}</div>
+            <div><span className="font-medium">Seller Email:</span> {formData.sellerEmail}</div>
           </div>
         </div>
 
         <div className="bg-white p-6 rounded-lg border border-gray-200">
-          <h4 className="font-semibold text-gray-900 mb-4">Package & Payment</h4>
+          <h4 className="font-semibold text-gray-900 mb-4 flex items-center">
+            <CreditCard className="h-5 w-5 mr-2 text-green-600" />
+            Package & Payment
+          </h4>
           <div className="space-y-2 text-sm">
-            <div><span className="font-medium">Package:</span> {packageType === 'rush' ? 'Rush (5 days)' : 'Standard (10-15 days)'}</div>
-            <div><span className="font-medium">Payment Method:</span> {paymentMethod === 'credit_card' ? 'Credit Card' : 'Bank Transfer'}</div>
+            <div><span className="font-medium">Package:</span> {formData.packageType === 'rush' ? 'Rush (5 days)' : 'Standard (10-15 days)'}</div>
+            <div><span className="font-medium">Payment Method:</span> {formData.paymentMethod === 'credit_card' ? 'Credit Card' : 'Bank Transfer'}</div>
             <div><span className="font-medium">Total:</span> ${calculateTotal()}</div>
           </div>
         </div>
@@ -732,7 +410,10 @@ export default function GMGResaleFlow() {
           <div>
             <h5 className="font-medium text-yellow-800">Important Information</h5>
             <div className="text-sm text-yellow-700 mt-2 space-y-1">
-              <p>• Your resale certificate package will include all required documents</p>
+              <p>• Your resale certificate package will include:</p>
+              <p className="ml-4">- Complete Virginia State Resale Certificate</p>
+              <p className="ml-4">- All HOA governing documents and financial statements</p>
+              <p className="ml-4">- Compliance inspection report completed by GMG staff</p>
               <p>• Documents will be delivered electronically to all parties</p>
               <p>• Processing begins immediately upon payment confirmation</p>
             </div>
@@ -744,26 +425,19 @@ export default function GMGResaleFlow() {
         <label className="flex items-start">
           <input
             type="checkbox"
-            className="h-4 w-4 text-green-600 border-gray-300 rounded mt-1"
+            className="h-4 w-4 text-green-600 focus:ring-green-500 border-gray-300 rounded mt-1"
             required
           />
           <span className="ml-3 text-sm text-gray-700">
             I confirm that all information provided is accurate and complete. I understand that 
             Goodman Management Group will process this resale certificate application according to 
-            Virginia state requirements.
+            Virginia state requirements. I agree to the terms of service and acknowledge that 
+            processing fees are non-refundable once work begins.
           </span>
         </label>
       </div>
     </div>
   );
-
-  const steps = [
-    { number: 1, title: 'HOA Selection', icon: Building2 },
-    { number: 2, title: 'Submitter Info', icon: User },
-    { number: 3, title: 'Transaction Details', icon: Users },
-    { number: 4, title: 'Package & Payment', icon: CreditCard },
-    { number: 5, title: 'Review & Submit', icon: CheckCircle }
-  ];
 
   const renderStepContent = () => {
     switch (currentStep) {
@@ -772,10 +446,11 @@ export default function GMGResaleFlow() {
       case 3: return <TransactionDetailsStep />;
       case 4: return <PackagePaymentStep />;
       case 5: return <ReviewSubmitStep />;
-      default: return isAdmin ? <Dashboard /> : <UserHomePage />;
+      default: return <Dashboard />;
     }
   };
 
+  // Loading state
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
@@ -836,7 +511,7 @@ export default function GMGResaleFlow() {
         </div>
 
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-          {renderStepContent()}
+          <Dashboard />
         </div>
 
         {/* Footer */}
@@ -944,25 +619,26 @@ export default function GMGResaleFlow() {
         {/* Navigation Buttons */}
         <div className="flex justify-between">
           <button
-            onClick={() => setCurrentStep(currentStep - 1)}
+            onClick={prevStep}
             disabled={currentStep === 1}
-            className="px-6 py-3 border border-gray-300 rounded-lg text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            className="px-6 py-3 border border-gray-300 rounded-lg text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
           >
             Previous
           </button>
           
           {currentStep < 5 ? (
             <button
-              onClick={() => setCurrentStep(currentStep + 1)}
+              onClick={nextStep}
               disabled={
-                (currentStep === 1 && (!hoaProperty || !propertyAddress)) ||
-                (currentStep === 2 && (!submitterType || !submitterName || !submitterEmail)) ||
-                (currentStep === 3 && (!buyerName || !sellerName || !salePrice)) ||
-                (currentStep === 4 && !paymentMethod)
+                (currentStep === 1 && (!formData.hoaProperty || !formData.propertyAddress)) ||
+                (currentStep === 2 && (!formData.submitterType || !formData.submitterName || !formData.submitterEmail)) ||
+                (currentStep === 3 && (!formData.buyerName || !formData.sellerName || !formData.salePrice)) ||
+                (currentStep === 4 && !formData.paymentMethod)
               }
-              className="px-6 py-3 bg-green-700 text-white rounded-lg hover:bg-green-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              className="px-6 py-3 bg-green-700 text-white rounded-lg hover:bg-green-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
             >
               Continue
+              <FileText className="h-4 w-4" />
             </button>
           ) : (
             <button
@@ -980,4 +656,669 @@ export default function GMGResaleFlow() {
       {showAuthModal && <AuthModal />}
     </div>
   );
-}
+}import React, { useState, useEffect } from 'react';
+import { supabase } from '../lib/supabase';
+import { Building2, FileText, CreditCard, CheckCircle, Clock, AlertCircle, Upload, User, Users, DollarSign, Search, Menu, X } from 'lucide-react';
+
+export default function GMGResaleFlow() {
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [hoaProperties, setHoaProperties] = useState([]);
+  const [applications, setApplications] = useState([]);
+  const [currentStep, setCurrentStep] = useState(0);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [authMode, setAuthMode] = useState('signin');
+  
+  const [formData, setFormData] = useState({
+    hoaProperty: '',
+    propertyAddress: '',
+    unitNumber: '',
+    submitterType: '',
+    submitterName: '',
+    submitterEmail: '',
+    submitterPhone: '',
+    realtorLicense: '',
+    buyerName: '',
+    buyerEmail: '',
+    buyerPhone: '',
+    sellerName: '',
+    sellerEmail: '',
+    sellerPhone: '',
+    salePrice: '',
+    closingDate: '',
+    packageType: 'standard',
+    paymentMethod: '',
+    totalAmount: 317.95
+  });
+
+  useEffect(() => {
+    checkUser();
+    loadHOAProperties();
+    
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      (event, session) => {
+        const userEmail = session?.user?.email;
+        setUser(session?.user || null);
+        setIsAuthenticated(!!session?.user);
+        setIsAdmin(userEmail === 'admin@gmgva.com');
+        if (session?.user) {
+          setShowAuthModal(false);
+          loadApplications();
+        }
+      }
+    );
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  const checkUser = async () => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const userEmail = session?.user?.email;
+      setUser(session?.user || null);
+      setIsAuthenticated(!!session?.user);
+      setIsAdmin(userEmail === 'admin@gmgva.com');
+      if (session?.user) {
+        await loadApplications();
+      }
+    } catch (error) {
+      console.error('Error checking user:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const loadHOAProperties = async () => {
+    console.log('🏠 Loading HOA Properties (fixed version)...');
+    
+    try {
+      const { data, error } = await supabase
+        .from('hoa_properties')
+        .select('id, name, location')
+        .order('name');
+      
+      console.log('🔍 Raw query result:', { data, error });
+      
+      if (error) {
+        console.error('❌ Supabase error details:', error);
+        console.error('Error message:', error.message);
+        console.error('Error code:', error.code);
+        return;
+      }
+      
+      if (!data) {
+        console.warn('⚠️ Data is null/undefined');
+        return;
+      }
+      
+      if (data.length === 0) {
+        console.warn('⚠️ Data array is empty');
+        return;
+      }
+      
+      console.log('✅ SUCCESS! Loaded', data.length, 'HOA properties');
+      console.log('📋 First 3 properties:', data.slice(0, 3));
+      
+      setHoaProperties(data);
+      
+    } catch (error) {
+      console.error('💥 Catch block error:', error);
+      console.error('Error type:', typeof error);
+      console.error('Error details:', JSON.stringify(error, null, 2));
+    }
+  };
+
+  const loadApplications = async () => {
+    if (!user) return;
+    
+    try {
+      const { data, error } = await supabase
+        .from('applications')
+        .select(`
+          *,
+          hoa_properties(name, location),
+          profiles(first_name, last_name, role)
+        `)
+        .order('created_at', { ascending: false });
+      
+      if (error) throw error;
+      setApplications(data || []);
+    } catch (error) {
+      console.error('Error loading applications:', error);
+    }
+  };
+
+  const handleAuth = async (email, password, userData = {}) => {
+    try {
+      if (authMode === 'signin') {
+        const { error } = await supabase.auth.signInWithPassword({
+          email,
+          password
+        });
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.auth.signUp({
+          email,
+          password,
+          options: {
+            data: userData
+          }
+        });
+        if (error) throw error;
+        alert('Check your email for verification link!');
+      }
+    } catch (error) {
+      alert(error.message);
+    }
+  };
+
+  const signOut = async () => {
+    await supabase.auth.signOut();
+    setUser(null);
+    setIsAuthenticated(false);
+    setIsAdmin(false);
+    setCurrentStep(0);
+  };
+
+  const calculateTotal = () => {
+    let total = 317.95;
+    if (formData.packageType === 'rush') total += 70.66;
+    if (formData.paymentMethod === 'credit_card') total += 9.95;
+    return total;
+  };
+
+  // FIXED: More reliable input change handler with debugging
+  const handleInputChange = (field, value) => {
+    console.log(`🔍 Input change: ${field} = "${value}"`);
+    
+    setFormData(currentFormData => {
+      const newFormData = {
+        ...currentFormData,
+        [field]: value
+      };
+      console.log(`✅ Updated formData for ${field}:`, newFormData[field]);
+      return newFormData;
+    });
+  };
+
+  const nextStep = () => {
+    if (currentStep < 5) setCurrentStep(currentStep + 1);
+  };
+
+  const prevStep = () => {
+    if (currentStep > 1) setCurrentStep(currentStep - 1);
+  };
+
+  const submitApplication = async () => {
+    if (!user) {
+      setShowAuthModal(true);
+      return;
+    }
+
+    try {
+      const hoaProperty = hoaProperties.find(h => h.name === formData.hoaProperty);
+      
+      const applicationData = {
+        user_id: user.id,
+        hoa_property_id: hoaProperty?.id,
+        property_address: formData.propertyAddress,
+        unit_number: formData.unitNumber,
+        submitter_type: formData.submitterType,
+        submitter_name: formData.submitterName,
+        submitter_email: formData.submitterEmail,
+        submitter_phone: formData.submitterPhone,
+        realtor_license: formData.realtorLicense,
+        buyer_name: formData.buyerName,
+        buyer_email: formData.buyerEmail,
+        buyer_phone: formData.buyerPhone,
+        seller_name: formData.sellerName,
+        seller_email: formData.sellerEmail,
+        seller_phone: formData.sellerPhone,
+        sale_price: parseFloat(formData.salePrice),
+        closing_date: formData.closingDate,
+        package_type: formData.packageType,
+        payment_method: formData.paymentMethod,
+        total_amount: calculateTotal(),
+        status: 'pending_payment',
+        submitted_at: new Date().toISOString(),
+        expected_completion_date: new Date(Date.now() + (formData.packageType === 'rush' ? 5 : 15) * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
+      };
+
+      const { data, error } = await supabase
+        .from('applications')
+        .insert([applicationData])
+        .select();
+
+      if (error) throw error;
+
+      alert('Application submitted successfully! You will receive a confirmation email shortly.');
+      setCurrentStep(0);
+      loadApplications();
+      
+      // Reset form
+      setFormData({
+        hoaProperty: '',
+        propertyAddress: '',
+        unitNumber: '',
+        submitterType: '',
+        submitterName: '',
+        submitterEmail: '',
+        submitterPhone: '',
+        realtorLicense: '',
+        buyerName: '',
+        buyerEmail: '',
+        buyerPhone: '',
+        sellerName: '',
+        sellerEmail: '',
+        sellerPhone: '',
+        salePrice: '',
+        closingDate: '',
+        packageType: 'standard',
+        paymentMethod: '',
+        totalAmount: 317.95
+      });
+    } catch (error) {
+      alert('Error submitting application: ' + error.message);
+    }
+  };
+
+  // Authentication Modal Component
+  const AuthModal = () => {
+    const [email, setEmail] = useState('');
+    const [password, setPassword] = useState('');
+    const [firstName, setFirstName] = useState('');
+    const [lastName, setLastName] = useState('');
+
+    return (
+      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+        <div className="bg-white rounded-lg p-8 max-w-md w-full mx-4">
+          <div className="flex justify-between items-center mb-6">
+            <h2 className="text-2xl font-bold text-green-800">
+              {authMode === 'signin' ? 'Sign In' : 'Create Account'}
+            </h2>
+            <button onClick={() => setShowAuthModal(false)}>
+              <X className="h-6 w-6 text-gray-400" />
+            </button>
+          </div>
+          
+          <form onSubmit={(e) => {
+            e.preventDefault();
+            handleAuth(email, password, { first_name: firstName, last_name: lastName });
+          }}>
+            {authMode === 'signup' && (
+              <div className="grid grid-cols-2 gap-4 mb-4">
+                <input
+                  type="text"
+                  placeholder="First Name"
+                  value={firstName}
+                  onChange={(e) => setFirstName(e.target.value)}
+                  className="px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+                  required
+                />
+                <input
+                  type="text"
+                  placeholder="Last Name"
+                  value={lastName}
+                  onChange={(e) => setLastName(e.target.value)}
+                  className="px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+                  required
+                />
+              </div>
+            )}
+            
+            <div className="space-y-4">
+              <input
+                type="email"
+                placeholder="Email Address"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+                required
+              />
+              <input
+                type="password"
+                placeholder="Password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+                required
+              />
+            </div>
+            
+            <button
+              type="submit"
+              className="w-full mt-6 px-6 py-3 bg-green-700 text-white rounded-lg hover:bg-green-800 transition-colors"
+            >
+              {authMode === 'signin' ? 'Sign In' : 'Create Account'}
+            </button>
+          </form>
+          
+          <div className="mt-4 text-center">
+            <button
+              onClick={() => setAuthMode(authMode === 'signin' ? 'signup' : 'signin')}
+              className="text-green-600 hover:text-green-800"
+            >
+              {authMode === 'signin' ? 'Need an account? Sign up' : 'Already have an account? Sign in'}
+            </button>
+          </div>
+
+          {authMode === 'signin' && (
+            <div className="mt-4 p-3 bg-blue-50 rounded-lg">
+              <p className="text-sm text-blue-700">
+                <strong>Demo credentials:</strong><br/>
+                Admin: admin@gmgva.com / admin123<br/>
+                User: user@example.com / password
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  // Dashboard Component (Admin Only)
+  const Dashboard = () => {
+    const statusConfig = {
+      draft: { color: 'bg-gray-100 text-gray-800', icon: Clock, label: 'Draft' },
+      pending_payment: { color: 'bg-yellow-100 text-yellow-800', icon: DollarSign, label: 'Pending Payment' },
+      under_review: { color: 'bg-blue-100 text-blue-800', icon: Clock, label: 'Under Review' },
+      compliance_pending: { color: 'bg-orange-100 text-orange-800', icon: AlertCircle, label: 'Compliance Pending' },
+      approved: { color: 'bg-green-100 text-green-800', icon: CheckCircle, label: 'Completed' },
+      rejected: { color: 'bg-red-100 text-red-800', icon: AlertCircle, label: 'Rejected' }
+    };
+
+    return (
+      <div className="space-y-6">
+        <div className="flex justify-between items-center">
+          <h2 className="text-2xl font-bold text-gray-900">
+            {isAdmin ? 'Admin Dashboard - Resale Applications' : 'Welcome to GMG ResaleFlow'}
+          </h2>
+          <button
+            onClick={() => setCurrentStep(1)}
+            className="bg-green-700 text-white px-6 py-3 rounded-lg hover:bg-green-800 transition-colors flex items-center gap-2"
+          >
+            <FileText className="h-5 w-5" />
+            {isAdmin ? 'New Resale Application' : 'Start New Application'}
+          </button>
+        </div>
+
+        {isAdmin ? (
+          <>
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+              <div className="bg-white p-6 rounded-lg shadow border-l-4 border-green-700">
+                <div className="flex items-center">
+                  <FileText className="h-8 w-8 text-green-700" />
+                  <div className="ml-3">
+                    <p className="text-sm font-medium text-gray-500">Total Applications</p>
+                    <p className="text-2xl font-semibold text-gray-900">{applications.length}</p>
+                  </div>
+                </div>
+              </div>
+              <div className="bg-white p-6 rounded-lg shadow border-l-4 border-yellow-500">
+                <div className="flex items-center">
+                  <Clock className="h-8 w-8 text-yellow-500" />
+                  <div className="ml-3">
+                    <p className="text-sm font-medium text-gray-500">Under Review</p>
+                    <p className="text-2xl font-semibold text-gray-900">
+                      {applications.filter(app => app.status === 'under_review').length}
+                    </p>
+                  </div>
+                </div>
+              </div>
+              <div className="bg-white p-6 rounded-lg shadow border-l-4 border-green-500">
+                <div className="flex items-center">
+                  <CheckCircle className="h-8 w-8 text-green-500" />
+                  <div className="ml-3">
+                    <p className="text-sm font-medium text-gray-500">Completed</p>
+                    <p className="text-2xl font-semibold text-gray-900">
+                      {applications.filter(app => app.status === 'approved').length}
+                    </p>
+                  </div>
+                </div>
+              </div>
+              <div className="bg-white p-6 rounded-lg shadow border-l-4 border-green-600">
+                <div className="flex items-center">
+                  <DollarSign className="h-8 w-8 text-green-600" />
+                  <div className="ml-3">
+                    <p className="text-sm font-medium text-gray-500">Revenue (Month)</p>
+                    <p className="text-2xl font-semibold text-gray-900">
+                      ${applications.reduce((sum, app) => sum + (app.total_amount || 0), 0).toLocaleString()}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-white rounded-lg shadow overflow-hidden">
+              <div className="px-6 py-4 border-b border-gray-200 bg-green-50">
+                <h3 className="text-lg font-medium text-green-900">Recent Applications</h3>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="min-w-full divide-y divide-gray-200">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Property</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Submitter</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Package</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Submitted</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Total</th>
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-gray-200">
+                    {applications.map((app) => {
+                      const StatusIcon = statusConfig[app.status]?.icon || Clock;
+                      const statusStyle = statusConfig[app.status]?.color || 'bg-gray-100 text-gray-800';
+                      const statusLabel = statusConfig[app.status]?.label || app.status;
+                      
+                      return (
+                        <tr key={app.id} className="hover:bg-gray-50">
+                          <td className="px-6 py-4 text-sm text-gray-900 max-w-xs">
+                            <div className="truncate">
+                              {app.hoa_properties?.name} - {app.property_address} {app.unit_number}
+                            </div>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                            {app.submitter_name} ({app.submitter_type})
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                            <span className={`px-2 py-1 rounded text-xs ${app.package_type === 'rush' ? 'bg-orange-100 text-orange-800' : 'bg-blue-100 text-blue-800'}`}>
+                              {app.package_type === 'rush' ? 'Rush (5 days)' : 'Standard'}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${statusStyle}`}>
+                              <StatusIcon className="h-3 w-3 mr-1" />
+                              {statusLabel}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                            {app.submitted_at ? new Date(app.submitted_at).toLocaleDateString() : 'Draft'}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                            ${app.total_amount || 0}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </>
+        ) : (
+          <div className="text-center">
+            <p className="text-lg text-gray-600 mb-8">Submit your HOA resale certificate application quickly and securely</p>
+            
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-12">
+              <div className="bg-white p-6 rounded-lg shadow border">
+                <div className="flex items-center mb-4">
+                  <Clock className="h-8 w-8 text-green-600 mr-3" />
+                  <h3 className="text-lg font-semibold text-gray-900">Quick Processing</h3>
+                </div>
+                <p className="text-gray-600">Standard processing in 10-15 business days, or rush service in 5 days</p>
+              </div>
+
+              <div className="bg-white p-6 rounded-lg shadow border">
+                <div className="flex items-center mb-4">
+                  <CheckCircle className="h-8 w-8 text-green-600 mr-3" />
+                  <h3 className="text-lg font-semibold text-gray-900">Complete Package</h3>
+                </div>
+                <p className="text-gray-600">Includes Virginia Resale Certificate, HOA documents, and compliance inspection</p>
+              </div>
+
+              <div className="bg-white p-6 rounded-lg shadow border">
+                <div className="flex items-center mb-4">
+                  <CreditCard className="h-8 w-8 text-green-600 mr-3" />
+                  <h3 className="text-lg font-semibold text-gray-900">Secure Payment</h3>
+                </div>
+                <p className="text-gray-600">Safe and secure payment processing with multiple payment options</p>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // Form Step Components
+  const steps = [
+    { number: 1, title: 'HOA Selection', icon: Building2 },
+    { number: 2, title: 'Submitter Info', icon: User },
+    { number: 3, title: 'Transaction Details', icon: Users },
+    { number: 4, title: 'Package & Payment', icon: CreditCard },
+    { number: 5, title: 'Review & Submit', icon: CheckCircle }
+  ];
+
+  const HOASelectionStep = () => (
+    <div className="space-y-6">
+      <div className="text-center mb-8">
+        <h3 className="text-2xl font-bold text-green-900 mb-2">Select HOA Property</h3>
+        <p className="text-gray-600">Choose the HOA community for your resale certificate application</p>
+      </div>
+
+      {/* DEBUG: Show current form values */}
+      <div className="bg-blue-50 p-4 rounded-lg border border-blue-200 mb-4">
+        <h4 className="font-semibold text-blue-900 mb-2">Debug - Current Values:</h4>
+        <p className="text-sm text-blue-800">HOA Property: "{formData.hoaProperty}"</p>
+        <p className="text-sm text-blue-800">Property Address: "{formData.propertyAddress}"</p>
+        <p className="text-sm text-blue-800">Unit Number: "{formData.unitNumber}"</p>
+      </div>
+
+      <div className="bg-white p-6 rounded-lg border border-green-200">
+        <label className="block text-sm font-medium text-gray-700 mb-3">HOA Community *</label>
+        <div className="relative">
+          <Search className="absolute left-3 top-3 h-5 w-5 text-gray-400" />
+          <select
+            value={formData.hoaProperty}
+            onChange={(e) => {
+              console.log('🔍 HOA Select onChange triggered:', e.target.value);
+              handleInputChange('hoaProperty', e.target.value);
+            }}
+            className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500"
+          >
+            <option value="">Select an HOA Community</option>
+            {hoaProperties.map((hoa) => (
+              <option key={hoa.id} value={hoa.name}>
+                {hoa.name} {hoa.location && `- ${hoa.location}`}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-2">Property Address *</label>
+          <input
+            type="text"
+            value={formData.propertyAddress}
+            onChange={(e) => {
+              console.log('🔍 Property Address onChange triggered:', e.target.value);
+              handleInputChange('propertyAddress', e.target.value);
+            }}
+            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500"
+            placeholder="123 Main Street"
+          />
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-2">Unit Number (if applicable)</label>
+          <input
+            type="text"
+            value={formData.unitNumber}
+            onChange={(e) => {
+              console.log('🔍 Unit Number onChange triggered:', e.target.value);
+              handleInputChange('unitNumber', e.target.value);
+            }}
+            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500"
+            placeholder="4B"
+          />
+        </div>
+      </div>
+
+      {formData.hoaProperty && (
+        <div className="bg-green-50 p-4 rounded-lg border border-green-200">
+          <div className="flex items-start">
+            <CheckCircle className="h-5 w-5 text-green-600 mt-0.5 mr-2" />
+            <div>
+              <h4 className="font-medium text-green-900">HOA Documents Ready</h4>
+              <p className="text-sm text-green-700 mt-1">
+                All required HOA documents for {formData.hoaProperty} will be automatically included in your resale package.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
+  const SubmitterInfoStep = () => (
+    <div className="space-y-6">
+      <div className="text-center mb-8">
+        <h3 className="text-2xl font-bold text-green-900 mb-2">Who is Submitting?</h3>
+        <p className="text-gray-600">Tell us about yourself and your role in this transaction</p>
+      </div>
+
+      {/* DEBUG: Show current form values */}
+      <div className="bg-blue-50 p-4 rounded-lg border border-blue-200 mb-4">
+        <h4 className="font-semibold text-blue-900 mb-2">Debug - Current Values:</h4>
+        <p className="text-sm text-blue-800">Submitter Type: "{formData.submitterType}"</p>
+        <p className="text-sm text-blue-800">Name: "{formData.submitterName}"</p>
+        <p className="text-sm text-blue-800">Email: "{formData.submitterEmail}"</p>
+        <p className="text-sm text-blue-800">Phone: "{formData.submitterPhone}"</p>
+      </div>
+
+      <div className="bg-white p-6 rounded-lg border border-green-200">
+        <label className="block text-sm font-medium text-gray-700 mb-3">I am the: *</label>
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          {[
+            { value: 'seller', label: 'Property Owner/Seller', icon: User },
+            { value: 'realtor', label: 'Licensed Realtor', icon: FileText },
+            { value: 'builder', label: 'Builder/Developer', icon: Building2 },
+            { value: 'admin', label: 'GMG Staff', icon: CheckCircle }
+          ].map((type) => {
+            const Icon = type.icon;
+            return (
+              <button
+                key={type.value}
+                onClick={() => {
+                  console.log('🔍 Submitter Type button clicked:', type.value);
+                  handleInputChange('submitterType', type.value);
+                }}
+                className={`p-4 rounded-lg border-2 transition-all ${
+                  formData.submitterType === type.value
+                    ? 'border-green-500 bg-green-50 text-green-900'
+                    : 'border-gray-200 hover:border-green-300'
+                }`}
+              >
+                <Icon className="h-8 w-8 mx-auto mb-2" />
+                <div className="text-sm font-medium">{type.label}</div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className
