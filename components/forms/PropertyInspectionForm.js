@@ -38,42 +38,42 @@ const PropertyInspectionForm = ({
   }, [formId, accessToken]);
 
   const loadFormData = async () => {
-    try {
-      console.log('Loading form data for:', formId, accessToken);
-      
-      const { data, error } = await supabase
-        .from('property_owner_forms')
-        .select('form_data, response_data, status, application_id, hoa_properties(name)')
-        .eq('id', formId)
-        .eq('access_token', accessToken)
-        .single();
+  try {
+    console.log('Loading form data for:', formId, accessToken);
+    
+    const { data, error } = await supabase
+      .from('property_owner_forms')
+      .select('form_data, response_data, status, application_id, hoa_properties(name)')
+      .eq('id', formId)
+      .eq('access_token', accessToken)
+      .single();
 
-      if (error) {
-        console.error('Error loading form:', error);
-        throw error;
-      }
-
-      console.log('Loaded form data:', data);
-
-      if (data) {
-        // Merge saved data with default form structure
-        const savedData = data.response_data || data.form_data || {};
-        console.log('Saved data:', savedData);
-        
-        setFormData(prev => ({
-          ...prev,
-          association: data.hoa_properties?.name || propertyName,
-          ...savedData,
-          status: data.status
-        }));
-      }
-    } catch (err) {
-      console.error('Failed to load form data:', err);
-      setError('Failed to load form data: ' + err.message);
-    } finally {
-      setIsLoading(false);
+    if (error) {
+      console.error('Error loading form:', error);
+      throw error;
     }
-  };
+
+    console.log('Loaded form data:', data);
+
+    if (data) {
+      // FIXED: Use form_data first, then response_data as fallback
+      const savedData = data.form_data || data.response_data || {};
+      console.log('Saved data:', savedData);
+      
+      setFormData(prev => ({
+        ...prev,
+        association: data.hoa_properties?.name || propertyName,
+        ...savedData,
+        status: data.status
+      }));
+    }
+  } catch (err) {
+    console.error('Failed to load form data:', err);
+    setError('Failed to load form data: ' + err.message);
+  } finally {
+    setIsLoading(false);
+  }
+};
 
   const handleInputChange = (field, value) => {
     setFormData(prev => ({
