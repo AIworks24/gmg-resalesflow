@@ -241,11 +241,18 @@ export default function GMGResaleFlow() {
   return () => subscription.unsubscribe();
 }, []); // Keep empty dependency array for auth setup
 
- const checkUser = async () => {
+const checkUser = async () => {
   console.log('🔍 checkUser started...');
   try {
     console.log('📡 Getting session...');
-    const { data: { session } } = await supabase.auth.getSession();
+    
+    // Add timeout to prevent hanging
+    const sessionPromise = supabase.auth.getSession();
+    const timeoutPromise = new Promise((_, reject) => 
+      setTimeout(() => reject(new Error('Session timeout')), 5000)
+    );
+    
+    const { data: { session } } = await Promise.race([sessionPromise, timeoutPromise]);
     console.log('📦 Session result:', session?.user ? 'User found' : 'No user');
     
     setUser(session?.user || null);
@@ -261,12 +268,15 @@ export default function GMGResaleFlow() {
     console.log('✅ checkUser completed, setting loading to false');
   } catch (error) {
     console.error('❌ Error in checkUser:', error);
+    // If session fails, just continue without authentication
+    setUser(null);
+    setIsAuthenticated(false);
+    setUserRole('customer');
   } finally {
     console.log('🏁 Finally block - setting loading to false');
     setLoading(false);
   }
 };
-
   // Load user profile to get role
   const loadUserProfile = useCallback(async (userId) => {
   try {
