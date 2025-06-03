@@ -52,18 +52,18 @@
             }}
             className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
             placeholder="License #"
-          />
-        </div>
-      )}
-    </div>
-  );
-
-  const TransactionDetailsStep = () => (
-    <div className="space-y-6">
-      <div className="text-center mb-8">
-        <h3 className="text-2xl font-bold text-green-900 mb-2">Transaction Details</h3>
-        <p className="text-gray-600">Information about the buyer, seller, and sale details</p>
+       />
       </div>
+    )}
+  </div>
+);
+
+const TransactionDetailsStep = () => (
+  <div className="space-y-6">
+    <div className="text-center mb-8">
+      <h3 className="text-2xl font-bold text-green-900 mb-2">Transaction Details</h3>
+      <p className="text-gray-600">Information about the buyer, seller, and sale details</p>
+    </div>
 
       {/* DEBUG: Show current form values */}
       <div className="bg-blue-50 p-4 rounded-lg border border-blue-200 mb-4">
