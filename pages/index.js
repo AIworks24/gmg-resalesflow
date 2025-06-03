@@ -37,9 +37,8 @@
             className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
             placeholder="(555) 123-4567"
           />
-        </div>
       </div>
-
+      </div>
       {formData.submitterType === 'realtor' && (
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-2">Virginia Real Estate License Number *</label>
@@ -52,8 +51,9 @@
             }}
             className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
             placeholder="License #"
-     />
-      </div>
+          />
+        </div>
+      )}
     </div>
   </div>
 );
