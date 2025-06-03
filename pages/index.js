@@ -1385,6 +1385,8 @@ export default function GMGResaleFlow() {
     );
   }
 
+  // Test component to isolate input issue
+
   // Main application render - Dashboard view
   if (currentStep === 0) {
     return (
