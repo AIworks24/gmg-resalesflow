@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import { Building2, FileText, CreditCard, CheckCircle, Clock, AlertCircle, Upload, User, Users, DollarSign, Search, Menu, X } from 'lucide-react';
 
@@ -234,24 +234,60 @@ export default function GMGResaleFlow() {
 
   // Test component to isolate input issue
   if (currentStep === 99) {
+    const [testValue, setTestValue] = useState('');
+    
     return (
       <div className="p-8">
-        <h2>Input Test</h2>
-        <input
-          type="text"
-          value={formData.propertyAddress}
-          onChange={(e) => {
-            console.log('Direct onChange:', e.target.value);
-            setFormData(prev => ({
-              ...prev,
-              propertyAddress: e.target.value
-            }));
-          }}
-          className="border border-gray-300 rounded px-4 py-2"
-          placeholder="Test input"
-        />
-        <p>Current value: {formData.propertyAddress}</p>
-        <button onClick={() => setCurrentStep(0)} className="mt-4 px-4 py-2 bg-blue-500 text-white rounded">
+        <h2>Input Test - Isolated State</h2>
+        <div className="space-y-4">
+          <div>
+            <label>Test with separate state:</label>
+            <input
+              type="text"
+              value={testValue}
+              onChange={(e) => {
+                console.log('Test input onChange:', e.target.value);
+                setTestValue(e.target.value);
+              }}
+              className="border border-gray-300 rounded px-4 py-2 ml-2"
+              placeholder="Type here..."
+            />
+            <p>Test value: {testValue}</p>
+          </div>
+          
+          <div>
+            <label>Test with form state:</label>
+            <input
+              type="text"
+              value={formData.propertyAddress}
+              onChange={(e) => {
+                console.log('Form input onChange:', e.target.value);
+                setFormData(prev => ({
+                  ...prev,
+                  propertyAddress: e.target.value
+                }));
+              }}
+              className="border border-gray-300 rounded px-4 py-2 ml-2"
+              placeholder="Type here too..."
+            />
+            <p>Form value: {formData.propertyAddress}</p>
+          </div>
+          
+          <div>
+            <label>Test uncontrolled:</label>
+            <input
+              type="text"
+              className="border border-gray-300 rounded px-4 py-2 ml-2"
+              placeholder="Uncontrolled input"
+              onChange={(e) => console.log('Uncontrolled:', e.target.value)}
+            />
+          </div>
+        </div>
+        
+        <button 
+          onClick={() => setCurrentStep(0)} 
+          className="mt-4 px-4 py-2 bg-blue-500 text-white rounded"
+        >
           Back to App
         </button>
       </div>
@@ -704,7 +740,16 @@ export default function GMGResaleFlow() {
           <input
             type="text"
             value={formData.propertyAddress}
-            onChange={(e) => handleInputChange('propertyAddress', e.target.value)}
+            onChange={(e) => {
+              const newValue = e.target.value;
+              console.log('Property Address onChange:', newValue);
+              setFormData(prev => {
+                console.log('Previous formData:', prev);
+                const updated = { ...prev, propertyAddress: newValue };
+                console.log('Updated formData:', updated);
+                return updated;
+              });
+            }}
             className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500"
             placeholder="123 Main Street"
           />
