@@ -1275,50 +1275,108 @@ export default function GMGResaleFlow() {
   );
 
   const SubmitterInfoStep = () => (
-    <div className="space-y-6">
-      <div className="text-center mb-8">
-        <h3 className="text-2xl font-bold text-green-900 mb-2">Who is Submitting?</h3>
-        <p className="text-gray-600">Tell us about yourself and your role in this transaction</p>
-      </div>
+  <div className="space-y-6">
+    <div className="text-center mb-8">
+      <h3 className="text-2xl font-bold text-green-900 mb-2">Who is Submitting?</h3>
+      <p className="text-gray-600">Tell us about yourself and your role in this transaction</p>
+    </div>
 
-      {/* DEBUG: Show current form values */}
-      <div className="bg-blue-50 p-4 rounded-lg border border-blue-200 mb-4">
-        <h4 className="font-semibold text-blue-900 mb-2">Debug - Current Values:</h4>
-        <p className="text-sm text-blue-800">Submitter Type: "{formData.submitterType}"</p>
-        <p className="text-sm text-blue-800">Name: "{formData.submitterName}"</p>
-        <p className="text-sm text-blue-800">Email: "{formData.submitterEmail}"</p>
-        <p className="text-sm text-blue-800">Phone: "{formData.submitterPhone}"</p>
-      </div>
+    {/* DEBUG: Show current form values */}
+    <div className="bg-blue-50 p-4 rounded-lg border border-blue-200 mb-4">
+      <h4 className="font-semibold text-blue-900 mb-2">Debug - Current Values:</h4>
+      <p className="text-sm text-blue-800">Submitter Type: "{formData.submitterType}"</p>
+      <p className="text-sm text-blue-800">Name: "{formData.submitterName}"</p>
+      <p className="text-sm text-blue-800">Email: "{formData.submitterEmail}"</p>
+      <p className="text-sm text-blue-800">Phone: "{formData.submitterPhone}"</p>
+    </div>
 
-      <div className="bg-white p-6 rounded-lg border border-green-200">
-        <label className="block text-sm font-medium text-gray-700 mb-3">I am the: *</label>
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          {[
-            { value: 'seller', label: 'Property Owner/Seller', icon: User },
-            { value: 'realtor', label: 'Licensed Realtor', icon: FileText },
-            { value: 'builder', label: 'Builder/Developer', icon: Building2 },
-            { value: 'admin', label: 'GMG Staff', icon: CheckCircle }
-          ].map((type) => {
-            const Icon = type.icon;
-            return (
-              <button
-                key={type.value}
-                onClick={() => {
-                  console.log('🔍 Submitter Type button clicked:', type.value);
-                  handleInputChange('submitterType', type.value);
-                }}
-                className={`p-4 rounded-lg border-2 transition-all ${
-                  formData.submitterType === type.value
-                    ? 'border-green-500 bg-green-50 text-green-900'
-                    : 'border-gray-200 hover:border-green-300'
-                }`}
-              >
-                <Icon className="h-8 w-8 mx-auto mb-2" />
-                <div className="text-sm font-medium">{type.label}</div>
-              </button>
-            );
-          })}
-        </div>
+    <div className="bg-white p-6 rounded-lg border border-green-200">
+      <label className="block text-sm font-medium text-gray-700 mb-3">I am the: *</label>
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        {[
+          { value: 'seller', label: 'Property Owner/Seller', icon: User },
+          { value: 'realtor', label: 'Licensed Realtor', icon: FileText },
+          { value: 'builder', label: 'Builder/Developer', icon: Building2 },
+          { value: 'admin', label: 'GMG Staff', icon: CheckCircle }
+        ].map((type) => {
+          const Icon = type.icon;
+          return (
+            <button
+              key={type.value}
+              onClick={() => {
+                console.log('🔍 Submitter Type button clicked:', type.value);
+                handleInputChange('submitterType', type.value);
+              }}
+              className={`p-4 rounded-lg border-2 transition-all ${
+                formData.submitterType === type.value
+                  ? 'border-green-500 bg-green-50 text-green-900'
+                  : 'border-gray-200 hover:border-green-300'
+              }`}
+            >
+              <Icon className="h-8 w-8 mx-auto mb-2" />
+              <div className="text-sm font-medium">{type.label}</div>
+            </button>
+          );
+        })}
       </div>
+    </div>
 
-      <div className
+    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+      <div>
+        <label className="block text-sm font-medium text-gray-700 mb-2">Full Name *</label>
+        <input
+          type="text"
+          value={formData.submitterName}
+          onChange={(e) => {
+            console.log('🔍 Submitter Name onChange triggered:', e.target.value);
+            handleInputChange('submitterName', e.target.value);
+          }}
+          className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+          placeholder="John Smith"
+        />
+      </div>
+      <div>
+        <label className="block text-sm font-medium text-gray-700 mb-2">Email Address *</label>
+        <input
+          type="email"
+          value={formData.submitterEmail}
+          onChange={(e) => {
+            console.log('🔍 Submitter Email onChange triggered:', e.target.value);
+            handleInputChange('submitterEmail', e.target.value);
+          }}
+          className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+          placeholder="john@example.com"
+        />
+      </div>
+      <div>
+        <label className="block text-sm font-medium text-gray-700 mb-2">Phone Number *</label>
+        <input
+          type="tel"
+          value={formData.submitterPhone}
+          onChange={(e) => {
+            console.log('🔍 Submitter Phone onChange triggered:', e.target.value);
+            handleInputChange('submitterPhone', e.target.value);
+          }}
+          className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+          placeholder="(555) 123-4567"
+        />
+      </div>
+    </div>
+
+    {formData.submitterType === 'realtor' && (
+      <div>
+        <label className="block text-sm font-medium text-gray-700 mb-2">Virginia Real Estate License Number *</label>
+        <input
+          type="text"
+          value={formData.realtorLicense}
+          onChange={(e) => {
+            console.log('🔍 Realtor License onChange triggered:', e.target.value);
+            handleInputChange('realtorLicense', e.target.value);
+          }}
+          className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+          placeholder="License #"
+        />
+      </div>
+    )}
+  </div>
+);
