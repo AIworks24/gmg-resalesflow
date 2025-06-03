@@ -201,10 +201,15 @@ export default function GMGResaleFlow() {
   };
 
   const handleInputChange = (field, value) => {
-    setFormData(prev => ({
-      ...prev,
-      [field]: value
-    }));
+    console.log('Input change:', field, value); // Debug log
+    setFormData(prev => {
+      const newData = {
+        ...prev,
+        [field]: value
+      };
+      console.log('New form data:', newData); // Debug log
+      return newData;
+    });
   };
 
   const nextStep = () => {
@@ -383,12 +388,128 @@ export default function GMGResaleFlow() {
       rejected: { color: 'bg-red-100 text-red-800', icon: AlertCircle, label: 'Rejected' }
     };
 
+    // For regular users, show a cleaner welcome screen
+    if (userRole !== 'admin') {
+      return (
+        <div className="space-y-8">
+          {/* Welcome Section */}
+          <div className="text-center py-12">
+            <div className="w-20 h-20 bg-green-700 rounded-full flex items-center justify-center mx-auto mb-6">
+              <Building2 className="h-10 w-10 text-white" />
+            </div>
+            <h2 className="text-3xl font-bold text-gray-900 mb-4">Welcome to GMG ResaleFlow</h2>
+            <p className="text-lg text-gray-600 mb-8 max-w-2xl mx-auto">
+              Your streamlined solution for Virginia HOA resale certificates. Get your documents processed quickly and efficiently.
+            </p>
+            <button
+              onClick={() => setCurrentStep(1)}
+              className="bg-green-700 text-white px-8 py-4 rounded-lg hover:bg-green-800 transition-colors flex items-center gap-3 mx-auto text-lg font-semibold"
+            >
+              <FileText className="h-6 w-6" />
+              Start New Application
+            </button>
+          </div>
+
+          {/* Process Steps */}
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-8">
+            <h3 className="text-2xl font-bold text-gray-900 mb-6 text-center">How It Works</h3>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+              <div className="text-center">
+                <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <FileText className="h-8 w-8 text-blue-600" />
+                </div>
+                <h4 className="text-lg font-semibold text-gray-900 mb-2">1. Submit Application</h4>
+                <p className="text-gray-600">Provide property details, transaction information, and select your processing speed.</p>
+              </div>
+              <div className="text-center">
+                <div className="w-16 h-16 bg-yellow-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <Clock className="h-8 w-8 text-yellow-600" />
+                </div>
+                <h4 className="text-lg font-semibold text-gray-900 mb-2">2. We Process</h4>
+                <p className="text-gray-600">Our team handles compliance inspections and gathers all required HOA documents.</p>
+              </div>
+              <div className="text-center">
+                <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <CheckCircle className="h-8 w-8 text-green-600" />
+                </div>
+                <h4 className="text-lg font-semibold text-gray-900 mb-2">3. Receive Documents</h4>
+                <p className="text-gray-600">Get your complete resale certificate package delivered electronically.</p>
+              </div>
+            </div>
+          </div>
+
+          {/* Pricing Cards */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="bg-white p-8 rounded-lg shadow-sm border border-gray-200">
+              <h4 className="text-xl font-semibold text-gray-900 mb-2">Standard Processing</h4>
+              <div className="text-3xl font-bold text-green-600 mb-4">$317.95</div>
+              <p className="text-gray-600 mb-4">10-15 business days</p>
+              <ul className="space-y-2 text-sm text-gray-600">
+                <li>✓ Complete Virginia Resale Certificate</li>
+                <li>✓ HOA Documents Package</li>
+                <li>✓ Compliance Inspection Report</li>
+                <li>✓ Digital & Print Delivery</li>
+              </ul>
+            </div>
+            <div className="bg-orange-50 p-8 rounded-lg shadow-sm border border-orange-200">
+              <div className="flex items-center justify-between mb-2">
+                <h4 className="text-xl font-semibold text-gray-900">Rush Processing</h4>
+                <span className="px-3 py-1 bg-orange-100 text-orange-800 text-sm rounded-full font-medium">PRIORITY</span>
+              </div>
+              <div className="text-3xl font-bold text-orange-600 mb-4">$388.61</div>
+              <p className="text-gray-600 mb-4">5 business days</p>
+              <ul className="space-y-2 text-sm text-gray-600">
+                <li>✓ Everything in Standard</li>
+                <li>✓ Priority queue processing</li>
+                <li>✓ Expedited compliance inspection</li>
+                <li>✓ 5-day completion guarantee</li>
+              </ul>
+            </div>
+          </div>
+
+          {/* Recent Applications - Only show if user has any */}
+          {applications.length > 0 && (
+            <div className="bg-white rounded-lg shadow-sm border border-gray-200">
+              <div className="px-6 py-4 border-b border-gray-200">
+                <h3 className="text-lg font-medium text-gray-900">Your Recent Applications</h3>
+              </div>
+              <div className="divide-y divide-gray-200">
+                {applications.slice(0, 3).map((app) => {
+                  const StatusIcon = statusConfig[app.status]?.icon || Clock;
+                  const statusStyle = statusConfig[app.status]?.color || 'bg-gray-100 text-gray-800';
+                  const statusLabel = statusConfig[app.status]?.label || app.status;
+                  
+                  return (
+                    <div key={app.id} className="p-6 hover:bg-gray-50">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <h4 className="text-sm font-medium text-gray-900">
+                            {app.hoa_properties?.name} - {app.property_address}
+                          </h4>
+                          <p className="text-sm text-gray-500">
+                            Submitted: {app.submitted_at ? new Date(app.submitted_at).toLocaleDateString() : 'Draft'}
+                          </p>
+                        </div>
+                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${statusStyle}`}>
+                          <StatusIcon className="h-3 w-3 mr-1" />
+                          {statusLabel}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // Admin Dashboard (original code)
     return (
       <div className="space-y-6">
         <div className="flex justify-between items-center">
-          <h2 className="text-2xl font-bold text-gray-900">
-            {userRole === 'admin' ? 'Resale Applications Dashboard' : 'My Applications'}
-          </h2>
+          <h2 className="text-2xl font-bold text-gray-900">Resale Applications Dashboard</h2>
           <button
             onClick={() => setCurrentStep(1)}
             className="bg-green-700 text-white px-6 py-3 rounded-lg hover:bg-green-800 transition-colors flex items-center gap-2"
@@ -398,59 +519,55 @@ export default function GMGResaleFlow() {
           </button>
         </div>
 
-        {/* Only show dashboard metrics for admins */}
-        {userRole === 'admin' && (
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-            <div className="bg-white p-6 rounded-lg shadow border-l-4 border-green-700">
-              <div className="flex items-center">
-                <FileText className="h-8 w-8 text-green-700" />
-                <div className="ml-3">
-                  <p className="text-sm font-medium text-gray-500">Total Applications</p>
-                  <p className="text-2xl font-semibold text-gray-900">{applications.length}</p>
-                </div>
-              </div>
-            </div>
-            <div className="bg-white p-6 rounded-lg shadow border-l-4 border-yellow-500">
-              <div className="flex items-center">
-                <Clock className="h-8 w-8 text-yellow-500" />
-                <div className="ml-3">
-                  <p className="text-sm font-medium text-gray-500">Under Review</p>
-                  <p className="text-2xl font-semibold text-gray-900">
-                    {applications.filter(app => app.status === 'under_review').length}
-                  </p>
-                </div>
-              </div>
-            </div>
-            <div className="bg-white p-6 rounded-lg shadow border-l-4 border-green-500">
-              <div className="flex items-center">
-                <CheckCircle className="h-8 w-8 text-green-500" />
-                <div className="ml-3">
-                  <p className="text-sm font-medium text-gray-500">Completed</p>
-                  <p className="text-2xl font-semibold text-gray-900">
-                    {applications.filter(app => app.status === 'approved').length}
-                  </p>
-                </div>
-              </div>
-            </div>
-            <div className="bg-white p-6 rounded-lg shadow border-l-4 border-green-600">
-              <div className="flex items-center">
-                <DollarSign className="h-8 w-8 text-green-600" />
-                <div className="ml-3">
-                  <p className="text-sm font-medium text-gray-500">Revenue (Month)</p>
-                  <p className="text-2xl font-semibold text-gray-900">
-                    ${applications.reduce((sum, app) => sum + (app.total_amount || 0), 0).toLocaleString()}
-                  </p>
-                </div>
+        {/* Dashboard metrics for admins */}
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+          <div className="bg-white p-6 rounded-lg shadow border-l-4 border-green-700">
+            <div className="flex items-center">
+              <FileText className="h-8 w-8 text-green-700" />
+              <div className="ml-3">
+                <p className="text-sm font-medium text-gray-500">Total Applications</p>
+                <p className="text-2xl font-semibold text-gray-900">{applications.length}</p>
               </div>
             </div>
           </div>
-        )}
+          <div className="bg-white p-6 rounded-lg shadow border-l-4 border-yellow-500">
+            <div className="flex items-center">
+              <Clock className="h-8 w-8 text-yellow-500" />
+              <div className="ml-3">
+                <p className="text-sm font-medium text-gray-500">Under Review</p>
+                <p className="text-2xl font-semibold text-gray-900">
+                  {applications.filter(app => app.status === 'under_review').length}
+                </p>
+              </div>
+            </div>
+          </div>
+          <div className="bg-white p-6 rounded-lg shadow border-l-4 border-green-500">
+            <div className="flex items-center">
+              <CheckCircle className="h-8 w-8 text-green-500" />
+              <div className="ml-3">
+                <p className="text-sm font-medium text-gray-500">Completed</p>
+                <p className="text-2xl font-semibold text-gray-900">
+                  {applications.filter(app => app.status === 'approved').length}
+                </p>
+              </div>
+            </div>
+          </div>
+          <div className="bg-white p-6 rounded-lg shadow border-l-4 border-green-600">
+            <div className="flex items-center">
+              <DollarSign className="h-8 w-8 text-green-600" />
+              <div className="ml-3">
+                <p className="text-sm font-medium text-gray-500">Revenue (Month)</p>
+                <p className="text-2xl font-semibold text-gray-900">
+                  ${applications.reduce((sum, app) => sum + (app.total_amount || 0), 0).toLocaleString()}
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
 
         <div className="bg-white rounded-lg shadow overflow-hidden">
           <div className="px-6 py-4 border-b border-gray-200 bg-green-50">
-            <h3 className="text-lg font-medium text-green-900">
-              {userRole === 'admin' ? 'All Applications' : 'Your Applications'}
-            </h3>
+            <h3 className="text-lg font-medium text-green-900">All Applications</h3>
           </div>
           <div className="overflow-x-auto">
             <table className="min-w-full divide-y divide-gray-200">
@@ -1118,7 +1235,7 @@ export default function GMGResaleFlow() {
                 onClick={() => setCurrentStep(0)}
                 className="text-gray-600 hover:text-green-700 px-3 py-2 rounded-md text-sm font-medium transition-colors"
               >
-                {userRole === 'admin' ? 'Dashboard' : 'My Applications'}
+                {userRole === 'admin' ? 'Dashboard' : 'Home'}
               </button>
               {isAuthenticated && (
                 <div className="flex items-center space-x-2">
