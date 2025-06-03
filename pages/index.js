@@ -68,86 +68,332 @@ const HOASelectionStep = React.memo(({ formData, handleInputChange, hoaPropertie
   </div>
 ));
 
-const SubmitterInfoStep = React.memo(({ formData, handleInputChange }) => (
+const TransactionDetailsStep = React.memo(({ formData, handleInputChange }) => (
   <div className="space-y-6">
     <div className="text-center mb-8">
-      <h3 className="text-2xl font-bold text-green-900 mb-2">Who is Submitting?</h3>
-      <p className="text-gray-600">Tell us about yourself and your role in this transaction</p>
+      <h3 className="text-2xl font-bold text-green-900 mb-2">Transaction Details</h3>
+      <p className="text-gray-600">Information about the buyer, seller, and sale details</p>
     </div>
 
-    <div className="bg-white p-6 rounded-lg border border-green-200">
-      <label className="block text-sm font-medium text-gray-700 mb-3">I am the: *</label>
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        {[
-          { value: 'seller', label: 'Property Owner/Seller', icon: User },
-          { value: 'realtor', label: 'Licensed Realtor', icon: FileText },
-          { value: 'builder', label: 'Builder/Developer', icon: Building2 },
-          { value: 'admin', label: 'GMG Staff', icon: CheckCircle }
-        ].map((type) => {
-          const Icon = type.icon;
-          return (
-            <button
-              key={type.value}
-              onClick={() => handleInputChange('submitterType', type.value)}
-              className={`p-4 rounded-lg border-2 transition-all ${
-                formData.submitterType === type.value
-                  ? 'border-green-500 bg-green-50 text-green-900'
-                  : 'border-gray-200 hover:border-green-300'
-              }`}
-            >
-              <Icon className="h-8 w-8 mx-auto mb-2" />
-              <div className="text-sm font-medium">{type.label}</div>
-            </button>
-          );
-        })}
-      </div>
-    </div>
-
-    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-      <div>
-        <label className="block text-sm font-medium text-gray-700 mb-2">Full Name *</label>
+    <div className="bg-blue-50 p-6 rounded-lg border border-blue-200">
+      <h4 className="font-semibold text-blue-900 mb-4 flex items-center">
+        <User className="h-5 w-5 mr-2" />
+        Buyer Information
+      </h4>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <input
           type="text"
-          value={formData.submitterName}
-          onChange={(e) => handleInputChange('submitterName', e.target.value)}
-          className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-          placeholder="John Smith"
+          placeholder="Buyer Full Name *"
+          value={formData.buyerName}
+          onChange={(e) => handleInputChange('buyerName', e.target.value)}
+          className="px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
         />
-      </div>
-      <div>
-        <label className="block text-sm font-medium text-gray-700 mb-2">Email Address *</label>
         <input
           type="email"
-          value={formData.submitterEmail}
-          onChange={(e) => handleInputChange('submitterEmail', e.target.value)}
-          className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-          placeholder="john@example.com"
+          placeholder="Buyer Email *"
+          value={formData.buyerEmail}
+          onChange={(e) => handleInputChange('buyerEmail', e.target.value)}
+          className="px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
         />
-      </div>
-      <div>
-        <label className="block text-sm font-medium text-gray-700 mb-2">Phone Number *</label>
         <input
           type="tel"
-          value={formData.submitterPhone}
-          onChange={(e) => handleInputChange('submitterPhone', e.target.value)}
-          className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-          placeholder="(555) 123-4567"
+          placeholder="Buyer Phone *"
+          value={formData.buyerPhone}
+          onChange={(e) => handleInputChange('buyerPhone', e.target.value)}
+          className="px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
         />
       </div>
     </div>
 
-    {formData.submitterType === 'realtor' && (
-      <div>
-        <label className="block text-sm font-medium text-gray-700 mb-2">Virginia Real Estate License Number *</label>
+    <div className="bg-green-50 p-6 rounded-lg border border-green-200">
+      <h4 className="font-semibold text-green-900 mb-4 flex items-center">
+        <User className="h-5 w-5 mr-2" />
+        Seller Information
+      </h4>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <input
           type="text"
-          value={formData.realtorLicense}
-          onChange={(e) => handleInputChange('realtorLicense', e.target.value)}
-          className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-          placeholder="License #"
+          placeholder="Seller Full Name *"
+          value={formData.sellerName}
+          onChange={(e) => handleInputChange('sellerName', e.target.value)}
+          className="px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+        />
+        <input
+          type="email"
+          placeholder="Seller Email *"
+          value={formData.sellerEmail}
+          onChange={(e) => handleInputChange('sellerEmail', e.target.value)}
+          className="px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+        />
+        <input
+          type="tel"
+          placeholder="Seller Phone *"
+          value={formData.sellerPhone}
+          onChange={(e) => handleInputChange('sellerPhone', e.target.value)}
+          className="px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
         />
       </div>
-    )}
+    </div>
+
+    <div className="bg-gray-50 p-6 rounded-lg border border-gray-200">
+      <h4 className="font-semibold text-gray-900 mb-4 flex items-center">
+        <DollarSign className="h-5 w-5 mr-2" />
+        Sale Information
+      </h4>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-2">Sale Price *</label>
+          <div className="relative">
+            <DollarSign className="absolute left-3 top-3 h-5 w-5 text-gray-400" />
+            <input
+              type="number"
+              placeholder="450000"
+              value={formData.salePrice}
+              onChange={(e) => handleInputChange('salePrice', e.target.value)}
+              className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+            />
+          </div>
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-2">Expected Closing Date *</label>
+          <input
+            type="date"
+            value={formData.closingDate}
+            onChange={(e) => handleInputChange('closingDate', e.target.value)}
+            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+          />
+        </div>
+      </div>
+    </div>
+  </div>
+));
+
+const PackagePaymentStep = React.memo(({ formData, handleInputChange, calculateTotal }) => (
+  <div className="space-y-6">
+    <div className="text-center mb-8">
+      <h3 className="text-2xl font-bold text-green-900 mb-2">Package Selection & Payment</h3>
+      <p className="text-gray-600">Choose your processing speed and payment method</p>
+    </div>
+
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+      <div 
+        onClick={() => handleInputChange('packageType', 'standard')}
+        className={`p-6 rounded-lg border-2 cursor-pointer transition-all ${
+          formData.packageType === 'standard' 
+            ? 'border-green-500 bg-green-50' 
+            : 'border-gray-200 hover:border-green-300'
+        }`}
+      >
+        <div className="flex items-start justify-between mb-4">
+          <div>
+            <h4 className="text-lg font-semibold text-gray-900">Standard Processing</h4>
+            <p className="text-sm text-gray-600">10-15 business days</p>
+          </div>
+          <div className="text-right">
+            <div className="text-2xl font-bold text-green-600">$317.95</div>
+          </div>
+        </div>
+        <ul className="text-sm text-gray-600 space-y-1">
+          <li>• Complete Virginia Resale Certificate</li>
+          <li>• HOA Documents Package</li>
+          <li>• Compliance Inspection Report</li>
+          <li>• Digital & Print Delivery</li>
+        </ul>
+      </div>
+
+      <div 
+        onClick={() => handleInputChange('packageType', 'rush')}
+        className={`p-6 rounded-lg border-2 cursor-pointer transition-all ${
+          formData.packageType === 'rush' 
+            ? 'border-orange-500 bg-orange-50' 
+            : 'border-gray-200 hover:border-orange-300'
+        }`}
+      >
+        <div className="flex items-start justify-between mb-4">
+          <div>
+            <h4 className="text-lg font-semibold text-gray-900 flex items-center">
+              Rush Processing
+              <span className="ml-2 px-2 py-1 bg-orange-100 text-orange-800 text-xs rounded">PRIORITY</span>
+            </h4>
+            <p className="text-sm text-gray-600">5 business days</p>
+          </div>
+          <div className="text-right">
+            <div className="text-lg text-gray-500">$317.95</div>
+            <div className="text-sm text-gray-500">+ $70.66</div>
+            <div className="text-2xl font-bold text-orange-600">$388.61</div>
+          </div>
+        </div>
+        <ul className="text-sm text-gray-600 space-y-1">
+          <li>• Everything in Standard</li>
+          <li>• Priority queue processing</li>
+          <li>• Expedited compliance inspection</li>
+          <li>• 5-day completion guarantee</li>
+        </ul>
+      </div>
+    </div>
+
+    <div className="bg-white p-6 rounded-lg border border-gray-200">
+      <h4 className="font-semibold text-gray-900 mb-4">Payment Method</h4>
+      
+      <div className="space-y-4 mb-6">
+        <label className="flex items-center p-4 border rounded-lg cursor-pointer hover:bg-gray-50">
+          <input
+            type="radio"
+            name="paymentMethod"
+            value="credit_card"
+            checked={formData.paymentMethod === 'credit_card'}
+            onChange={(e) => handleInputChange('paymentMethod', e.target.value)}
+            className="h-4 w-4 text-green-600 focus:ring-green-500 border-gray-300"
+          />
+          <div className="ml-3 flex-1">
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-medium text-gray-700">Credit/Debit Card</span>
+              <span className="text-sm text-gray-500">+ $9.95 convenience fee</span>
+            </div>
+            <p className="text-xs text-gray-500">Secure processing via Stripe</p>
+          </div>
+        </label>
+        
+        <label className="flex items-center p-4 border rounded-lg cursor-pointer hover:bg-gray-50">
+          <input
+            type="radio"
+            name="paymentMethod"
+            value="ach"
+            checked={formData.paymentMethod === 'ach'}
+            onChange={(e) => handleInputChange('paymentMethod', e.target.value)}
+            className="h-4 w-4 text-green-600 focus:ring-green-500 border-gray-300"
+          />
+          <div className="ml-3 flex-1">
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-medium text-gray-700">Bank Transfer (ACH)</span>
+              <span className="text-sm text-green-600">No convenience fee</span>
+            </div>
+            <p className="text-xs text-gray-500">Direct bank account transfer</p>
+          </div>
+        </label>
+      </div>
+
+      <div className="bg-green-50 p-4 rounded-lg border border-green-200">
+        <h5 className="font-medium text-green-900 mb-2">Order Summary</h5>
+        <div className="space-y-2 text-sm">
+          <div className="flex justify-between">
+            <span>Processing Fee:</span>
+            <span>$317.95</span>
+          </div>
+          {formData.packageType === 'rush' && (
+            <div className="flex justify-between">
+              <span>Rush Processing:</span>
+              <span>+$70.66</span>
+            </div>
+          )}
+          {formData.paymentMethod === 'credit_card' && (
+            <div className="flex justify-between">
+              <span>Convenience Fee:</span>
+              <span>+$9.95</span>
+            </div>
+          )}
+          <div className="border-t border-green-200 pt-2 flex justify-between font-semibold text-green-900">
+            <span>Total:</span>
+            <span>${calculateTotal()}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+));
+
+const ReviewSubmitStep = React.memo(({ formData, calculateTotal }) => (
+  <div className="space-y-6">
+    <div className="text-center mb-8">
+      <h3 className="text-2xl font-bold text-green-900 mb-2">Review & Submit</h3>
+      <p className="text-gray-600">Please review your information before submitting</p>
+    </div>
+
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+      <div className="bg-white p-6 rounded-lg border border-gray-200">
+        <h4 className="font-semibold text-gray-900 mb-4 flex items-center">
+          <Building2 className="h-5 w-5 mr-2 text-green-600" />
+          Property Information
+        </h4>
+        <div className="space-y-2 text-sm">
+          <div><span className="font-medium">HOA:</span> {formData.hoaProperty}</div>
+          <div><span className="font-medium">Address:</span> {formData.propertyAddress} {formData.unitNumber}</div>
+          <div><span className="font-medium">Sale Price:</span> ${formData.salePrice ? Number(formData.salePrice).toLocaleString() : 'N/A'}</div>
+          <div><span className="font-medium">Closing Date:</span> {formData.closingDate}</div>
+        </div>
+      </div>
+
+      <div className="bg-white p-6 rounded-lg border border-gray-200">
+        <h4 className="font-semibold text-gray-900 mb-4 flex items-center">
+          <User className="h-5 w-5 mr-2 text-green-600" />
+          Submitter Information
+        </h4>
+        <div className="space-y-2 text-sm">
+          <div><span className="font-medium">Role:</span> {formData.submitterType}</div>
+          <div><span className="font-medium">Name:</span> {formData.submitterName}</div>
+          <div><span className="font-medium">Email:</span> {formData.submitterEmail}</div>
+          <div><span className="font-medium">Phone:</span> {formData.submitterPhone}</div>
+        </div>
+      </div>
+
+      <div className="bg-white p-6 rounded-lg border border-gray-200">
+        <h4 className="font-semibold text-gray-900 mb-4 flex items-center">
+          <Users className="h-5 w-5 mr-2 text-green-600" />
+          Transaction Parties
+        </h4>
+        <div className="space-y-2 text-sm">
+          <div><span className="font-medium">Buyer:</span> {formData.buyerName}</div>
+          <div><span className="font-medium">Buyer Email:</span> {formData.buyerEmail}</div>
+          <div><span className="font-medium">Seller:</span> {formData.sellerName}</div>
+          <div><span className="font-medium">Seller Email:</span> {formData.sellerEmail}</div>
+        </div>
+      </div>
+
+      <div className="bg-white p-6 rounded-lg border border-gray-200">
+        <h4 className="font-semibold text-gray-900 mb-4 flex items-center">
+          <CreditCard className="h-5 w-5 mr-2 text-green-600" />
+          Package & Payment
+        </h4>
+        <div className="space-y-2 text-sm">
+          <div><span className="font-medium">Package:</span> {formData.packageType === 'rush' ? 'Rush (5 days)' : 'Standard (10-15 days)'}</div>
+          <div><span className="font-medium">Payment Method:</span> {formData.paymentMethod === 'credit_card' ? 'Credit Card' : 'Bank Transfer'}</div>
+          <div><span className="font-medium">Total:</span> ${calculateTotal()}</div>
+        </div>
+      </div>
+    </div>
+
+    <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6">
+      <div className="flex">
+        <AlertCircle className="h-5 w-5 text-yellow-400 mr-3 mt-0.5" />
+        <div>
+          <h5 className="font-medium text-yellow-800">Important Information</h5>
+          <div className="text-sm text-yellow-700 mt-2 space-y-1">
+            <p>• Your resale certificate package will include:</p>
+            <p className="ml-4">- Complete Virginia State Resale Certificate</p>
+            <p className="ml-4">- All HOA governing documents and financial statements</p>
+            <p className="ml-4">- Compliance inspection report completed by GMG staff</p>
+            <p>• Documents will be delivered electronically to all parties</p>
+            <p>• Processing begins immediately upon payment confirmation</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div className="bg-white p-6 rounded-lg border border-gray-200">
+      <label className="flex items-start">
+        <input
+          type="checkbox"
+          className="h-4 w-4 text-green-600 focus:ring-green-500 border-gray-300 rounded mt-1"
+          required
+        />
+        <span className="ml-3 text-sm text-gray-700">
+          I confirm that all information provided is accurate and complete. I understand that 
+          Goodman Management Group will process this resale certificate application according to 
+          Virginia state requirements. I agree to the terms of service and acknowledge that 
+          processing fees are non-refundable once work begins.
+        </span>
+      </label>
+    </div>
   </div>
 ));
 
@@ -857,111 +1103,7 @@ export default function GMGResaleFlow() {
     { number: 5, title: 'Review & Submit', icon: CheckCircle }
   ];
 
-  const TransactionDetailsStep = () => (
-    <div className="space-y-6">
-      <div className="text-center mb-8">
-        <h3 className="text-2xl font-bold text-green-900 mb-2">Transaction Details</h3>
-        <p className="text-gray-600">Information about the buyer, seller, and sale details</p>
-      </div>
-
-      <div className="bg-blue-50 p-6 rounded-lg border border-blue-200">
-        <h4 className="font-semibold text-blue-900 mb-4 flex items-center">
-          <User className="h-5 w-5 mr-2" />
-          Buyer Information
-        </h4>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <input
-            type="text"
-            placeholder="Buyer Full Name *"
-            value={formData.buyerName}
-            onChange={(e) => handleInputChange('buyerName', e.target.value)}
-            className="px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-          />
-          <input
-            type="email"
-            placeholder="Buyer Email *"
-            value={formData.buyerEmail}
-            onChange={(e) => handleInputChange('buyerEmail', e.target.value)}
-            className="px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-          />
-          <input
-            type="tel"
-            placeholder="Buyer Phone *"
-            value={formData.buyerPhone}
-            onChange={(e) => handleInputChange('buyerPhone', e.target.value)}
-            className="px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-          />
-        </div>
-      </div>
-
-      <div className="bg-green-50 p-6 rounded-lg border border-green-200">
-        <h4 className="font-semibold text-green-900 mb-4 flex items-center">
-          <User className="h-5 w-5 mr-2" />
-          Seller Information
-        </h4>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <input
-            type="text"
-            placeholder="Seller Full Name *"
-            value={formData.sellerName}
-            onChange={(e) => handleInputChange('sellerName', e.target.value)}
-            className="px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-          />
-          <input
-            type="email"
-            placeholder="Seller Email *"
-            value={formData.sellerEmail}
-            onChange={(e) => handleInputChange('sellerEmail', e.target.value)}
-            className="px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-          />
-          <input
-            type="tel"
-            placeholder="Seller Phone *"
-            value={formData.sellerPhone}
-            onChange={(e) => handleInputChange('sellerPhone', e.target.value)}
-            className="px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-          />
-        </div>
-      </div>
-
-      <div className="bg-gray-50 p-6 rounded-lg border border-gray-200">
-        <h4 className="font-semibold text-gray-900 mb-4 flex items-center">
-          <DollarSign className="h-5 w-5 mr-2" />
-          Sale Information
-        </h4>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">Sale Price *</label>
-            <div className="relative">
-              <DollarSign className="absolute left-3 top-3 h-5 w-5 text-gray-400" />
-              <input
-                type="number"
-                placeholder="450000"
-                value={formData.salePrice}
-                onChange={(e) => handleInputChange('salePrice', e.target.value)}
-                className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-              />
-            </div>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">Expected Closing Date *</label>
-            <input
-              type="date"
-              value={formData.closingDate}
-              onChange={(e) => handleInputChange('closingDate', e.target.value)}
-              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-            />
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-
-  const PackagePaymentStep = () => (
-    <div className="space-y-6">
-      <div className="text-center mb-8">
-        <h3 className="text-2xl font-bold text-green-900 mb-2">Package Selection & Payment</h3>
-        <p className="text-gray-600">Choose your processing speed and payment method</p>
+  // Loading state<p className="text-gray-600">Choose your processing speed and payment method</p>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -1203,9 +1345,28 @@ export default function GMGResaleFlow() {
             handleInputChange={handleInputChange} 
           />
         );
-      case 3: return <TransactionDetailsStep />;
-      case 4: return <PackagePaymentStep />;
-      case 5: return <ReviewSubmitStep />;
+      case 3: 
+        return (
+          <TransactionDetailsStep 
+            formData={formData} 
+            handleInputChange={handleInputChange} 
+          />
+        );
+      case 4: 
+        return (
+          <PackagePaymentStep 
+            formData={formData} 
+            handleInputChange={handleInputChange}
+            calculateTotal={calculateTotal}
+          />
+        );
+      case 5: 
+        return (
+          <ReviewSubmitStep 
+            formData={formData} 
+            calculateTotal={calculateTotal}
+          />
+        );
       default: return <Dashboard />;
     }
   };
