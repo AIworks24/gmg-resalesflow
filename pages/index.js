@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { Building2, FileText, CreditCard, CheckCircle, Clock, AlertCircle, Upload, User, Users, DollarSign, Search, Menu, X } from 'lucide-react';
 
-
 export default function GMGResaleFlow() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -12,6 +11,7 @@ export default function GMGResaleFlow() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [authMode, setAuthMode] = useState('signin');
+  const [userRole, setUserRole] = useState(null); // Added user role state
   
   const [formData, setFormData] = useState({
     hoaProperty: '',
@@ -35,26 +35,26 @@ export default function GMGResaleFlow() {
     totalAmount: 317.95
   });
 
-
   useEffect(() => {
     checkUser();
     loadHOAProperties();
     
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      (event, session) => {
+      async (event, session) => {
         setUser(session?.user || null);
         setIsAuthenticated(!!session?.user);
         if (session?.user) {
           setShowAuthModal(false);
-          loadApplications();
+          await loadUserProfile(session.user.id);
+          await loadApplications();
+        } else {
+          setUserRole(null);
         }
       }
     );
 
-
     return () => subscription.unsubscribe();
   }, []);
-
 
   const checkUser = async () => {
     try {
@@ -62,6 +62,7 @@ export default function GMGResaleFlow() {
       setUser(session?.user || null);
       setIsAuthenticated(!!session?.user);
       if (session?.user) {
+        await loadUserProfile(session.user.id);
         await loadApplications();
       }
     } catch (error) {
@@ -71,65 +72,81 @@ export default function GMGResaleFlow() {
     }
   };
 
-
-  // Find the loadHOAProperties function in your pages/index.js file 
-// and replace it with this exact code:
-
-
-const loadHOAProperties = async () => {
-  console.log('🏠 Loading HOA Properties (fixed version)...');
-  
-  try {
-    // Simple query without any filters that cause 401
-    const { data, error } = await supabase
-      .from('hoa_properties')
-      .select('id, name, location')
-      .order('name');
-    
-    console.log('🔍 Raw query result:', { data, error });
-    
-    if (error) {
-      console.error('❌ Supabase error details:', error);
-      console.error('Error message:', error.message);
-      console.error('Error code:', error.code);
-      return;
+  // Load user profile to get role
+  const loadUserProfile = async (userId) => {
+    try {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('role')
+        .eq('id', userId)
+        .single();
+      
+      if (error) {
+        console.error('Error loading user profile:', error);
+        // Default to 'customer' if no profile found
+        setUserRole('customer');
+        return;
+      }
+      
+      setUserRole(data?.role || 'customer');
+    } catch (error) {
+      console.error('Error loading user profile:', error);
+      setUserRole('customer');
     }
-    
-    if (!data) {
-      console.warn('⚠️ Data is null/undefined');
-      return;
-    }
-    
-    if (data.length === 0) {
-      console.warn('⚠️ Data array is empty');
-      return;
-    }
-    
-    console.log('✅ SUCCESS! Loaded', data.length, 'HOA properties');
-    console.log('📋 First 3 properties:', data.slice(0, 3));
-    
-    setHoaProperties(data);
-    
-  } catch (error) {
-    console.error('💥 Catch block error:', error);
-    console.error('Error type:', typeof error);
-    console.error('Error details:', JSON.stringify(error, null, 2));
-  }
-};
+  };
 
+  const loadHOAProperties = async () => {
+    console.log('🏠 Loading HOA Properties (fixed version)...');
+    
+    try {
+      const { data, error } = await supabase
+        .from('hoa_properties')
+        .select('id, name, location')
+        .order('name');
+      
+      console.log('🔍 Raw query result:', { data, error });
+      
+      if (error) {
+        console.error('❌ Supabase error details:', error);
+        return;
+      }
+      
+      if (!data) {
+        console.warn('⚠️ Data is null/undefined');
+        return;
+      }
+      
+      if (data.length === 0) {
+        console.warn('⚠️ Data array is empty');
+        return;
+      }
+      
+      console.log('✅ SUCCESS! Loaded', data.length, 'HOA properties');
+      setHoaProperties(data);
+      
+    } catch (error) {
+      console.error('💥 Catch block error:', error);
+    }
+  };
 
   const loadApplications = async () => {
     if (!user) return;
     
     try {
-      const { data, error } = await supabase
+      let query = supabase
         .from('applications')
         .select(`
           *,
           hoa_properties(name, location),
           profiles(first_name, last_name, role)
-        `)
-        .order('created_at', { ascending: false });
+        `);
+      
+      // If not admin, only show user's own applications
+      if (userRole !== 'admin') {
+        query = query.eq('user_id', user.id);
+      }
+      
+      const { data, error } = await query.order('created_at', { ascending: false });
       
       if (error) throw error;
       setApplications(data || []);
@@ -137,7 +154,6 @@ const loadHOAProperties = async () => {
       console.error('Error loading applications:', error);
     }
   };
-
 
   const handleAuth = async (email, password, userData = {}) => {
     try {
@@ -163,14 +179,13 @@ const loadHOAProperties = async () => {
     }
   };
 
-
   const signOut = async () => {
     await supabase.auth.signOut();
     setUser(null);
     setIsAuthenticated(false);
+    setUserRole(null);
     setCurrentStep(0);
   };
-
 
   const calculateTotal = () => {
     let total = 317.95;
@@ -179,7 +194,7 @@ const loadHOAProperties = async () => {
     return total;
   };
 
-
+  // Fixed input change handler
   const handleInputChange = (field, value) => {
     setFormData(prev => ({
       ...prev,
@@ -187,23 +202,19 @@ const loadHOAProperties = async () => {
     }));
   };
 
-
   const nextStep = () => {
     if (currentStep < 5) setCurrentStep(currentStep + 1);
   };
 
-
   const prevStep = () => {
     if (currentStep > 1) setCurrentStep(currentStep - 1);
   };
-
 
   const submitApplication = async () => {
     if (!user) {
       setShowAuthModal(true);
       return;
     }
-
 
     try {
       const hoaProperty = hoaProperties.find(h => h.name === formData.hoaProperty);
@@ -234,15 +245,12 @@ const loadHOAProperties = async () => {
         expected_completion_date: new Date(Date.now() + (formData.packageType === 'rush' ? 5 : 15) * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
       };
 
-
       const { data, error } = await supabase
         .from('applications')
         .insert([applicationData])
         .select();
 
-
       if (error) throw error;
-
 
       alert('Application submitted successfully! You will receive a confirmation email shortly.');
       setCurrentStep(0);
@@ -275,7 +283,6 @@ const loadHOAProperties = async () => {
     }
   };
 
-
   // Authentication Modal Component
   const AuthModal = () => {
     const [email, setEmail] = useState('');
@@ -283,12 +290,11 @@ const loadHOAProperties = async () => {
     const [firstName, setFirstName] = useState('');
     const [lastName, setLastName] = useState('');
 
-
     return (
       <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
         <div className="bg-white rounded-lg p-8 max-w-md w-full mx-4">
           <div className="flex justify-between items-center mb-6">
-            <h2 className="text-2xl font-bold text-gmg-green-800">
+            <h2 className="text-2xl font-bold text-green-800">
               {authMode === 'signin' ? 'Sign In' : 'Create Account'}
             </h2>
             <button onClick={() => setShowAuthModal(false)}>
@@ -307,7 +313,7 @@ const loadHOAProperties = async () => {
                   placeholder="First Name"
                   value={firstName}
                   onChange={(e) => setFirstName(e.target.value)}
-                  className="px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-gmg-green-500"
+                  className="px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
                   required
                 />
                 <input
@@ -315,7 +321,7 @@ const loadHOAProperties = async () => {
                   placeholder="Last Name"
                   value={lastName}
                   onChange={(e) => setLastName(e.target.value)}
-                  className="px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-gmg-green-500"
+                  className="px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
                   required
                 />
               </div>
@@ -327,7 +333,7 @@ const loadHOAProperties = async () => {
                 placeholder="Email Address"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-gmg-green-500"
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
                 required
               />
               <input
@@ -335,14 +341,14 @@ const loadHOAProperties = async () => {
                 placeholder="Password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-gmg-green-500"
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
                 required
               />
             </div>
             
             <button
               type="submit"
-              className="w-full mt-6 px-6 py-3 bg-gmg-green-700 text-white rounded-lg hover:bg-gmg-green-800 transition-colors"
+              className="w-full mt-6 px-6 py-3 bg-green-700 text-white rounded-lg hover:bg-green-800 transition-colors"
             >
               {authMode === 'signin' ? 'Sign In' : 'Create Account'}
             </button>
@@ -351,7 +357,7 @@ const loadHOAProperties = async () => {
           <div className="mt-4 text-center">
             <button
               onClick={() => setAuthMode(authMode === 'signin' ? 'signup' : 'signin')}
-              className="text-gmg-green-600 hover:text-gmg-green-800"
+              className="text-green-600 hover:text-green-800"
             >
               {authMode === 'signin' ? 'Need an account? Sign up' : 'Already have an account? Sign in'}
             </button>
@@ -361,8 +367,7 @@ const loadHOAProperties = async () => {
     );
   };
 
-
-  // Dashboard Component
+  // Updated Dashboard Component - Only for Admins
   const Dashboard = () => {
     const statusConfig = {
       draft: { color: 'bg-gray-100 text-gray-800', icon: Clock, label: 'Draft' },
@@ -373,70 +378,74 @@ const loadHOAProperties = async () => {
       rejected: { color: 'bg-red-100 text-red-800', icon: AlertCircle, label: 'Rejected' }
     };
 
-
     return (
       <div className="space-y-6">
         <div className="flex justify-between items-center">
-          <h2 className="text-2xl font-bold text-gray-900">Resale Applications Dashboard</h2>
+          <h2 className="text-2xl font-bold text-gray-900">
+            {userRole === 'admin' ? 'Resale Applications Dashboard' : 'My Applications'}
+          </h2>
           <button
             onClick={() => setCurrentStep(1)}
-            className="bg-gmg-green-700 text-white px-6 py-3 rounded-lg hover:bg-gmg-green-800 transition-colors flex items-center gap-2"
+            className="bg-green-700 text-white px-6 py-3 rounded-lg hover:bg-green-800 transition-colors flex items-center gap-2"
           >
             <FileText className="h-5 w-5" />
             New Resale Application
           </button>
         </div>
 
-
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-          <div className="bg-white p-6 rounded-lg shadow border-l-4 border-gmg-green-700">
-            <div className="flex items-center">
-              <FileText className="h-8 w-8 text-gmg-green-700" />
-              <div className="ml-3">
-                <p className="text-sm font-medium text-gray-500">Total Applications</p>
-                <p className="text-2xl font-semibold text-gray-900">{applications.length}</p>
+        {/* Only show dashboard metrics for admins */}
+        {userRole === 'admin' && (
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+            <div className="bg-white p-6 rounded-lg shadow border-l-4 border-green-700">
+              <div className="flex items-center">
+                <FileText className="h-8 w-8 text-green-700" />
+                <div className="ml-3">
+                  <p className="text-sm font-medium text-gray-500">Total Applications</p>
+                  <p className="text-2xl font-semibold text-gray-900">{applications.length}</p>
+                </div>
+              </div>
+            </div>
+            <div className="bg-white p-6 rounded-lg shadow border-l-4 border-yellow-500">
+              <div className="flex items-center">
+                <Clock className="h-8 w-8 text-yellow-500" />
+                <div className="ml-3">
+                  <p className="text-sm font-medium text-gray-500">Under Review</p>
+                  <p className="text-2xl font-semibold text-gray-900">
+                    {applications.filter(app => app.status === 'under_review').length}
+                  </p>
+                </div>
+              </div>
+            </div>
+            <div className="bg-white p-6 rounded-lg shadow border-l-4 border-green-500">
+              <div className="flex items-center">
+                <CheckCircle className="h-8 w-8 text-green-500" />
+                <div className="ml-3">
+                  <p className="text-sm font-medium text-gray-500">Completed</p>
+                  <p className="text-2xl font-semibold text-gray-900">
+                    {applications.filter(app => app.status === 'approved').length}
+                  </p>
+                </div>
+              </div>
+            </div>
+            <div className="bg-white p-6 rounded-lg shadow border-l-4 border-green-600">
+              <div className="flex items-center">
+                <DollarSign className="h-8 w-8 text-green-600" />
+                <div className="ml-3">
+                  <p className="text-sm font-medium text-gray-500">Revenue (Month)</p>
+                  <p className="text-2xl font-semibold text-gray-900">
+                    ${applications.reduce((sum, app) => sum + (app.total_amount || 0), 0).toLocaleString()}
+                  </p>
+                </div>
               </div>
             </div>
           </div>
-          <div className="bg-white p-6 rounded-lg shadow border-l-4 border-yellow-500">
-            <div className="flex items-center">
-              <Clock className="h-8 w-8 text-yellow-500" />
-              <div className="ml-3">
-                <p className="text-sm font-medium text-gray-500">Under Review</p>
-                <p className="text-2xl font-semibold text-gray-900">
-                  {applications.filter(app => app.status === 'under_review').length}
-                </p>
-              </div>
-            </div>
-          </div>
-          <div className="bg-white p-6 rounded-lg shadow border-l-4 border-green-500">
-            <div className="flex items-center">
-              <CheckCircle className="h-8 w-8 text-green-500" />
-              <div className="ml-3">
-                <p className="text-sm font-medium text-gray-500">Completed</p>
-                <p className="text-2xl font-semibold text-gray-900">
-                  {applications.filter(app => app.status === 'approved').length}
-                </p>
-              </div>
-            </div>
-          </div>
-          <div className="bg-white p-6 rounded-lg shadow border-l-4 border-gmg-green-600">
-            <div className="flex items-center">
-              <DollarSign className="h-8 w-8 text-gmg-green-600" />
-              <div className="ml-3">
-                <p className="text-sm font-medium text-gray-500">Revenue (Month)</p>
-                <p className="text-2xl font-semibold text-gray-900">
-                  ${applications.reduce((sum, app) => sum + (app.total_amount || 0), 0).toLocaleString()}
-                </p>
-              </div>
-            </div>
-          </div>
-        </div>
-
+        )}
 
         <div className="bg-white rounded-lg shadow overflow-hidden">
-          <div className="px-6 py-4 border-b border-gray-200 bg-gmg-green-50">
-            <h3 className="text-lg font-medium text-gmg-green-900">Recent Applications</h3>
+          <div className="px-6 py-4 border-b border-gray-200 bg-green-50">
+            <h3 className="text-lg font-medium text-green-900">
+              {userRole === 'admin' ? 'All Applications' : 'Your Applications'}
+            </h3>
           </div>
           <div className="overflow-x-auto">
             <table className="min-w-full divide-y divide-gray-200">
@@ -494,7 +503,6 @@ const loadHOAProperties = async () => {
     );
   };
 
-
   // Form Step Components
   const steps = [
     { number: 1, title: 'HOA Selection', icon: Building2 },
@@ -504,23 +512,21 @@ const loadHOAProperties = async () => {
     { number: 5, title: 'Review & Submit', icon: CheckCircle }
   ];
 
-
   const HOASelectionStep = () => (
     <div className="space-y-6">
       <div className="text-center mb-8">
-        <h3 className="text-2xl font-bold text-gmg-green-900 mb-2">Select HOA Property</h3>
+        <h3 className="text-2xl font-bold text-green-900 mb-2">Select HOA Property</h3>
         <p className="text-gray-600">Choose the HOA community for your resale certificate application</p>
       </div>
 
-
-      <div className="bg-white p-6 rounded-lg border border-gmg-green-200">
+      <div className="bg-white p-6 rounded-lg border border-green-200">
         <label className="block text-sm font-medium text-gray-700 mb-3">HOA Community *</label>
         <div className="relative">
           <Search className="absolute left-3 top-3 h-5 w-5 text-gray-400" />
           <select
             value={formData.hoaProperty}
             onChange={(e) => handleInputChange('hoaProperty', e.target.value)}
-            className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-gmg-green-500 focus:border-gmg-green-500"
+            className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500"
           >
             <option value="">Select an HOA Community</option>
             {hoaProperties.map((hoa) => (
@@ -532,7 +538,6 @@ const loadHOAProperties = async () => {
         </div>
       </div>
 
-
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-2">Property Address *</label>
@@ -540,7 +545,7 @@ const loadHOAProperties = async () => {
             type="text"
             value={formData.propertyAddress}
             onChange={(e) => handleInputChange('propertyAddress', e.target.value)}
-            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-gmg-green-500 focus:border-gmg-green-500"
+            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500"
             placeholder="123 Main Street"
           />
         </div>
@@ -550,20 +555,19 @@ const loadHOAProperties = async () => {
             type="text"
             value={formData.unitNumber}
             onChange={(e) => handleInputChange('unitNumber', e.target.value)}
-            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-gmg-green-500 focus:border-gmg-green-500"
+            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500"
             placeholder="4B"
           />
         </div>
       </div>
 
-
       {formData.hoaProperty && (
-        <div className="bg-gmg-green-50 p-4 rounded-lg border border-gmg-green-200">
+        <div className="bg-green-50 p-4 rounded-lg border border-green-200">
           <div className="flex items-start">
-            <CheckCircle className="h-5 w-5 text-gmg-green-600 mt-0.5 mr-2" />
+            <CheckCircle className="h-5 w-5 text-green-600 mt-0.5 mr-2" />
             <div>
-              <h4 className="font-medium text-gmg-green-900">HOA Documents Ready</h4>
-              <p className="text-sm text-gmg-green-700 mt-1">
+              <h4 className="font-medium text-green-900">HOA Documents Ready</h4>
+              <p className="text-sm text-green-700 mt-1">
                 All required HOA documents for {formData.hoaProperty} will be automatically included in your resale package.
               </p>
             </div>
@@ -573,17 +577,14 @@ const loadHOAProperties = async () => {
     </div>
   );
 
-
-  // Continue with other step components...
   const SubmitterInfoStep = () => (
     <div className="space-y-6">
       <div className="text-center mb-8">
-        <h3 className="text-2xl font-bold text-gmg-green-900 mb-2">Who is Submitting?</h3>
+        <h3 className="text-2xl font-bold text-green-900 mb-2">Who is Submitting?</h3>
         <p className="text-gray-600">Tell us about yourself and your role in this transaction</p>
       </div>
 
-
-      <div className="bg-white p-6 rounded-lg border border-gmg-green-200">
+      <div className="bg-white p-6 rounded-lg border border-green-200">
         <label className="block text-sm font-medium text-gray-700 mb-3">I am the: *</label>
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           {[
@@ -599,8 +600,8 @@ const loadHOAProperties = async () => {
                 onClick={() => handleInputChange('submitterType', type.value)}
                 className={`p-4 rounded-lg border-2 transition-all ${
                   formData.submitterType === type.value
-                    ? 'border-gmg-green-500 bg-gmg-green-50 text-gmg-green-900'
-                    : 'border-gray-200 hover:border-gmg-green-300'
+                    ? 'border-green-500 bg-green-50 text-green-900'
+                    : 'border-gray-200 hover:border-green-300'
                 }`}
               >
                 <Icon className="h-8 w-8 mx-auto mb-2" />
@@ -611,7 +612,6 @@ const loadHOAProperties = async () => {
         </div>
       </div>
 
-
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-2">Full Name *</label>
@@ -619,7 +619,7 @@ const loadHOAProperties = async () => {
             type="text"
             value={formData.submitterName}
             onChange={(e) => handleInputChange('submitterName', e.target.value)}
-            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-gmg-green-500"
+            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
             placeholder="John Smith"
           />
         </div>
@@ -629,7 +629,7 @@ const loadHOAProperties = async () => {
             type="email"
             value={formData.submitterEmail}
             onChange={(e) => handleInputChange('submitterEmail', e.target.value)}
-            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-gmg-green-500"
+            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
             placeholder="john@example.com"
           />
         </div>
@@ -637,72 +637,16 @@ const loadHOAProperties = async () => {
           <label className="block text-sm font-medium text-gray-700 mb-2">Phone Number *</label>
           <input
             type="tel"
-            value={formData.submitterPhone}
-            onChange={(e) => handleInputChange('submitterPhone', e.target.value)}
-            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-gmg-green-500"
-            placeholder="(555) 123-4567"
-          />
-        </div>
-      </div>
-
-
-      {formData.submitterType === 'realtor' && (
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">Virginia Real Estate License Number *</label>
-          <input
-            type="text"
-            value={formData.realtorLicense}
-            onChange={(e) => handleInputChange('realtorLicense', e.target.value)}
-            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-gmg-green-500"
-            placeholder="License #"
-          />
-        </div>
-      )}
-    </div>
-  );
-
-
-  const TransactionDetailsStep = () => (
-    <div className="space-y-6">
-      <div className="text-center mb-8">
-        <h3 className="text-2xl font-bold text-gmg-green-900 mb-2">Transaction Details</h3>
-        <p className="text-gray-600">Information about the buyer, seller, and sale details</p>
-      </div>
-
-
-      <div className="bg-blue-50 p-6 rounded-lg border border-blue-200">
-        <h4 className="font-semibold text-blue-900 mb-4 flex items-center">
-          <User className="h-5 w-5 mr-2" />
-          Buyer Information
-        </h4>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <input
-            type="text"
-            placeholder="Buyer Full Name *"
-            value={formData.buyerName}
-            onChange={(e) => handleInputChange('buyerName', e.target.value)}
-            className="px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-gmg-green-500"
-          />
-          <input
-            type="email"
-            placeholder="Buyer Email *"
-            value={formData.buyerEmail}
-            onChange={(e) => handleInputChange('buyerEmail', e.target.value)}
-            className="px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-gmg-green-500"
-          />
-          <input
-            type="tel"
             placeholder="Buyer Phone *"
             value={formData.buyerPhone}
             onChange={(e) => handleInputChange('buyerPhone', e.target.value)}
-            className="px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-gmg-green-500"
+            className="px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
           />
         </div>
       </div>
 
-
-      <div className="bg-gmg-green-50 p-6 rounded-lg border border-gmg-green-200">
-        <h4 className="font-semibold text-gmg-green-900 mb-4 flex items-center">
+      <div className="bg-green-50 p-6 rounded-lg border border-green-200">
+        <h4 className="font-semibold text-green-900 mb-4 flex items-center">
           <User className="h-5 w-5 mr-2" />
           Seller Information
         </h4>
@@ -712,25 +656,24 @@ const loadHOAProperties = async () => {
             placeholder="Seller Full Name *"
             value={formData.sellerName}
             onChange={(e) => handleInputChange('sellerName', e.target.value)}
-            className="px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-gmg-green-500"
+            className="px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
           />
           <input
             type="email"
             placeholder="Seller Email *"
             value={formData.sellerEmail}
             onChange={(e) => handleInputChange('sellerEmail', e.target.value)}
-            className="px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-gmg-green-500"
+            className="px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
           />
           <input
             type="tel"
             placeholder="Seller Phone *"
             value={formData.sellerPhone}
             onChange={(e) => handleInputChange('sellerPhone', e.target.value)}
-            className="px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-gmg-green-500"
+            className="px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
           />
         </div>
       </div>
-
 
       <div className="bg-gray-50 p-6 rounded-lg border border-gray-200">
         <h4 className="font-semibold text-gray-900 mb-4 flex items-center">
@@ -747,7 +690,7 @@ const loadHOAProperties = async () => {
                 placeholder="450000"
                 value={formData.salePrice}
                 onChange={(e) => handleInputChange('salePrice', e.target.value)}
-                className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-gmg-green-500"
+                className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
               />
             </div>
           </div>
@@ -757,7 +700,7 @@ const loadHOAProperties = async () => {
               type="date"
               value={formData.closingDate}
               onChange={(e) => handleInputChange('closingDate', e.target.value)}
-              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-gmg-green-500"
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
             />
           </div>
         </div>
@@ -765,22 +708,20 @@ const loadHOAProperties = async () => {
     </div>
   );
 
-
   const PackagePaymentStep = () => (
     <div className="space-y-6">
       <div className="text-center mb-8">
-        <h3 className="text-2xl font-bold text-gmg-green-900 mb-2">Package Selection & Payment</h3>
+        <h3 className="text-2xl font-bold text-green-900 mb-2">Package Selection & Payment</h3>
         <p className="text-gray-600">Choose your processing speed and payment method</p>
       </div>
-
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div 
           onClick={() => handleInputChange('packageType', 'standard')}
           className={`p-6 rounded-lg border-2 cursor-pointer transition-all ${
             formData.packageType === 'standard' 
-              ? 'border-gmg-green-500 bg-gmg-green-50' 
-              : 'border-gray-200 hover:border-gmg-green-300'
+              ? 'border-green-500 bg-green-50' 
+              : 'border-gray-200 hover:border-green-300'
           }`}
         >
           <div className="flex items-start justify-between mb-4">
@@ -789,7 +730,7 @@ const loadHOAProperties = async () => {
               <p className="text-sm text-gray-600">10-15 business days</p>
             </div>
             <div className="text-right">
-              <div className="text-2xl font-bold text-gmg-green-600">$317.95</div>
+              <div className="text-2xl font-bold text-green-600">$317.95</div>
             </div>
           </div>
           <ul className="text-sm text-gray-600 space-y-1">
@@ -799,7 +740,6 @@ const loadHOAProperties = async () => {
             <li>• Digital & Print Delivery</li>
           </ul>
         </div>
-
 
         <div 
           onClick={() => handleInputChange('packageType', 'rush')}
@@ -832,7 +772,6 @@ const loadHOAProperties = async () => {
         </div>
       </div>
 
-
       <div className="bg-white p-6 rounded-lg border border-gray-200">
         <h4 className="font-semibold text-gray-900 mb-4">Payment Method</h4>
         
@@ -844,7 +783,7 @@ const loadHOAProperties = async () => {
               value="credit_card"
               checked={formData.paymentMethod === 'credit_card'}
               onChange={(e) => handleInputChange('paymentMethod', e.target.value)}
-              className="h-4 w-4 text-gmg-green-600 focus:ring-gmg-green-500 border-gray-300"
+              className="h-4 w-4 text-green-600 focus:ring-green-500 border-gray-300"
             />
             <div className="ml-3 flex-1">
               <div className="flex items-center justify-between">
@@ -862,21 +801,20 @@ const loadHOAProperties = async () => {
               value="ach"
               checked={formData.paymentMethod === 'ach'}
               onChange={(e) => handleInputChange('paymentMethod', e.target.value)}
-              className="h-4 w-4 text-gmg-green-600 focus:ring-gmg-green-500 border-gray-300"
+              className="h-4 w-4 text-green-600 focus:ring-green-500 border-gray-300"
             />
             <div className="ml-3 flex-1">
               <div className="flex items-center justify-between">
                 <span className="text-sm font-medium text-gray-700">Bank Transfer (ACH)</span>
-                <span className="text-sm text-gmg-green-600">No convenience fee</span>
+                <span className="text-sm text-green-600">No convenience fee</span>
               </div>
               <p className="text-xs text-gray-500">Direct bank account transfer</p>
             </div>
           </label>
         </div>
 
-
-        <div className="bg-gmg-green-50 p-4 rounded-lg border border-gmg-green-200">
-          <h5 className="font-medium text-gmg-green-900 mb-2">Order Summary</h5>
+        <div className="bg-green-50 p-4 rounded-lg border border-green-200">
+          <h5 className="font-medium text-green-900 mb-2">Order Summary</h5>
           <div className="space-y-2 text-sm">
             <div className="flex justify-between">
               <span>Processing Fee:</span>
@@ -894,7 +832,7 @@ const loadHOAProperties = async () => {
                 <span>+$9.95</span>
               </div>
             )}
-            <div className="border-t border-gmg-green-200 pt-2 flex justify-between font-semibold text-gmg-green-900">
+            <div className="border-t border-green-200 pt-2 flex justify-between font-semibold text-green-900">
               <span>Total:</span>
               <span>${calculateTotal()}</span>
             </div>
@@ -904,19 +842,17 @@ const loadHOAProperties = async () => {
     </div>
   );
 
-
   const ReviewSubmitStep = () => (
     <div className="space-y-6">
       <div className="text-center mb-8">
-        <h3 className="text-2xl font-bold text-gmg-green-900 mb-2">Review & Submit</h3>
+        <h3 className="text-2xl font-bold text-green-900 mb-2">Review & Submit</h3>
         <p className="text-gray-600">Please review your information before submitting</p>
       </div>
-
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div className="bg-white p-6 rounded-lg border border-gray-200">
           <h4 className="font-semibold text-gray-900 mb-4 flex items-center">
-            <Building2 className="h-5 w-5 mr-2 text-gmg-green-600" />
+            <Building2 className="h-5 w-5 mr-2 text-green-600" />
             Property Information
           </h4>
           <div className="space-y-2 text-sm">
@@ -927,10 +863,9 @@ const loadHOAProperties = async () => {
           </div>
         </div>
 
-
         <div className="bg-white p-6 rounded-lg border border-gray-200">
           <h4 className="font-semibold text-gray-900 mb-4 flex items-center">
-            <User className="h-5 w-5 mr-2 text-gmg-green-600" />
+            <User className="h-5 w-5 mr-2 text-green-600" />
             Submitter Information
           </h4>
           <div className="space-y-2 text-sm">
@@ -941,10 +876,9 @@ const loadHOAProperties = async () => {
           </div>
         </div>
 
-
         <div className="bg-white p-6 rounded-lg border border-gray-200">
           <h4 className="font-semibold text-gray-900 mb-4 flex items-center">
-            <Users className="h-5 w-5 mr-2 text-gmg-green-600" />
+            <Users className="h-5 w-5 mr-2 text-green-600" />
             Transaction Parties
           </h4>
           <div className="space-y-2 text-sm">
@@ -955,10 +889,9 @@ const loadHOAProperties = async () => {
           </div>
         </div>
 
-
         <div className="bg-white p-6 rounded-lg border border-gray-200">
           <h4 className="font-semibold text-gray-900 mb-4 flex items-center">
-            <CreditCard className="h-5 w-5 mr-2 text-gmg-green-600" />
+            <CreditCard className="h-5 w-5 mr-2 text-green-600" />
             Package & Payment
           </h4>
           <div className="space-y-2 text-sm">
@@ -968,7 +901,6 @@ const loadHOAProperties = async () => {
           </div>
         </div>
       </div>
-
 
       <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6">
         <div className="flex">
@@ -987,12 +919,11 @@ const loadHOAProperties = async () => {
         </div>
       </div>
 
-
       <div className="bg-white p-6 rounded-lg border border-gray-200">
         <label className="flex items-start">
           <input
             type="checkbox"
-            className="h-4 w-4 text-gmg-green-600 focus:ring-gmg-green-500 border-gray-300 rounded mt-1"
+            className="h-4 w-4 text-green-600 focus:ring-green-500 border-gray-300 rounded mt-1"
             required
           />
           <span className="ml-3 text-sm text-gray-700">
@@ -1006,7 +937,6 @@ const loadHOAProperties = async () => {
     </div>
   );
 
-
   const renderStepContent = () => {
     switch (currentStep) {
       case 1: return <HOASelectionStep />;
@@ -1018,13 +948,12 @@ const loadHOAProperties = async () => {
     }
   };
 
-
   // Loading state
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="text-center">
-          <div className="w-16 h-16 bg-gmg-green-700 rounded-lg flex items-center justify-center mx-auto mb-4">
+          <div className="w-16 h-16 bg-green-700 rounded-lg flex items-center justify-center mx-auto mb-4">
             <Building2 className="h-8 w-8 text-white" />
           </div>
           <h2 className="text-xl font-semibold text-gray-900">Loading GMG ResaleFlow...</h2>
@@ -1033,8 +962,7 @@ const loadHOAProperties = async () => {
     );
   }
 
-
-  // Main application render
+  // Main application render - Dashboard view
   if (currentStep === 0) {
     return (
       <div className="min-h-screen bg-gray-50">
@@ -1044,11 +972,11 @@ const loadHOAProperties = async () => {
             <div className="flex justify-between items-center py-4">
               <div className="flex items-center space-x-4">
                 <div className="flex items-center space-x-3">
-                  <div className="w-10 h-10 bg-gmg-green-700 rounded-lg flex items-center justify-center">
+                  <div className="w-10 h-10 bg-green-700 rounded-lg flex items-center justify-center">
                     <Building2 className="h-6 w-6 text-white" />
                   </div>
                   <div>
-                    <h1 className="text-xl font-bold text-gmg-green-900">Goodman Management Group</h1>
+                    <h1 className="text-xl font-bold text-green-900">Goodman Management Group</h1>
                     <p className="text-sm text-gray-600">Resale Certificate System</p>
                   </div>
                 </div>
@@ -1056,10 +984,17 @@ const loadHOAProperties = async () => {
               <div className="flex items-center space-x-4">
                 {isAuthenticated ? (
                   <div className="flex items-center space-x-4">
-                    <span className="text-sm text-gray-600">Welcome, {user?.email}</span>
+                    <span className="text-sm text-gray-600">
+                      Welcome, {user?.email} 
+                      {userRole && (
+                        <span className="ml-1 px-2 py-1 bg-green-100 text-green-800 text-xs rounded">
+                          {userRole}
+                        </span>
+                      )}
+                    </span>
                     <button
                       onClick={signOut}
-                      className="text-gray-600 hover:text-gmg-green-700 px-3 py-2 rounded-md text-sm font-medium transition-colors"
+                      className="text-gray-600 hover:text-green-700 px-3 py-2 rounded-md text-sm font-medium transition-colors"
                     >
                       Sign Out
                     </button>
@@ -1067,7 +1002,7 @@ const loadHOAProperties = async () => {
                 ) : (
                   <button
                     onClick={() => setShowAuthModal(true)}
-                    className="bg-gmg-green-700 text-white px-4 py-2 rounded-lg hover:bg-gmg-green-800 transition-colors"
+                    className="bg-green-700 text-white px-4 py-2 rounded-lg hover:bg-green-800 transition-colors"
                   >
                     Sign In
                   </button>
@@ -1077,35 +1012,31 @@ const loadHOAProperties = async () => {
           </div>
         </div>
 
-
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
           <Dashboard />
         </div>
 
-
         {/* Footer */}
-        <div className="bg-gmg-green-900 text-white py-8 mt-12">
+        <div className="bg-green-900 text-white py-8 mt-12">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div className="flex flex-col md:flex-row justify-between items-center">
               <div className="mb-4 md:mb-0">
                 <h3 className="text-lg font-semibold">Goodman Management Group</h3>
-                <p className="text-gmg-green-200">Professional HOA Management & Resale Services</p>
+                <p className="text-green-200">Professional HOA Management & Resale Services</p>
               </div>
               <div className="text-center md:text-right">
-                <p className="text-gmg-green-200">Questions? Contact us:</p>
+                <p className="text-green-200">Questions? Contact us:</p>
                 <p className="font-medium">resales@gmgva.com</p>
               </div>
             </div>
           </div>
         </div>
 
-
         {/* Auth Modal */}
         {showAuthModal && <AuthModal />}
       </div>
     );
   }
-
 
   // Form view
   return (
@@ -1116,11 +1047,11 @@ const loadHOAProperties = async () => {
           <div className="flex justify-between items-center py-4">
             <div className="flex items-center space-x-4">
               <div className="flex items-center space-x-3">
-                <div className="w-10 h-10 bg-gmg-green-700 rounded-lg flex items-center justify-center">
+                <div className="w-10 h-10 bg-green-700 rounded-lg flex items-center justify-center">
                   <Building2 className="h-6 w-6 text-white" />
                 </div>
                 <div>
-                  <h1 className="text-xl font-bold text-gmg-green-900">Goodman Management Group</h1>
+                  <h1 className="text-xl font-bold text-green-900">Goodman Management Group</h1>
                   <p className="text-sm text-gray-600">Resale Certificate System</p>
                 </div>
               </div>
@@ -1128,9 +1059,9 @@ const loadHOAProperties = async () => {
             <div className="flex items-center space-x-4">
               <button
                 onClick={() => setCurrentStep(0)}
-                className="text-gray-600 hover:text-gmg-green-700 px-3 py-2 rounded-md text-sm font-medium transition-colors"
+                className="text-gray-600 hover:text-green-700 px-3 py-2 rounded-md text-sm font-medium transition-colors"
               >
-                Dashboard
+                {userRole === 'admin' ? 'Dashboard' : 'My Applications'}
               </button>
               {isAuthenticated && (
                 <div className="flex items-center space-x-2">
@@ -1142,7 +1073,6 @@ const loadHOAProperties = async () => {
           </div>
         </div>
       </div>
-
 
       <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Progress Steps */}
@@ -1156,22 +1086,22 @@ const loadHOAProperties = async () => {
               return (
                 <div key={step.number} className="flex items-center">
                   <div className={`flex items-center justify-center w-12 h-12 rounded-full border-2 ${
-                    isActive ? 'border-gmg-green-600 bg-gmg-green-600 text-white' :
-                    isCompleted ? 'border-gmg-green-600 bg-gmg-green-600 text-white' :
+                    isActive ? 'border-green-600 bg-green-600 text-white' :
+                    isCompleted ? 'border-green-600 bg-green-600 text-white' :
                     'border-gray-300 bg-white text-gray-500'
                   }`}>
                     <StepIcon className="h-6 w-6" />
                   </div>
                   <span className={`ml-3 text-sm font-medium ${
-                    isActive ? 'text-gmg-green-600' :
-                    isCompleted ? 'text-gmg-green-600' :
+                    isActive ? 'text-green-600' :
+                    isCompleted ? 'text-green-600' :
                     'text-gray-500'
                   }`}>
                     {step.title}
                   </span>
                   {index < steps.length - 1 && (
                     <div className={`flex-1 h-px mx-6 ${
-                      currentStep > step.number ? 'bg-gmg-green-600' : 'bg-gray-300'
+                      currentStep > step.number ? 'bg-green-600' : 'bg-gray-300'
                     }`} />
                   )}
                 </div>
@@ -1180,12 +1110,10 @@ const loadHOAProperties = async () => {
           </div>
         </div>
 
-
         {/* Form Content */}
         <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-8 mb-6">
           {renderStepContent()}
         </div>
-
 
         {/* Navigation Buttons */}
         <div className="flex justify-between">
@@ -1206,7 +1134,7 @@ const loadHOAProperties = async () => {
                 (currentStep === 3 && (!formData.buyerName || !formData.sellerName || !formData.salePrice)) ||
                 (currentStep === 4 && !formData.paymentMethod)
               }
-              className="px-6 py-3 bg-gmg-green-700 text-white rounded-lg hover:bg-gmg-green-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
+              className="px-6 py-3 bg-green-700 text-white rounded-lg hover:bg-green-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
             >
               Continue
               <FileText className="h-4 w-4" />
@@ -1214,7 +1142,7 @@ const loadHOAProperties = async () => {
           ) : (
             <button
               onClick={submitApplication}
-              className="px-8 py-3 bg-gmg-green-700 text-white rounded-lg hover:bg-gmg-green-800 transition-colors flex items-center gap-2"
+              className="px-8 py-3 bg-green-700 text-white rounded-lg hover:bg-green-800 transition-colors flex items-center gap-2"
             >
               <CheckCircle className="h-5 w-5" />
               Submit Application & Pay ${calculateTotal()}
@@ -1223,9 +1151,60 @@ const loadHOAProperties = async () => {
         </div>
       </div>
 
-
       {/* Auth Modal */}
       {showAuthModal && <AuthModal />}
     </div>
   );
 }
+            value={formData.submitterPhone}
+            onChange={(e) => handleInputChange('submitterPhone', e.target.value)}
+            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+            placeholder="(555) 123-4567"
+          />
+        </div>
+      </div>
+
+      {formData.submitterType === 'realtor' && (
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-2">Virginia Real Estate License Number *</label>
+          <input
+            type="text"
+            value={formData.realtorLicense}
+            onChange={(e) => handleInputChange('realtorLicense', e.target.value)}
+            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+            placeholder="License #"
+          />
+        </div>
+      )}
+    </div>
+  );
+
+  const TransactionDetailsStep = () => (
+    <div className="space-y-6">
+      <div className="text-center mb-8">
+        <h3 className="text-2xl font-bold text-green-900 mb-2">Transaction Details</h3>
+        <p className="text-gray-600">Information about the buyer, seller, and sale details</p>
+      </div>
+
+      <div className="bg-blue-50 p-6 rounded-lg border border-blue-200">
+        <h4 className="font-semibold text-blue-900 mb-4 flex items-center">
+          <User className="h-5 w-5 mr-2" />
+          Buyer Information
+        </h4>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <input
+            type="text"
+            placeholder="Buyer Full Name *"
+            value={formData.buyerName}
+            onChange={(e) => handleInputChange('buyerName', e.target.value)}
+            className="px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+          />
+          <input
+            type="email"
+            placeholder="Buyer Email *"
+            value={formData.buyerEmail}
+            onChange={(e) => handleInputChange('buyerEmail', e.target.value)}
+            className="px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+          />
+          <input
+            type="tel"
