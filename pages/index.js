@@ -232,13 +232,6 @@ export default function GMGResaleFlow() {
     setCurrentStep(0);
   }, []);
 
-  const calculateTotal = () => {
-    let total = 317.95;
-    if (formData.packageType === 'rush') total += 70.66;
-    if (formData.paymentMethod === 'credit_card') total += 9.95;
-    return total;
-  };
-
   // Test component to isolate input issue
   if (currentStep === 99) {
     return (
