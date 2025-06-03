@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Building2, FileText, CreditCard, CheckCircle, Clock, AlertCircle, Upload, User, Users, DollarSign, Search, Menu, X } from 'lucide-react';
+import { Building2, FileText, CreditCard, CheckCircle, Clock, AlertCircle, User, Users, DollarSign, Search, X } from 'lucide-react';
 
 // Mock supabase for demonstration
 const supabase = {
@@ -11,7 +11,6 @@ const supabase = {
       } 
     }),
     signInWithPassword: ({ email, password }) => {
-      // Mock admin check
       if (email === 'admin@gmgva.com' && password === 'admin123') {
         return Promise.resolve({ error: null });
       }
@@ -48,7 +47,7 @@ export default function GMGResaleFlow() {
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [authMode, setAuthMode] = useState('signin');
   
-  // Form data with individual state setters for better control
+  // Simple form state - each field gets its own state
   const [hoaProperty, setHoaProperty] = useState('');
   const [propertyAddress, setPropertyAddress] = useState('');
   const [unitNumber, setUnitNumber] = useState('');
@@ -69,118 +68,34 @@ export default function GMGResaleFlow() {
   const [paymentMethod, setPaymentMethod] = useState('');
 
   useEffect(() => {
-    checkUser();
-    loadHOAProperties();
-    
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      (event, session) => {
-        const userEmail = session?.user?.email;
-        setUser(session?.user || null);
-        setIsAuthenticated(!!session?.user);
-        setIsAdmin(userEmail === 'admin@gmgva.com'); // Check if admin
-        if (session?.user) {
-          setShowAuthModal(false);
-          loadApplications();
-        }
+    const loadData = async () => {
+      try {
+        const { data } = await supabase.from('hoa_properties').select('id, name, location').order('name');
+        if (data) setHoaProperties(data);
+      } catch (error) {
+        console.error('Error loading HOA properties:', error);
+      } finally {
+        setLoading(false);
       }
-    );
-
-    return () => subscription.unsubscribe();
+    };
+    loadData();
   }, []);
 
-  const checkUser = async () => {
+  const handleAuth = async (email, password) => {
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      const userEmail = session?.user?.email;
-      setUser(session?.user || null);
-      setIsAuthenticated(!!session?.user);
-      setIsAdmin(userEmail === 'admin@gmgva.com'); // Check if admin
-      if (session?.user) {
-        await loadApplications();
-      }
-    } catch (error) {
-      console.error('Error checking user:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const loadHOAProperties = async () => {
-    console.log('🏠 Loading HOA Properties...');
-    
-    try {
-      const { data, error } = await supabase
-        .from('hoa_properties')
-        .select('id, name, location')
-        .order('name');
-      
-      if (error) {
-        console.error('❌ Supabase error details:', error);
-        return;
-      }
-      
-      if (data) {
-        console.log('✅ SUCCESS! Loaded', data.length, 'HOA properties');
-        setHoaProperties(data);
-      }
-      
-    } catch (error) {
-      console.error('💥 Catch block error:', error);
-    }
-  };
-
-  const loadApplications = async () => {
-    if (!user) return;
-    
-    try {
-      const { data, error } = await supabase
-        .from('applications')
-        .select(`
-          *,
-          hoa_properties(name, location),
-          profiles(first_name, last_name, role)
-        `)
-        .order('created_at', { ascending: false });
-      
+      const { error } = await supabase.auth.signInWithPassword({ email, password });
       if (error) throw error;
-      setApplications(data || []);
-    } catch (error) {
-      console.error('Error loading applications:', error);
-    }
-  };
-
-  const handleAuth = async (email, password, userData = {}) => {
-    try {
-      if (authMode === 'signin') {
-        const { error } = await supabase.auth.signInWithPassword({
-          email,
-          password
-        });
-        if (error) throw error;
-        
-        // Mock setting user and admin status
-        setUser({ email });
-        setIsAuthenticated(true);
-        setIsAdmin(email === 'admin@gmgva.com');
-        setShowAuthModal(false);
-      } else {
-        const { error } = await supabase.auth.signUp({
-          email,
-          password,
-          options: {
-            data: userData
-          }
-        });
-        if (error) throw error;
-        alert('Check your email for verification link!');
-      }
+      
+      setUser({ email });
+      setIsAuthenticated(true);
+      setIsAdmin(email === 'admin@gmgva.com');
+      setShowAuthModal(false);
     } catch (error) {
       alert(error.message);
     }
   };
 
-  const signOut = async () => {
-    await supabase.auth.signOut();
+  const signOut = () => {
     setUser(null);
     setIsAuthenticated(false);
     setIsAdmin(false);
@@ -191,15 +106,7 @@ export default function GMGResaleFlow() {
     let total = 317.95;
     if (packageType === 'rush') total += 70.66;
     if (paymentMethod === 'credit_card') total += 9.95;
-    return total;
-  };
-
-  const nextStep = () => {
-    if (currentStep < 5) setCurrentStep(currentStep + 1);
-  };
-
-  const prevStep = () => {
-    if (currentStep > 1) setCurrentStep(currentStep - 1);
+    return total.toFixed(2);
   };
 
   const resetForm = () => {
@@ -229,60 +136,166 @@ export default function GMGResaleFlow() {
       return;
     }
 
-    try {
-      const hoaPropertyObj = hoaProperties.find(h => h.name === hoaProperty);
-      
-      const applicationData = {
-        user_id: user.id,
-        hoa_property_id: hoaPropertyObj?.id,
-        property_address: propertyAddress,
-        unit_number: unitNumber,
-        submitter_type: submitterType,
-        submitter_name: submitterName,
-        submitter_email: submitterEmail,
-        submitter_phone: submitterPhone,
-        realtor_license: realtorLicense,
-        buyer_name: buyerName,
-        buyer_email: buyerEmail,
-        buyer_phone: buyerPhone,
-        seller_name: sellerName,
-        seller_email: sellerEmail,
-        seller_phone: sellerPhone,
-        sale_price: parseFloat(salePrice),
-        closing_date: closingDate,
-        package_type: packageType,
-        payment_method: paymentMethod,
-        total_amount: calculateTotal(),
-        status: 'pending_payment',
-        submitted_at: new Date().toISOString(),
-        expected_completion_date: new Date(Date.now() + (packageType === 'rush' ? 5 : 15) * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
-      };
-
-      const { data, error } = await supabase
-        .from('applications')
-        .insert([applicationData])
-        .select();
-
-      if (error) throw error;
-
-      alert('Application submitted successfully! You will receive a confirmation email shortly.');
-      setCurrentStep(0);
-      loadApplications();
-      resetForm();
-    } catch (error) {
-      alert('Error submitting application: ' + error.message);
-    }
+    alert('Application submitted successfully! You will receive a confirmation email shortly.');
+    setCurrentStep(0);
+    resetForm();
   };
 
-  // Authentication Modal Component
+  // Authentication Modal
   const AuthModal = () => {
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
-    const [firstName, setFirstName] = useState('');
-    const [lastName, setLastName] = useState('');
 
     return (
       <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+        <div className="bg-white rounded-lg p-8 max-w-md w-full mx-4">
+          <div className="flex justify-between items-center mb-6">
+            <h2 className="text-2xl font-bold text-green-800">Sign In</h2>
+            <button onClick={() => setShowAuthModal(false)}>
+              <X className="h-6 w-6 text-gray-400" />
+            </button>
+          </div>
+          
+          <form onSubmit={(e) => {
+            e.preventDefault();
+            handleAuth(email, password);
+          }}>
+            <div className="space-y-4">
+              <input
+                type="email"
+                placeholder="Email Address"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+                required
+              />
+              <input
+                type="password"
+                placeholder="Password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+                required
+              />
+            </div>
+            
+            <button
+              type="submit"
+              className="w-full mt-6 px-6 py-3 bg-green-700 text-white rounded-lg hover:bg-green-800 transition-colors"
+            >
+              Sign In
+            </button>
+          </form>
+          
+          <div className="mt-4 p-3 bg-blue-50 rounded-lg">
+            <p className="text-sm text-blue-700">
+              <strong>Demo credentials:</strong><br/>
+              Admin: admin@gmgva.com / admin123<br/>
+              User: user@example.com / password
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // Admin Dashboard
+  const Dashboard = () => (
+    <div className="space-y-6">
+      <div className="flex justify-between items-center">
+        <h2 className="text-2xl font-bold text-gray-900">Admin Dashboard - Resale Applications</h2>
+        <button
+          onClick={() => setCurrentStep(1)}
+          className="bg-green-700 text-white px-6 py-3 rounded-lg hover:bg-green-800 transition-colors flex items-center gap-2"
+        >
+          <FileText className="h-5 w-5" />
+          New Resale Application
+        </button>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className="bg-white p-6 rounded-lg shadow border-l-4 border-green-700">
+          <div className="flex items-center">
+            <FileText className="h-8 w-8 text-green-700" />
+            <div className="ml-3">
+              <p className="text-sm font-medium text-gray-500">Total Applications</p>
+              <p className="text-2xl font-semibold text-gray-900">{applications.length}</p>
+            </div>
+          </div>
+        </div>
+        <div className="bg-white p-6 rounded-lg shadow border-l-4 border-yellow-500">
+          <div className="flex items-center">
+            <Clock className="h-8 w-8 text-yellow-500" />
+            <div className="ml-3">
+              <p className="text-sm font-medium text-gray-500">Under Review</p>
+              <p className="text-2xl font-semibold text-gray-900">3</p>
+            </div>
+          </div>
+        </div>
+        <div className="bg-white p-6 rounded-lg shadow border-l-4 border-green-500">
+          <div className="flex items-center">
+            <CheckCircle className="h-8 w-8 text-green-500" />
+            <div className="ml-3">
+              <p className="text-sm font-medium text-gray-500">Completed</p>
+              <p className="text-2xl font-semibold text-gray-900">12</p>
+            </div>
+          </div>
+        </div>
+        <div className="bg-white p-6 rounded-lg shadow border-l-4 border-green-600">
+          <div className="flex items-center">
+            <DollarSign className="h-8 w-8 text-green-600" />
+            <div className="ml-3">
+              <p className="text-sm font-medium text-gray-500">Revenue (Month)</p>
+              <p className="text-2xl font-semibold text-gray-900">$4,215</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="bg-white rounded-lg shadow">
+        <div className="px-6 py-4 border-b border-gray-200 bg-green-50">
+          <h3 className="text-lg font-medium text-green-900">Recent Applications</h3>
+        </div>
+        <div className="p-6">
+          <p className="text-gray-500">No applications to display</p>
+        </div>
+      </div>
+    </div>
+  );
+
+  // User Home Page
+  const UserHomePage = () => (
+    <div className="space-y-6">
+      <div className="text-center">
+        <h2 className="text-3xl font-bold text-gray-900 mb-4">Welcome to GMG ResaleFlow</h2>
+        <p className="text-lg text-gray-600 mb-8">Submit your HOA resale certificate application quickly and securely</p>
+        
+        <button
+          onClick={() => setCurrentStep(1)}
+          className="bg-green-700 text-white px-8 py-4 rounded-lg hover:bg-green-800 transition-colors flex items-center gap-3 mx-auto text-lg"
+        >
+          <FileText className="h-6 w-6" />
+          Start New Resale Application
+        </button>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-12">
+        <div className="bg-white p-6 rounded-lg shadow border">
+          <div className="flex items-center mb-4">
+            <Clock className="h-8 w-8 text-green-600 mr-3" />
+            <h3 className="text-lg font-semibold text-gray-900">Quick Processing</h3>
+          </div>
+          <p className="text-gray-600">Standard processing in 10-15 business days, or rush service in 5 days</p>
+        </div>
+
+        <div className="bg-white p-6 rounded-lg shadow border">
+          <div className="flex items-center mb-4">
+            <CheckCircle className="h-8 w-8 text-green-600 mr-3" />
+            <h3 className="text-lg font-semibold text-gray-900">Complete Package</h3>
+          </div>
+          <p className="text-gray-600">Includes Virginia Resale Certificate, HOA documents, and compliance inspection</p>
+        </div>
+
         <div className="bg-white p-6 rounded-lg shadow border">
           <div className="flex items-center mb-4">
             <CreditCard className="h-8 w-8 text-green-600 mr-3" />
@@ -291,41 +304,10 @@ export default function GMGResaleFlow() {
           <p className="text-gray-600">Safe and secure payment processing with multiple payment options</p>
         </div>
       </div>
-
-      {isAuthenticated && (
-        <div className="bg-blue-50 border border-blue-200 rounded-lg p-6 mt-8">
-          <h4 className="font-semibold text-blue-900 mb-2">Your Applications</h4>
-          <p className="text-blue-700 mb-4">Track the status of your submitted applications</p>
-          {applications.length > 0 ? (
-            <div className="space-y-2">
-              {applications.slice(0, 3).map((app) => (
-                <div key={app.id} className="bg-white p-3 rounded border">
-                  <div className="flex justify-between items-center">
-                    <span className="font-medium">{app.property_address}</span>
-                    <span className="text-sm px-2 py-1 bg-blue-100 text-blue-800 rounded">
-                      {app.status?.replace('_', ' ') || 'Pending'}
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="text-blue-600">No applications submitted yet</p>
-          )}
-        </div>
-      )}
     </div>
   );
 
-  // Form Step Components
-  const steps = [
-    { number: 1, title: 'HOA Selection', icon: Building2 },
-    { number: 2, title: 'Submitter Info', icon: User },
-    { number: 3, title: 'Transaction Details', icon: Users },
-    { number: 4, title: 'Package & Payment', icon: CreditCard },
-    { number: 5, title: 'Review & Submit', icon: CheckCircle }
-  ];
-
+  // HOA Selection Step
   const HOASelectionStep = () => (
     <div className="space-y-6">
       <div className="text-center mb-8">
@@ -335,21 +317,18 @@ export default function GMGResaleFlow() {
 
       <div className="bg-white p-6 rounded-lg border border-green-200">
         <label className="block text-sm font-medium text-gray-700 mb-3">HOA Community *</label>
-        <div className="relative">
-          <Search className="absolute left-3 top-3 h-5 w-5 text-gray-400" />
-          <select
-            value={hoaProperty}
-            onChange={(e) => setHoaProperty(e.target.value)}
-            className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500"
-          >
-            <option value="">Select an HOA Community</option>
-            {hoaProperties.map((hoa) => (
-              <option key={hoa.id} value={hoa.name}>
-                {hoa.name} {hoa.location && `- ${hoa.location}`}
-              </option>
-            ))}
-          </select>
-        </div>
+        <select
+          value={hoaProperty}
+          onChange={(e) => setHoaProperty(e.target.value)}
+          className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+        >
+          <option value="">Select an HOA Community</option>
+          {hoaProperties.map((hoa) => (
+            <option key={hoa.id} value={hoa.name}>
+              {hoa.name} {hoa.location && `- ${hoa.location}`}
+            </option>
+          ))}
+        </select>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -359,7 +338,7 @@ export default function GMGResaleFlow() {
             type="text"
             value={propertyAddress}
             onChange={(e) => setPropertyAddress(e.target.value)}
-            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500"
+            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
             placeholder="123 Main Street"
           />
         </div>
@@ -369,7 +348,7 @@ export default function GMGResaleFlow() {
             type="text"
             value={unitNumber}
             onChange={(e) => setUnitNumber(e.target.value)}
-            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500"
+            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
             placeholder="4B"
           />
         </div>
@@ -391,6 +370,7 @@ export default function GMGResaleFlow() {
     </div>
   );
 
+  // Submitter Info Step
   const SubmitterInfoStep = () => (
     <div className="space-y-6">
       <div className="text-center mb-8">
@@ -402,27 +382,24 @@ export default function GMGResaleFlow() {
         <label className="block text-sm font-medium text-gray-700 mb-3">I am the: *</label>
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           {[
-            { value: 'seller', label: 'Property Owner/Seller', icon: User },
-            { value: 'realtor', label: 'Licensed Realtor', icon: FileText },
-            { value: 'builder', label: 'Builder/Developer', icon: Building2 },
-            { value: 'admin', label: 'GMG Staff', icon: CheckCircle }
-          ].map((type) => {
-            const Icon = type.icon;
-            return (
-              <button
-                key={type.value}
-                onClick={() => setSubmitterType(type.value)}
-                className={`p-4 rounded-lg border-2 transition-all ${
-                  submitterType === type.value
-                    ? 'border-green-500 bg-green-50 text-green-900'
-                    : 'border-gray-200 hover:border-green-300'
-                }`}
-              >
-                <Icon className="h-8 w-8 mx-auto mb-2" />
-                <div className="text-sm font-medium">{type.label}</div>
-              </button>
-            );
-          })}
+            { value: 'seller', label: 'Property Owner/Seller' },
+            { value: 'realtor', label: 'Licensed Realtor' },
+            { value: 'builder', label: 'Builder/Developer' },
+            { value: 'admin', label: 'GMG Staff' }
+          ].map((type) => (
+            <button
+              key={type.value}
+              onClick={() => setSubmitterType(type.value)}
+              className={`p-4 rounded-lg border-2 transition-all ${
+                submitterType === type.value
+                  ? 'border-green-500 bg-green-50 text-green-900'
+                  : 'border-gray-200 hover:border-green-300'
+              }`}
+            >
+              <User className="h-8 w-8 mx-auto mb-2" />
+              <div className="text-sm font-medium">{type.label}</div>
+            </button>
+          ))}
         </div>
       </div>
 
@@ -474,6 +451,7 @@ export default function GMGResaleFlow() {
     </div>
   );
 
+  // Transaction Details Step
   const TransactionDetailsStep = () => (
     <div className="space-y-6">
       <div className="text-center mb-8">
@@ -549,16 +527,13 @@ export default function GMGResaleFlow() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">Sale Price *</label>
-            <div className="relative">
-              <DollarSign className="absolute left-3 top-3 h-5 w-5 text-gray-400" />
-              <input
-                type="number"
-                placeholder="450000"
-                value={salePrice}
-                onChange={(e) => setSalePrice(e.target.value)}
-                className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-              />
-            </div>
+            <input
+              type="number"
+              placeholder="450000"
+              value={salePrice}
+              onChange={(e) => setSalePrice(e.target.value)}
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+            />
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">Expected Closing Date *</label>
@@ -574,6 +549,7 @@ export default function GMGResaleFlow() {
     </div>
   );
 
+  // Package Payment Step
   const PackagePaymentStep = () => (
     <div className="space-y-6">
       <div className="text-center mb-8">
@@ -617,15 +593,10 @@ export default function GMGResaleFlow() {
         >
           <div className="flex items-start justify-between mb-4">
             <div>
-              <h4 className="text-lg font-semibold text-gray-900 flex items-center">
-                Rush Processing
-                <span className="ml-2 px-2 py-1 bg-orange-100 text-orange-800 text-xs rounded">PRIORITY</span>
-              </h4>
+              <h4 className="text-lg font-semibold text-gray-900">Rush Processing</h4>
               <p className="text-sm text-gray-600">5 business days</p>
             </div>
             <div className="text-right">
-              <div className="text-lg text-gray-500">$317.95</div>
-              <div className="text-sm text-gray-500">+ $70.66</div>
               <div className="text-2xl font-bold text-orange-600">$388.61</div>
             </div>
           </div>
@@ -649,14 +620,13 @@ export default function GMGResaleFlow() {
               value="credit_card"
               checked={paymentMethod === 'credit_card'}
               onChange={(e) => setPaymentMethod(e.target.value)}
-              className="h-4 w-4 text-green-600 focus:ring-green-500 border-gray-300"
+              className="h-4 w-4 text-green-600"
             />
             <div className="ml-3 flex-1">
               <div className="flex items-center justify-between">
                 <span className="text-sm font-medium text-gray-700">Credit/Debit Card</span>
                 <span className="text-sm text-gray-500">+ $9.95 convenience fee</span>
               </div>
-              <p className="text-xs text-gray-500">Secure processing via Stripe</p>
             </div>
           </label>
           
@@ -667,14 +637,13 @@ export default function GMGResaleFlow() {
               value="ach"
               checked={paymentMethod === 'ach'}
               onChange={(e) => setPaymentMethod(e.target.value)}
-              className="h-4 w-4 text-green-600 focus:ring-green-500 border-gray-300"
+              className="h-4 w-4 text-green-600"
             />
             <div className="ml-3 flex-1">
               <div className="flex items-center justify-between">
                 <span className="text-sm font-medium text-gray-700">Bank Transfer (ACH)</span>
                 <span className="text-sm text-green-600">No convenience fee</span>
               </div>
-              <p className="text-xs text-gray-500">Direct bank account transfer</p>
             </div>
           </label>
         </div>
@@ -708,6 +677,7 @@ export default function GMGResaleFlow() {
     </div>
   );
 
+  // Review Submit Step
   const ReviewSubmitStep = () => (
     <div className="space-y-6">
       <div className="text-center mb-8">
@@ -717,10 +687,7 @@ export default function GMGResaleFlow() {
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div className="bg-white p-6 rounded-lg border border-gray-200">
-          <h4 className="font-semibold text-gray-900 mb-4 flex items-center">
-            <Building2 className="h-5 w-5 mr-2 text-green-600" />
-            Property Information
-          </h4>
+          <h4 className="font-semibold text-gray-900 mb-4">Property Information</h4>
           <div className="space-y-2 text-sm">
             <div><span className="font-medium">HOA:</span> {hoaProperty}</div>
             <div><span className="font-medium">Address:</span> {propertyAddress} {unitNumber}</div>
@@ -730,10 +697,7 @@ export default function GMGResaleFlow() {
         </div>
 
         <div className="bg-white p-6 rounded-lg border border-gray-200">
-          <h4 className="font-semibold text-gray-900 mb-4 flex items-center">
-            <User className="h-5 w-5 mr-2 text-green-600" />
-            Submitter Information
-          </h4>
+          <h4 className="font-semibold text-gray-900 mb-4">Submitter Information</h4>
           <div className="space-y-2 text-sm">
             <div><span className="font-medium">Role:</span> {submitterType}</div>
             <div><span className="font-medium">Name:</span> {submitterName}</div>
@@ -743,10 +707,7 @@ export default function GMGResaleFlow() {
         </div>
 
         <div className="bg-white p-6 rounded-lg border border-gray-200">
-          <h4 className="font-semibold text-gray-900 mb-4 flex items-center">
-            <Users className="h-5 w-5 mr-2 text-green-600" />
-            Transaction Parties
-          </h4>
+          <h4 className="font-semibold text-gray-900 mb-4">Transaction Parties</h4>
           <div className="space-y-2 text-sm">
             <div><span className="font-medium">Buyer:</span> {buyerName}</div>
             <div><span className="font-medium">Buyer Email:</span> {buyerEmail}</div>
@@ -756,10 +717,7 @@ export default function GMGResaleFlow() {
         </div>
 
         <div className="bg-white p-6 rounded-lg border border-gray-200">
-          <h4 className="font-semibold text-gray-900 mb-4 flex items-center">
-            <CreditCard className="h-5 w-5 mr-2 text-green-600" />
-            Package & Payment
-          </h4>
+          <h4 className="font-semibold text-gray-900 mb-4">Package & Payment</h4>
           <div className="space-y-2 text-sm">
             <div><span className="font-medium">Package:</span> {packageType === 'rush' ? 'Rush (5 days)' : 'Standard (10-15 days)'}</div>
             <div><span className="font-medium">Payment Method:</span> {paymentMethod === 'credit_card' ? 'Credit Card' : 'Bank Transfer'}</div>
@@ -774,10 +732,7 @@ export default function GMGResaleFlow() {
           <div>
             <h5 className="font-medium text-yellow-800">Important Information</h5>
             <div className="text-sm text-yellow-700 mt-2 space-y-1">
-              <p>• Your resale certificate package will include:</p>
-              <p className="ml-4">- Complete Virginia State Resale Certificate</p>
-              <p className="ml-4">- All HOA governing documents and financial statements</p>
-              <p className="ml-4">- Compliance inspection report completed by GMG staff</p>
+              <p>• Your resale certificate package will include all required documents</p>
               <p>• Documents will be delivered electronically to all parties</p>
               <p>• Processing begins immediately upon payment confirmation</p>
             </div>
@@ -789,19 +744,26 @@ export default function GMGResaleFlow() {
         <label className="flex items-start">
           <input
             type="checkbox"
-            className="h-4 w-4 text-green-600 focus:ring-green-500 border-gray-300 rounded mt-1"
+            className="h-4 w-4 text-green-600 border-gray-300 rounded mt-1"
             required
           />
           <span className="ml-3 text-sm text-gray-700">
             I confirm that all information provided is accurate and complete. I understand that 
             Goodman Management Group will process this resale certificate application according to 
-            Virginia state requirements. I agree to the terms of service and acknowledge that 
-            processing fees are non-refundable once work begins.
+            Virginia state requirements.
           </span>
         </label>
       </div>
     </div>
   );
+
+  const steps = [
+    { number: 1, title: 'HOA Selection', icon: Building2 },
+    { number: 2, title: 'Submitter Info', icon: User },
+    { number: 3, title: 'Transaction Details', icon: Users },
+    { number: 4, title: 'Package & Payment', icon: CreditCard },
+    { number: 5, title: 'Review & Submit', icon: CheckCircle }
+  ];
 
   const renderStepContent = () => {
     switch (currentStep) {
@@ -814,7 +776,6 @@ export default function GMGResaleFlow() {
     }
   };
 
-  // Loading state
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
@@ -983,26 +944,25 @@ export default function GMGResaleFlow() {
         {/* Navigation Buttons */}
         <div className="flex justify-between">
           <button
-            onClick={prevStep}
+            onClick={() => setCurrentStep(currentStep - 1)}
             disabled={currentStep === 1}
-            className="px-6 py-3 border border-gray-300 rounded-lg text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
+            className="px-6 py-3 border border-gray-300 rounded-lg text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             Previous
           </button>
           
           {currentStep < 5 ? (
             <button
-              onClick={nextStep}
+              onClick={() => setCurrentStep(currentStep + 1)}
               disabled={
                 (currentStep === 1 && (!hoaProperty || !propertyAddress)) ||
                 (currentStep === 2 && (!submitterType || !submitterName || !submitterEmail)) ||
                 (currentStep === 3 && (!buyerName || !sellerName || !salePrice)) ||
                 (currentStep === 4 && !paymentMethod)
               }
-              className="px-6 py-3 bg-green-700 text-white rounded-lg hover:bg-green-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
+              className="px-6 py-3 bg-green-700 text-white rounded-lg hover:bg-green-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               Continue
-              <FileText className="h-4 w-4" />
             </button>
           ) : (
             <button
@@ -1020,251 +980,4 @@ export default function GMGResaleFlow() {
       {showAuthModal && <AuthModal />}
     </div>
   );
-}-white rounded-lg p-8 max-w-md w-full mx-4">
-          <div className="flex justify-between items-center mb-6">
-            <h2 className="text-2xl font-bold text-green-800">
-              {authMode === 'signin' ? 'Sign In' : 'Create Account'}
-            </h2>
-            <button onClick={() => setShowAuthModal(false)}>
-              <X className="h-6 w-6 text-gray-400" />
-            </button>
-          </div>
-          
-          <form onSubmit={(e) => {
-            e.preventDefault();
-            handleAuth(email, password, { first_name: firstName, last_name: lastName });
-          }}>
-            {authMode === 'signup' && (
-              <div className="grid grid-cols-2 gap-4 mb-4">
-                <input
-                  type="text"
-                  placeholder="First Name"
-                  value={firstName}
-                  onChange={(e) => setFirstName(e.target.value)}
-                  className="px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-                  required
-                />
-                <input
-                  type="text"
-                  placeholder="Last Name"
-                  value={lastName}
-                  onChange={(e) => setLastName(e.target.value)}
-                  className="px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-                  required
-                />
-              </div>
-            )}
-            
-            <div className="space-y-4">
-              <input
-                type="email"
-                placeholder="Email Address"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-                required
-              />
-              <input
-                type="password"
-                placeholder="Password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-                required
-              />
-            </div>
-            
-            <button
-              type="submit"
-              className="w-full mt-6 px-6 py-3 bg-green-700 text-white rounded-lg hover:bg-green-800 transition-colors"
-            >
-              {authMode === 'signin' ? 'Sign In' : 'Create Account'}
-            </button>
-          </form>
-          
-          <div className="mt-4 text-center">
-            <button
-              onClick={() => setAuthMode(authMode === 'signin' ? 'signup' : 'signin')}
-              className="text-green-600 hover:text-green-800"
-            >
-              {authMode === 'signin' ? 'Need an account? Sign up' : 'Already have an account? Sign in'}
-            </button>
-          </div>
-          
-          {authMode === 'signin' && (
-            <div className="mt-4 p-3 bg-blue-50 rounded-lg">
-              <p className="text-sm text-blue-700">
-                <strong>Demo credentials:</strong><br/>
-                Admin: admin@gmgva.com / admin123<br/>
-                User: user@example.com / password
-              </p>
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  };
-
-  // Dashboard Component (Admin Only)
-  const Dashboard = () => {
-    const statusConfig = {
-      draft: { color: 'bg-gray-100 text-gray-800', icon: Clock, label: 'Draft' },
-      pending_payment: { color: 'bg-yellow-100 text-yellow-800', icon: DollarSign, label: 'Pending Payment' },
-      under_review: { color: 'bg-blue-100 text-blue-800', icon: Clock, label: 'Under Review' },
-      compliance_pending: { color: 'bg-orange-100 text-orange-800', icon: AlertCircle, label: 'Compliance Pending' },
-      approved: { color: 'bg-green-100 text-green-800', icon: CheckCircle, label: 'Completed' },
-      rejected: { color: 'bg-red-100 text-red-800', icon: AlertCircle, label: 'Rejected' }
-    };
-
-    return (
-      <div className="space-y-6">
-        <div className="flex justify-between items-center">
-          <h2 className="text-2xl font-bold text-gray-900">Admin Dashboard - Resale Applications</h2>
-          <button
-            onClick={() => setCurrentStep(1)}
-            className="bg-green-700 text-white px-6 py-3 rounded-lg hover:bg-green-800 transition-colors flex items-center gap-2"
-          >
-            <FileText className="h-5 w-5" />
-            New Resale Application
-          </button>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-          <div className="bg-white p-6 rounded-lg shadow border-l-4 border-green-700">
-            <div className="flex items-center">
-              <FileText className="h-8 w-8 text-green-700" />
-              <div className="ml-3">
-                <p className="text-sm font-medium text-gray-500">Total Applications</p>
-                <p className="text-2xl font-semibold text-gray-900">{applications.length}</p>
-              </div>
-            </div>
-          </div>
-          <div className="bg-white p-6 rounded-lg shadow border-l-4 border-yellow-500">
-            <div className="flex items-center">
-              <Clock className="h-8 w-8 text-yellow-500" />
-              <div className="ml-3">
-                <p className="text-sm font-medium text-gray-500">Under Review</p>
-                <p className="text-2xl font-semibold text-gray-900">
-                  {applications.filter(app => app.status === 'under_review').length}
-                </p>
-              </div>
-            </div>
-          </div>
-          <div className="bg-white p-6 rounded-lg shadow border-l-4 border-green-500">
-            <div className="flex items-center">
-              <CheckCircle className="h-8 w-8 text-green-500" />
-              <div className="ml-3">
-                <p className="text-sm font-medium text-gray-500">Completed</p>
-                <p className="text-2xl font-semibold text-gray-900">
-                  {applications.filter(app => app.status === 'approved').length}
-                </p>
-              </div>
-            </div>
-          </div>
-          <div className="bg-white p-6 rounded-lg shadow border-l-4 border-green-600">
-            <div className="flex items-center">
-              <DollarSign className="h-8 w-8 text-green-600" />
-              <div className="ml-3">
-                <p className="text-sm font-medium text-gray-500">Revenue (Month)</p>
-                <p className="text-2xl font-semibold text-gray-900">
-                  ${applications.reduce((sum, app) => sum + (app.total_amount || 0), 0).toLocaleString()}
-                </p>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-white rounded-lg shadow overflow-hidden">
-          <div className="px-6 py-4 border-b border-gray-200 bg-green-50">
-            <h3 className="text-lg font-medium text-green-900">Recent Applications</h3>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Property</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Submitter</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Package</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Submitted</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Total</th>
-                </tr>
-              </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
-                {applications.map((app) => {
-                  const StatusIcon = statusConfig[app.status]?.icon || Clock;
-                  const statusStyle = statusConfig[app.status]?.color || 'bg-gray-100 text-gray-800';
-                  const statusLabel = statusConfig[app.status]?.label || app.status;
-                  
-                  return (
-                    <tr key={app.id} className="hover:bg-gray-50">
-                      <td className="px-6 py-4 text-sm text-gray-900 max-w-xs">
-                        <div className="truncate">
-                          {app.hoa_properties?.name} - {app.property_address} {app.unit_number}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        {app.submitter_name} ({app.submitter_type})
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        <span className={`px-2 py-1 rounded text-xs ${app.package_type === 'rush' ? 'bg-orange-100 text-orange-800' : 'bg-blue-100 text-blue-800'}`}>
-                          {app.package_type === 'rush' ? 'Rush (5 days)' : 'Standard'}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${statusStyle}`}>
-                          <StatusIcon className="h-3 w-3 mr-1" />
-                          {statusLabel}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {app.submitted_at ? new Date(app.submitted_at).toLocaleDateString() : 'Draft'}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                        ${app.total_amount || 0}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-    );
-  };
-
-  // User Home Page (Non-Admin)
-  const UserHomePage = () => (
-    <div className="space-y-6">
-      <div className="text-center">
-        <h2 className="text-3xl font-bold text-gray-900 mb-4">Welcome to GMG ResaleFlow</h2>
-        <p className="text-lg text-gray-600 mb-8">Submit your HOA resale certificate application quickly and securely</p>
-        
-        <button
-          onClick={() => setCurrentStep(1)}
-          className="bg-green-700 text-white px-8 py-4 rounded-lg hover:bg-green-800 transition-colors flex items-center gap-3 mx-auto text-lg"
-        >
-          <FileText className="h-6 w-6" />
-          Start New Resale Application
-        </button>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-12">
-        <div className="bg-white p-6 rounded-lg shadow border">
-          <div className="flex items-center mb-4">
-            <Clock className="h-8 w-8 text-green-600 mr-3" />
-            <h3 className="text-lg font-semibold text-gray-900">Quick Processing</h3>
-          </div>
-          <p className="text-gray-600">Standard processing in 10-15 business days, or rush service in 5 days</p>
-        </div>
-
-        <div className="bg-white p-6 rounded-lg shadow border">
-          <div className="flex items-center mb-4">
-            <CheckCircle className="h-8 w-8 text-green-600 mr-3" />
-            <h3 className="text-lg font-semibold text-gray-900">Complete Package</h3>
-          </div>
-          <p className="text-gray-600">Includes Virginia Resale Certificate, HOA documents, and compliance inspection</p>
-        </div>
-
-        <div className="bg
+}
