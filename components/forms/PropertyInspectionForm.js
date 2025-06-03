@@ -11,21 +11,22 @@ const PropertyInspectionForm = ({
 }) => {
   const [formData, setFormData] = useState({
     association: propertyName,
-    primaryContact: initialData.primaryContact || '',
-    signatureContact: initialData.signatureContact || '',
-    inspectionDate: initialData.inspectionDate || '',
-    inspectionTime: initialData.inspectionTime || '',
-    inspectorName: initialData.inspectorName || '',
-    approvedModifications: initialData.approvedModifications || '',
-    covenantViolations: initialData.covenantViolations || '',
-    generalComments: initialData.generalComments || '',
-    status: initialData.status || 'sent'
+    primaryContact: '',
+    signatureContact: '',
+    inspectionDate: '',
+    inspectionTime: '',
+    inspectorName: '',
+    approvedModifications: '',
+    covenantViolations: '',
+    generalComments: '',
+    status: 'sent'
   });
 
   const [isSaving, setIsSaving] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
+  const [isLoading, setIsLoading] = useState(true);
 
   const supabase = createClientComponentClient();
 
@@ -38,25 +39,39 @@ const PropertyInspectionForm = ({
 
   const loadFormData = async () => {
     try {
+      console.log('Loading form data for:', formId, accessToken);
+      
       const { data, error } = await supabase
         .from('property_owner_forms')
-        .select('form_data, response_data, status')
+        .select('form_data, response_data, status, application_id, hoa_properties(name)')
         .eq('id', formId)
         .eq('access_token', accessToken)
         .single();
 
-      if (error) throw error;
+      if (error) {
+        console.error('Error loading form:', error);
+        throw error;
+      }
+
+      console.log('Loaded form data:', data);
 
       if (data) {
-        const existingData = data.response_data || data.form_data || {};
+        // Merge saved data with default form structure
+        const savedData = data.response_data || data.form_data || {};
+        console.log('Saved data:', savedData);
+        
         setFormData(prev => ({
           ...prev,
-          ...existingData,
+          association: data.hoa_properties?.name || propertyName,
+          ...savedData,
           status: data.status
         }));
       }
     } catch (err) {
+      console.error('Failed to load form data:', err);
       setError('Failed to load form data: ' + err.message);
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -72,7 +87,9 @@ const PropertyInspectionForm = ({
     setError(null);
     
     try {
-      const { error } = await supabase
+      console.log('Saving form data:', formData);
+      
+      const { data, error } = await supabase
         .from('property_owner_forms')
         .update({
           form_data: formData,
@@ -80,13 +97,19 @@ const PropertyInspectionForm = ({
           updated_at: new Date().toISOString()
         })
         .eq('id', formId)
-        .eq('access_token', accessToken);
+        .eq('access_token', accessToken)
+        .select();
 
-      if (error) throw error;
+      if (error) {
+        console.error('Save error:', error);
+        throw error;
+      }
       
+      console.log('Save successful:', data);
       setSuccess('Form saved successfully!');
       setTimeout(() => setSuccess(null), 3000);
     } catch (err) {
+      console.error('Failed to save form:', err);
       setError('Failed to save form: ' + err.message);
     } finally {
       setIsSaving(false);
@@ -104,7 +127,9 @@ const PropertyInspectionForm = ({
         completedAt: new Date().toISOString()
       };
 
-      const { error } = await supabase
+      console.log('Submitting form data:', submissionData);
+
+      const { data, error } = await supabase
         .from('property_owner_forms')
         .update({
           form_data: submissionData,
@@ -113,13 +138,19 @@ const PropertyInspectionForm = ({
           completed_at: new Date().toISOString()
         })
         .eq('id', formId)
-        .eq('access_token', accessToken);
+        .eq('access_token', accessToken)
+        .select();
 
-      if (error) throw error;
+      if (error) {
+        console.error('Submit error:', error);
+        throw error;
+      }
       
+      console.log('Submit successful:', data);
       setFormData(submissionData);
       setSuccess('Form submitted successfully! Thank you for your response.');
     } catch (err) {
+      console.error('Failed to submit form:', err);
       setError('Failed to submit form: ' + err.message);
     } finally {
       setIsSubmitting(false);
@@ -130,6 +161,17 @@ const PropertyInspectionForm = ({
                    formData.inspectionTime && 
                    formData.inspectorName && 
                    formData.primaryContact;
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+          <p className="text-gray-600">Loading form...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-4xl mx-auto p-6 bg-white min-h-screen">
@@ -148,6 +190,14 @@ const PropertyInspectionForm = ({
             Association: {formData.association}
           </h2>
         </div>
+      </div>
+
+      {/* Debug Info (remove this in production) */}
+      <div className="bg-gray-100 p-4 rounded mb-4 text-sm">
+        <strong>Debug Info:</strong>
+        <div>Form ID: {formId}</div>
+        <div>Status: {formData.status}</div>
+        <div>Primary Contact: {formData.primaryContact || 'empty'}</div>
       </div>
 
       {/* Error/Success Messages */}
