@@ -54,7 +54,7 @@ export default function GMGResaleFlow() {
     );
 
     return () => subscription.unsubscribe();
-  }, []);
+  }, []); // Empty dependency array - only run once on mount
 
   const checkUser = async () => {
     try {
@@ -161,6 +161,13 @@ export default function GMGResaleFlow() {
     }
   };
 
+  // Add a separate useEffect for loading applications when user/userRole changes
+  useEffect(() => {
+    if (user && userRole) {
+      loadApplications();
+    }
+  }, [user?.id, userRole]); // Only reload when user ID or role changes
+
   const handleAuth = async (email, password, userData = {}) => {
     try {
       if (authMode === 'signin') {
@@ -203,6 +210,10 @@ export default function GMGResaleFlow() {
   const handleInputChange = (field, value) => {
     console.log('Input change:', field, value); // Debug log
     setFormData(prev => {
+      // Only update if the value actually changed
+      if (prev[field] === value) {
+        return prev;
+      }
       const newData = {
         ...prev,
         [field]: value
