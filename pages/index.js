@@ -241,21 +241,31 @@ export default function GMGResaleFlow() {
   return () => subscription.unsubscribe();
 }, []); // Keep empty dependency array for auth setup
 
-  const checkUser = async () => {
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      setUser(session?.user || null);
-      setIsAuthenticated(!!session?.user);
-      if (session?.user) {
-        await loadUserProfile(session.user.id);
-        await loadApplications();
-      }
-    } catch (error) {
-      console.error('Error checking user:', error);
-    } finally {
-      setLoading(false);
+ const checkUser = async () => {
+  console.log('🔍 checkUser started...');
+  try {
+    console.log('📡 Getting session...');
+    const { data: { session } } = await supabase.auth.getSession();
+    console.log('📦 Session result:', session?.user ? 'User found' : 'No user');
+    
+    setUser(session?.user || null);
+    setIsAuthenticated(!!session?.user);
+    
+    if (session?.user) {
+      console.log('👤 Loading user profile...');
+      await loadUserProfile(session.user.id);
+      console.log('📋 Loading applications...');
+      await loadApplications();
     }
-  };
+    
+    console.log('✅ checkUser completed, setting loading to false');
+  } catch (error) {
+    console.error('❌ Error in checkUser:', error);
+  } finally {
+    console.log('🏁 Finally block - setting loading to false');
+    setLoading(false);
+  }
+};
 
   // Load user profile to get role
   const loadUserProfile = useCallback(async (userId) => {
