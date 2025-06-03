@@ -114,9 +114,13 @@ const AdminDashboard = () => {
   }, {});
 
   const handleCompleteForm = (applicationId, formType) => {
-    // This will navigate to the form completion page
-    window.open(`/admin/forms/${formType}/${applicationId}`, '_blank');
-  };
+  // Updated URLs to match new structure
+  if (formType === 'inspection') {
+    window.open(`/admin/inspection/${applicationId}`, '_blank');
+  } else if (formType === 'resale') {
+    window.open(`/admin/resale/${applicationId}`, '_blank');
+  }
+};
 
   if (loading) {
     return (
