@@ -272,39 +272,47 @@ const checkUser = async () => {
     console.log('✅ checkUser completed');
   } catch (error) {
     console.error('❌ Error in checkUser:', error);
-    // Don't set a default role on error - let loadUserProfile handle it
     setUser(null);
     setIsAuthenticated(false);
-    setUserRole(null);
+    setUserRole('customer'); // Set a default role instead of null
   } finally {
     console.log('🏁 Finally block - setting loading to false');
     setLoading(false);
   }
 };
   // Load user profile to get role
- const loadUserProfile = useCallback(async (userId) => {
+const loadUserProfile = useCallback(async (userId) => {
   try {
-    console.log('Loading profile for user:', userId);
+    console.log('🔄 Loading profile for user:', userId);
     
-    const { data, error } = await supabase
+    // Add timeout to prevent hanging
+    const profilePromise = supabase
       .from('profiles')
       .select('role')
       .eq('id', userId)
       .single();
     
+    const timeoutPromise = new Promise((_, reject) => 
+      setTimeout(() => reject(new Error('Profile query timeout')), 10000)
+    );
+    
+    const { data, error } = await Promise.race([profilePromise, timeoutPromise]);
+    
+    console.log('📋 Profile query result:', { data, error });
+    
     if (error) {
-      console.error('Error loading user profile:', error);
-      // If no profile exists, create one with default role
+      console.error('❌ Profile error:', error);
       if (error.code === 'PGRST116') {
-        console.log('No profile found, creating default profile...');
+        console.log('➕ No profile found, creating default profile...');
         const { error: insertError } = await supabase
           .from('profiles')
           .insert([{ id: userId, role: 'customer' }]);
         
         if (insertError) {
-          console.error('Error creating profile:', insertError);
+          console.error('❌ Insert error:', insertError);
           setUserRole('customer');
         } else {
+          console.log('✅ Profile created');
           setUserRole('customer');
         }
       } else {
@@ -313,10 +321,10 @@ const checkUser = async () => {
       return;
     }
     
-    console.log('User profile loaded:', data);
+    console.log('✅ Profile loaded successfully:', data);
     setUserRole(data?.role || 'customer');
   } catch (error) {
-    console.error('Exception in loadUserProfile:', error);
+    console.error('💥 Exception in loadUserProfile:', error);
     setUserRole('customer');
   }
 }, []);
