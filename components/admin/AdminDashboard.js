@@ -21,43 +21,44 @@ const AdminDashboard = ({ userRole }) => {
     loadApplications();
   }, []);
 
-  const loadApplications = async () => {
-    setRefreshing(true);
-    try {
-      const { data, error } = await supabase
-        .from('applications')
-        .select(`
-          *,
-          hoa_properties(name, property_owner_email, property_owner_name),
-          property_owner_forms(id, form_type, status, completed_at),
-          notifications(id, notification_type, status, sent_at)
-        `)
-        .order('created_at', { ascending: false });
+ const loadApplications = async () => {
+  setRefreshing(true);
+  try {
+    const { data, error } = await supabase
+      .from('applications')
+      .select(`
+        *,
+        hoa_properties(name, property_owner_email, property_owner_name),
+        property_owner_forms(id, form_type, status, completed_at),
+        notifications(id, notification_type, status, sent_at)
+      `)
+      .order('created_at', { ascending: false });
 
-      if (error) throw error;
+    if (error) throw error;
 
-      // Process the data to group forms by application
-      const processedData = data.map(app => ({
-        ...app,
-        // Add these debug lines:
-console.log('🔧 Raw data from database:', data);
-console.log('🔧 Processed applications:', processedData);
-console.log('🔧 First app forms:', processedData[0]?.forms);
-        forms: {
-          inspectionForm: app.property_owner_forms?.find(f => f.form_type === 'inspection_form') || { status: 'not_created' },
-          resaleCertificate: app.property_owner_forms?.find(f => f.form_type === 'resale_certificate') || { status: 'not_created' }
-        },
-        notifications: app.notifications || []
-      }));
+    // Process the data to group forms by application
+    const processedData = data.map(app => ({
+      ...app,
+      forms: {
+        inspectionForm: app.property_owner_forms?.find(f => f.form_type === 'inspection_form') || { status: 'not_created' },
+        resaleCertificate: app.property_owner_forms?.find(f => f.form_type === 'resale_certificate') || { status: 'not_created' }
+      },
+      notifications: app.notifications || []
+    }));
 
-      setApplications(processedData);
-    } catch (err) {
-      console.error('Failed to load applications:', err);
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  };
+    // ADD DEBUG LINES HERE (AFTER the map function):
+    console.log('🔧 Raw data from database:', data);
+    console.log('🔧 Processed applications:', processedData);
+    console.log('🔧 First app forms:', processedData[0]?.forms);
+
+    setApplications(processedData);
+  } catch (err) {
+    console.error('Failed to load applications:', err);
+  } finally {
+    setLoading(false);
+    setRefreshing(false);
+  }
+};
 
   const getStatusColor = (status) => {
     const colors = {
