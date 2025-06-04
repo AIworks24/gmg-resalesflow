@@ -6,7 +6,8 @@ import {
   Download, RefreshCw, MessageSquare, Edit
 } from 'lucide-react';
 
-const AdminDashboard = () => {
+const AdminDashboard = ({ userRole }) => {
+  console.log('🔧 Received userRole:', userRole);
   const [applications, setApplications] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedStatus, setSelectedStatus] = useState('all');
