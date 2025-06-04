@@ -246,14 +246,16 @@ const checkUser = async () => {
   try {
     console.log('📡 Getting session...');
     
-    // Add timeout to prevent hanging
-    const sessionPromise = supabase.auth.getSession();
-    const timeoutPromise = new Promise((_, reject) => 
-      setTimeout(() => reject(new Error('Session timeout')), 5000)
-    );
-    
-    const { data: { session } } = await Promise.race([sessionPromise, timeoutPromise]);
+    const { data: { session }, error: sessionError } = await supabase.auth.getSession();
     console.log('📦 Session result:', session?.user ? 'User found' : 'No user');
+    
+    if (sessionError) {
+      console.error('Session error:', sessionError);
+      setUser(null);
+      setIsAuthenticated(false);
+      setUserRole(null);
+      return;
+    }
     
     setUser(session?.user || null);
     setIsAuthenticated(!!session?.user);
@@ -263,15 +265,17 @@ const checkUser = async () => {
       await loadUserProfile(session.user.id);
       console.log('📋 Loading applications...');
       await loadApplications();
+    } else {
+      setUserRole(null);
     }
     
-    console.log('✅ checkUser completed, setting loading to false');
+    console.log('✅ checkUser completed');
   } catch (error) {
     console.error('❌ Error in checkUser:', error);
-    // If session fails, just continue without authentication
+    // Don't set a default role on error - let loadUserProfile handle it
     setUser(null);
     setIsAuthenticated(false);
-    setUserRole('customer');
+    setUserRole(null);
   } finally {
     console.log('🏁 Finally block - setting loading to false');
     setLoading(false);
