@@ -39,6 +39,10 @@ const AdminDashboard = ({ userRole }) => {
       // Process the data to group forms by application
       const processedData = data.map(app => ({
         ...app,
+        // Add these debug lines:
+console.log('🔧 Raw data from database:', data);
+console.log('🔧 Processed applications:', processedData);
+console.log('🔧 First app forms:', processedData[0]?.forms);
         forms: {
           inspectionForm: app.property_owner_forms?.find(f => f.form_type === 'inspection_form') || { status: 'not_created' },
           resaleCertificate: app.property_owner_forms?.find(f => f.form_type === 'resale_certificate') || { status: 'not_created' }
