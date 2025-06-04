@@ -282,8 +282,10 @@ const checkUser = async () => {
   }
 };
   // Load user profile to get role
-  const loadUserProfile = useCallback(async (userId) => {
+ const loadUserProfile = useCallback(async (userId) => {
   try {
+    console.log('Loading profile for user:', userId);
+    
     const { data, error } = await supabase
       .from('profiles')
       .select('role')
@@ -292,13 +294,29 @@ const checkUser = async () => {
     
     if (error) {
       console.error('Error loading user profile:', error);
-      setUserRole('customer');
+      // If no profile exists, create one with default role
+      if (error.code === 'PGRST116') {
+        console.log('No profile found, creating default profile...');
+        const { error: insertError } = await supabase
+          .from('profiles')
+          .insert([{ id: userId, role: 'customer' }]);
+        
+        if (insertError) {
+          console.error('Error creating profile:', insertError);
+          setUserRole('customer');
+        } else {
+          setUserRole('customer');
+        }
+      } else {
+        setUserRole('customer');
+      }
       return;
     }
     
+    console.log('User profile loaded:', data);
     setUserRole(data?.role || 'customer');
   } catch (error) {
-    console.error('Error loading user profile:', error);
+    console.error('Exception in loadUserProfile:', error);
     setUserRole('customer');
   }
 }, []);
