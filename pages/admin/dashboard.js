@@ -6,6 +6,7 @@ import AdminDashboard from '../../components/admin/AdminDashboard';
 export default function AdminDashboardPage() {
   const [loading, setLoading] = useState(true);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [userRole, setUserRole] = useState(null); // Add this line
   const supabase = createClientComponentClient();
   const router = useRouter();
 
@@ -30,6 +31,7 @@ export default function AdminDashboardPage() {
 
       if (profile?.role === 'admin' || profile?.role === 'staff') {
         setIsAdmin(true);
+        setUserRole(profile.role); // Add this line
       } else {
         router.push('/');
       }
@@ -63,5 +65,5 @@ export default function AdminDashboardPage() {
     );
   }
 
-  return <AdminDashboard />;
+  return <AdminDashboard userRole={userRole} />; // Add userRole prop
 }
