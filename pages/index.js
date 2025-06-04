@@ -373,12 +373,13 @@ const loadUserProfile = useCallback(async (userId) => {
   if (!user) return;
   
   try {
+    console.log('📋 Loading applications...');
+    
     let query = supabase
       .from('applications')
       .select(`
         *,
-        hoa_properties(name, location),
-        profiles(first_name, last_name, role)
+        hoa_properties(name, location)
       `);
     
     // If not admin, only show user's own applications
@@ -388,13 +389,19 @@ const loadUserProfile = useCallback(async (userId) => {
     
     const { data, error } = await query.order('created_at', { ascending: false });
     
-    if (error) throw error;
+    if (error) {
+      console.error('❌ Applications error:', error);
+      throw error;
+    }
+    
+    console.log('✅ Applications loaded:', data?.length || 0);
     setApplications(data || []);
   } catch (error) {
     console.error('Error loading applications:', error);
+    // Don't let this stop the app from loading
+    setApplications([]);
   }
-}, [user, userRole]); // Add dependencies
- // Add a separate useEffect for loading applications when user/userRole changes
+}, [user, userRole]);
   
 useEffect(() => {
   if (user && userRole) {
