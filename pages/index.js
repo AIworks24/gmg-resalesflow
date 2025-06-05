@@ -430,7 +430,7 @@ const createPropertyOwnerForms = async (applicationId, applicationData) => {
       {
         application_id: applicationId,
         form_type: 'inspection_form',
-        status: 'not_created',
+        status: 'sent',
         access_token: inspectionToken,
         recipient_email: recipientEmail,
         expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(), // 30 days from now
@@ -439,7 +439,7 @@ const createPropertyOwnerForms = async (applicationId, applicationData) => {
       {
         application_id: applicationId,
         form_type: 'resale_certificate',
-        status: 'not_created',
+        status: 'sent',
         access_token: resaleToken,
         recipient_email: recipientEmail,
         expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(), // 30 days from now
