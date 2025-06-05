@@ -21,6 +21,8 @@ export default function AdminInspectionFormPage() {
 
   // Replace the checkAuthAndLoadData function in pages/admin/resale/[applicationId].js
 
+// Replace the checkAuthAndLoadData function in pages/admin/inspection/[applicationId].js
+
 const checkAuthAndLoadData = async () => {
   try {
     // Check if user is admin
@@ -59,23 +61,23 @@ const checkAuthAndLoadData = async () => {
       throw appError;
     }
 
-    // Get or create the resale certificate form separately
+    // Get or create the inspection form separately
     let { data: formData, error: formError } = await supabase
       .from('property_owner_forms')
       .select('id, form_data, response_data, status')
       .eq('application_id', applicationId)
-      .eq('form_type', 'resale_certificate')
+      .eq('form_type', 'inspection_form')
       .single();
 
     // If no form exists, create it
     if (formError && formError.code === 'PGRST116') {
-      console.log('No resale certificate form found, creating one...');
+      console.log('No inspection form found, creating one...');
       
       const { data: newForm, error: createError } = await supabase
         .from('property_owner_forms')
         .insert([{
           application_id: applicationId,
-          form_type: 'resale_certificate',
+          form_type: 'inspection_form',
           status: 'not_created',
           access_token: crypto.randomUUID(),
           expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
@@ -105,7 +107,6 @@ const checkAuthAndLoadData = async () => {
     setLoading(false);
   }
 };
-
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
