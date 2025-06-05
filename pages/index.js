@@ -412,13 +412,18 @@ useEffect(() => {
   // Add this function to your application submission process
 // This should be called after an application is successfully created
 
-const createPropertyOwnerForms = async (applicationId) => {
+const createPropertyOwnerForms = async (applicationId, applicationData) => {
   try {
     console.log('🔧 Creating property owner forms for application:', applicationId);
     
     // Generate unique access tokens
     const inspectionToken = crypto.randomUUID();
     const resaleToken = crypto.randomUUID();
+    
+    // Determine recipient email (property owner email, or fallback to submitter)
+    const recipientEmail = applicationData.hoa_properties?.property_owner_email || 
+                          applicationData.submitter_email || 
+                          'admin@gmgva.com';
     
     // Create both forms at once
     const formsToCreate = [
@@ -427,6 +432,7 @@ const createPropertyOwnerForms = async (applicationId) => {
         form_type: 'inspection_form',
         status: 'not_created',
         access_token: inspectionToken,
+        recipient_email: recipientEmail,
         expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(), // 30 days from now
         created_at: new Date().toISOString()
       },
@@ -435,6 +441,7 @@ const createPropertyOwnerForms = async (applicationId) => {
         form_type: 'resale_certificate',
         status: 'not_created',
         access_token: resaleToken,
+        recipient_email: recipientEmail,
         expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(), // 30 days from now
         created_at: new Date().toISOString()
       }
@@ -595,7 +602,7 @@ const createPropertyOwnerForms = async (applicationId) => {
 
 if (error) throw error;
 // CREATE THE PROPERTY OWNER FORMS
-await createPropertyOwnerForms(data[0].id);
+await createPropertyOwnerForms(data[0].id, data[0]);
 
 alert('Application submitted successfully! You will receive a confirmation email shortly.');
       setCurrentStep(0);
