@@ -19,51 +19,92 @@ export default function AdminInspectionFormPage() {
     }
   }, [applicationId]);
 
-  const checkAuthAndLoadData = async () => {
-    try {
-      // Check if user is admin
-      const { data: { user } } = await supabase.auth.getUser();
-      
-      if (!user) {
-        router.push('/admin/login');
-        return;
-      }
+  // Replace the checkAuthAndLoadData function in pages/admin/resale/[applicationId].js
 
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('role')
-        .eq('id', user.id)
-        .single();
-
-      if (profile?.role !== 'admin' && profile?.role !== 'staff') {
-        router.push('/');
-        return;
-      }
-
-      setIsAdmin(true);
-
-      // Load application data
-      const { data: appData, error: appError } = await supabase
-        .from('applications')
-        .select(`
-          *,
-          hoa_properties(name, property_owner_email, property_owner_name),
-          property_owner_forms!inner(id, form_data, response_data, status)
-        `)
-        .eq('id', applicationId)
-        .eq('property_owner_forms.form_type', 'inspection_form')
-        .single();
-
-      if (appError) throw appError;
-
-      setApplicationData(appData);
-    } catch (err) {
-      console.error('Error loading data:', err);
-      setError(err.message);
-    } finally {
-      setLoading(false);
+const checkAuthAndLoadData = async () => {
+  try {
+    // Check if user is admin
+    const { data: { user } } = await supabase.auth.getUser();
+    
+    if (!user) {
+      router.push('/admin/login');
+      return;
     }
-  };
+
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('role')
+      .eq('id', user.id)
+      .single();
+
+    if (profile?.role !== 'admin' && profile?.role !== 'staff') {
+      router.push('/');
+      return;
+    }
+
+    setIsAdmin(true);
+
+    // Load application data - FIXED QUERY
+    const { data: appData, error: appError } = await supabase
+      .from('applications')
+      .select(`
+        *,
+        hoa_properties(name, property_owner_email, property_owner_name)
+      `)
+      .eq('id', applicationId)
+      .single();
+
+    if (appError) {
+      console.error('Application query error:', appError);
+      throw appError;
+    }
+
+    // Get or create the resale certificate form separately
+    let { data: formData, error: formError } = await supabase
+      .from('property_owner_forms')
+      .select('id, form_data, response_data, status')
+      .eq('application_id', applicationId)
+      .eq('form_type', 'resale_certificate')
+      .single();
+
+    // If no form exists, create it
+    if (formError && formError.code === 'PGRST116') {
+      console.log('No resale certificate form found, creating one...');
+      
+      const { data: newForm, error: createError } = await supabase
+        .from('property_owner_forms')
+        .insert([{
+          application_id: applicationId,
+          form_type: 'resale_certificate',
+          status: 'not_created',
+          access_token: crypto.randomUUID(),
+          expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
+        }])
+        .select()
+        .single();
+
+      if (createError) throw createError;
+      formData = newForm;
+    } else if (formError) {
+      throw formError;
+    }
+
+    // Combine the data
+    const combinedData = {
+      ...appData,
+      property_owner_forms: [formData]
+    };
+
+    console.log('Loaded application data:', combinedData);
+    setApplicationData(combinedData);
+    
+  } catch (err) {
+    console.error('Error loading data:', err);
+    setError(err.message);
+  } finally {
+    setLoading(false);
+  }
+};
 
   if (loading) {
     return (
