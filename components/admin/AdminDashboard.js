@@ -21,39 +21,56 @@ const AdminDashboard = ({ userRole }) => {
     loadApplications();
   }, []);
 
- const loadApplications = async () => {
+// Replace the loadApplications function in AdminDashboard.js with this fixed version:
+
+const loadApplications = async () => {
   setRefreshing(true);
   try {
+    console.log('🔧 Loading applications with forms...');
+    
     const { data, error } = await supabase
       .from('applications')
       .select(`
         *,
         hoa_properties(name, property_owner_email, property_owner_name),
-        property_owner_forms(id, form_type, status, completed_at),
+        property_owner_forms(id, form_type, status, completed_at, form_data, response_data),
         notifications(id, notification_type, status, sent_at)
       `)
       .order('created_at', { ascending: false });
 
-    if (error) throw error;
+    if (error) {
+      console.error('❌ Applications query error:', error);
+      throw error;
+    }
+
+    console.log('🔧 Raw data from database:', data);
 
     // Process the data to group forms by application
-    const processedData = data.map(app => ({
-      ...app,
-      forms: {
-        inspectionForm: app.property_owner_forms?.find(f => f.form_type === 'inspection_form') || { status: 'not_created' },
-        resaleCertificate: app.property_owner_forms?.find(f => f.form_type === 'resale_certificate') || { status: 'not_created' }
-      },
-      notifications: app.notifications || []
-    }));
+    const processedData = data.map(app => {
+      // Find the inspection form and resale certificate form for this application
+      const inspectionForm = app.property_owner_forms?.find(f => f.form_type === 'inspection_form');
+      const resaleCertificate = app.property_owner_forms?.find(f => f.form_type === 'resale_certificate');
+      
+      const processedApp = {
+        ...app,
+        forms: {
+          inspectionForm: inspectionForm || { status: 'not_created', id: null },
+          resaleCertificate: resaleCertificate || { status: 'not_created', id: null }
+        },
+        notifications: app.notifications || []
+      };
+      
+      console.log(`🔧 App ${app.id} forms:`, processedApp.forms);
+      return processedApp;
+    });
 
-    // ADD DEBUG LINES HERE (AFTER the map function):
-    console.log('🔧 Raw data from database:', data);
     console.log('🔧 Processed applications:', processedData);
     console.log('🔧 First app forms:', processedData[0]?.forms);
 
     setApplications(processedData);
   } catch (err) {
-    console.error('Failed to load applications:', err);
+    console.error('❌ Failed to load applications:', err);
+    setApplications([]); // Set empty array on error to prevent crashes
   } finally {
     setLoading(false);
     setRefreshing(false);
