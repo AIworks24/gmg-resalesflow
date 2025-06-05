@@ -25,6 +25,8 @@ export default function AdminInspectionFormPage() {
 
 // Replace the checkAuthAndLoadData function in pages/admin/inspection/[applicationId].js
 
+// Replace the checkAuthAndLoadData function in pages/admin/inspection/[applicationId].js
+
 const checkAuthAndLoadData = async () => {
   try {
     // Check if user is admin
@@ -80,7 +82,7 @@ const checkAuthAndLoadData = async () => {
         .insert([{
           application_id: applicationId,
           form_type: 'inspection_form',
-          status: 'not_created',
+          status: 'sent',
           access_token: crypto.randomUUID(),
           recipient_email: appData.hoa_properties?.property_owner_email || appData.submitter_email || 'admin@gmgva.com',
           expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
