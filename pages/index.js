@@ -409,6 +409,71 @@ useEffect(() => {
   }
 }, [user?.id, userRole, loadApplications]); // Add loadApplications to dependencies
 
+  // Add this function to your application submission process
+// This should be called after an application is successfully created
+
+const createPropertyOwnerForms = async (applicationId) => {
+  try {
+    console.log('🔧 Creating property owner forms for application:', applicationId);
+    
+    // Generate unique access tokens
+    const inspectionToken = crypto.randomUUID();
+    const resaleToken = crypto.randomUUID();
+    
+    // Create both forms at once
+    const formsToCreate = [
+      {
+        application_id: applicationId,
+        form_type: 'inspection_form',
+        status: 'not_created',
+        access_token: inspectionToken,
+        expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(), // 30 days from now
+        created_at: new Date().toISOString()
+      },
+      {
+        application_id: applicationId,
+        form_type: 'resale_certificate',
+        status: 'not_created',
+        access_token: resaleToken,
+        expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(), // 30 days from now
+        created_at: new Date().toISOString()
+      }
+    ];
+
+    const { data, error } = await supabase
+      .from('property_owner_forms')
+      .insert(formsToCreate)
+      .select();
+
+    if (error) {
+      console.error('❌ Error creating forms:', error);
+      throw error;
+    }
+
+    console.log('✅ Successfully created property owner forms:', data);
+    return data;
+    
+  } catch (error) {
+    console.error('❌ Failed to create property owner forms:', error);
+    throw error;
+  }
+};
+
+// You should call this function in your submitApplication function in pages/index.js
+// Add this after the application is successfully inserted:
+
+// In your submitApplication function, after the application insert:
+const { data, error } = await supabase
+  .from('applications')
+  .insert([applicationData])
+  .select();
+
+if (error) throw error;
+
+// ADD THIS LINE:
+await createPropertyOwnerForms(data[0].id);
+
+alert('Application submitted successfully! You will receive a confirmation email shortly.');
   const handleAuth = React.useCallback(async (email, password, userData = {}) => {
     try {
       if (authMode === 'signin') {
@@ -538,14 +603,17 @@ useEffect(() => {
         expected_completion_date: new Date(Date.now() + (formData.packageType === 'rush' ? 5 : 15) * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
       };
 
-      const { data, error } = await supabase
-        .from('applications')
-        .insert([applicationData])
-        .select();
+     const { data, error } = await supabase
+  .from('applications')
+  .insert([applicationData])
+  .select();
 
-      if (error) throw error;
+if (error) throw error;
 
-      alert('Application submitted successfully! You will receive a confirmation email shortly.');
+// CREATE THE PROPERTY OWNER FORMS
+await createPropertyOwnerForms(data[0].id);
+
+alert('Application submitted successfully! You will receive a confirmation email shortly.');
       setCurrentStep(0);
       loadApplications();
       
