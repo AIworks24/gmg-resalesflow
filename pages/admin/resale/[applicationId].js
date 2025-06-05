@@ -23,6 +23,8 @@ export default function AdminResaleFormPage() {
 
 // Replace the checkAuthAndLoadData function in pages/admin/resale/[applicationId].js
 
+// Replace the checkAuthAndLoadData function in pages/admin/resale/[applicationId].js
+
 const checkAuthAndLoadData = async () => {
   try {
     // Check if user is admin
@@ -78,7 +80,7 @@ const checkAuthAndLoadData = async () => {
         .insert([{
           application_id: applicationId,
           form_type: 'resale_certificate',
-          status: 'not_created',
+          status: 'sent',
           access_token: crypto.randomUUID(),
           recipient_email: appData.hoa_properties?.property_owner_email || appData.submitter_email || 'admin@gmgva.com',
           expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
