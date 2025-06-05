@@ -459,21 +459,6 @@ const createPropertyOwnerForms = async (applicationId) => {
   }
 };
 
-// You should call this function in your submitApplication function in pages/index.js
-// Add this after the application is successfully inserted:
-
-// In your submitApplication function, after the application insert:
-const { data, error } = await supabase
-  .from('applications')
-  .insert([applicationData])
-  .select();
-
-if (error) throw error;
-
-// ADD THIS LINE:
-await createPropertyOwnerForms(data[0].id);
-
-alert('Application submitted successfully! You will receive a confirmation email shortly.');
   const handleAuth = React.useCallback(async (email, password, userData = {}) => {
     try {
       if (authMode === 'signin') {
@@ -609,7 +594,6 @@ alert('Application submitted successfully! You will receive a confirmation email
   .select();
 
 if (error) throw error;
-
 // CREATE THE PROPERTY OWNER FORMS
 await createPropertyOwnerForms(data[0].id);
 
