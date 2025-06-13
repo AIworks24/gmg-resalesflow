@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
-import { Save, Send, FileText, Calendar, ArrowLeft, Building, CheckCircle, AlertTriangle, Plus, Minus } from 'lucide-react';
+import { Save, Send, FileText, Calendar, ArrowLeft, Building, CheckCircle, AlertTriangle } from 'lucide-react';
 
 const AdminResaleCertificateForm = ({ 
   applicationData,
@@ -19,7 +19,7 @@ const AdminResaleCertificateForm = ({
     // Preparer Information (Appendix 1)
     preparerName: '',
     preparerCompany: 'Goodman Management Group',
-    preparerAddress: '9960 Mayland Drive, Suite 400\nRichmond, VA 23233-1485',
+    preparerAddress: '',
     preparerPhone: '(804) 360-2115',
     preparerEmail: 'resales@gmgva.com',
     managingAgentName: '',
@@ -37,8 +37,8 @@ const AdminResaleCertificateForm = ({
       
       // 2. Governing documents
       governingDocs: true,
-      governingDocsAttached: true,
-      rulesAndRegulationsAttached: false,
+      governingDocsAttached: false,
+      rulesRegulationsAttached: false,
       
       // 3. Restraints on alienation
       restraintsExist: false,
@@ -47,8 +47,7 @@ const AdminResaleCertificateForm = ({
       
       // 4. Association assessments
       assessmentAmount: '',
-      assessmentFrequency: 'monthly', // monthly, quarterly, periodic
-      periodicDescription: '',
+      assessmentFrequency: 'monthly',
       currentAssessmentDue: '',
       currentAssessmentDate: '',
       unpaidAssessments: '',
@@ -90,7 +89,7 @@ const AdminResaleCertificateForm = ({
       budgetAttached: true,
       
       // 12. Reserve study
-      reserveStudyType: 'not_required', // 'current', 'summary', 'not_required'
+      reserveStudyType: 'current', // 'current', 'summary', 'not_required'
       
       // 13. Legal issues
       hasLegalIssues: false,
@@ -99,19 +98,14 @@ const AdminResaleCertificateForm = ({
       // 14. Insurance
       providesInsurance: false,
       insuranceDetails: '',
-      insuranceCertificateAttached: false,
-      insuranceArticleSection: '',
       recommendsInsurance: false,
       insuranceRequirements: '',
-      insuranceRequirementsArticle: '',
       
       // 15. Association violations
       hasViolationNotices: false,
-      violationNoticesAttached: false,
       
       // 16. Government violations
       hasGovernmentNotices: false,
-      governmentNoticesAttached: false,
       
       // 17. Board minutes
       boardMinutesAttached: false,
@@ -123,42 +117,34 @@ const AdminResaleCertificateForm = ({
       // 19. Leasehold estates
       hasLeaseholdEstate: false,
       leaseholdDetails: '',
-      leaseholdTerm: '',
       
       // 20. Occupancy limitations
       hasOccupancyLimitations: false,
       occupancyLimitationsRef: '',
-      occupancyLimitationsArticle: '',
       
       // 21. Flag restrictions
       hasFlagRestrictions: false,
       flagRestrictionsRef: '',
-      flagRestrictionsArticle: '',
       
       // 22. Solar restrictions
       hasSolarRestrictions: false,
       solarRestrictionsRef: '',
-      solarRestrictionsArticle: '',
       
       // 23. Sign restrictions
       hasSignRestrictions: false,
       signRestrictionsRef: '',
-      signRestrictionsArticle: '',
       
       // 24. Parking restrictions
       hasParkingRestrictions: false,
       parkingRestrictionsRef: '',
-      parkingRestrictionsArticle: '',
       
       // 25. Business restrictions
       hasBusinessRestrictions: false,
       businessRestrictionsRef: '',
-      businessRestrictionsArticle: '',
       
       // 26. Rental restrictions
       hasRentalRestrictions: false,
       rentalRestrictionsRef: '',
-      rentalRestrictionsArticle: '',
       
       // 27. Tax deductibility (cooperatives only)
       taxDeductibilityAttached: false,
@@ -166,7 +152,6 @@ const AdminResaleCertificateForm = ({
       
       // 28. Pending sales
       hasPendingSales: false,
-      pendingSalesAttached: false,
       
       // 29. Mortgage approvals
       hasMortgageApprovals: false,
@@ -220,26 +205,6 @@ const AdminResaleCertificateForm = ({
         [field]: value
       }));
     }
-  };
-
-  const addArrayItem = (arrayField, newItem) => {
-    setFormData(prev => ({
-      ...prev,
-      disclosures: {
-        ...prev.disclosures,
-        [arrayField]: [...(prev.disclosures[arrayField] || []), newItem]
-      }
-    }));
-  };
-
-  const removeArrayItem = (arrayField, index) => {
-    setFormData(prev => ({
-      ...prev,
-      disclosures: {
-        ...prev.disclosures,
-        [arrayField]: prev.disclosures[arrayField].filter((_, i) => i !== index)
-      }
-    }));
   };
 
   const handleSave = async () => {
@@ -322,10 +287,10 @@ const AdminResaleCertificateForm = ({
   const sections = [
     { id: 1, title: 'Certificate Header', icon: FileText },
     { id: 2, title: 'Preparer Information', icon: Building },
-    { id: 3, title: 'Basic Disclosures (1-6)', icon: CheckCircle },
-    { id: 4, title: 'Financial Disclosures (7-12)', icon: AlertTriangle },
-    { id: 5, title: 'Legal & Compliance (13-18)', icon: Building },
-    { id: 6, title: 'Property Restrictions (19-26)', icon: CheckCircle },
+    { id: 3, title: 'Governing Documents', icon: FileText },
+    { id: 4, title: 'Financial Disclosures (4-9)', icon: CheckCircle },
+    { id: 5, title: 'Legal & Compliance (10-18)', icon: AlertTriangle },
+    { id: 6, title: 'Property Restrictions (19-26)', icon: Building },
     { id: 7, title: 'Final Certifications (27-30)', icon: CheckCircle }
   ];
 
@@ -346,7 +311,6 @@ const AdminResaleCertificateForm = ({
                   value={formData.developmentName}
                   onChange={(e) => handleInputChange('developmentName', e.target.value)}
                   className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
-                  placeholder="Enter development name"
                 />
               </div>
               
@@ -372,7 +336,6 @@ const AdminResaleCertificateForm = ({
                   value={formData.associationName}
                   onChange={(e) => handleInputChange('associationName', e.target.value)}
                   className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
-                  placeholder="Enter association name"
                 />
               </div>
               
@@ -380,25 +343,23 @@ const AdminResaleCertificateForm = ({
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   Association Address: *
                 </label>
-                <textarea
+                <input
+                  type="text"
                   value={formData.associationAddress}
                   onChange={(e) => handleInputChange('associationAddress', e.target.value)}
-                  rows={2}
                   className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
-                  placeholder="Enter full association address"
                 />
               </div>
               
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Lot Address/Number/Reference: *
+                  Lot Address/Number: *
                 </label>
                 <input
                   type="text"
                   value={formData.lotAddress}
                   onChange={(e) => handleInputChange('lotAddress', e.target.value)}
                   className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
-                  placeholder="Enter property address"
                 />
               </div>
               
@@ -416,7 +377,7 @@ const AdminResaleCertificateForm = ({
             </div>
           </div>
         );
-
+        
       case 2:
         return (
           <div className="space-y-6">
@@ -432,7 +393,6 @@ const AdminResaleCertificateForm = ({
                     value={formData.preparerName}
                     onChange={(e) => handleInputChange('preparerName', e.target.value)}
                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
-                    placeholder="Enter preparer's full name"
                   />
                 </div>
                 <div>
@@ -449,7 +409,7 @@ const AdminResaleCertificateForm = ({
                   <textarea
                     value={formData.preparerAddress}
                     onChange={(e) => handleInputChange('preparerAddress', e.target.value)}
-                    rows={3}
+                    rows={2}
                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
                   />
                 </div>
@@ -488,88 +448,146 @@ const AdminResaleCertificateForm = ({
                 </label>
               </div>
               
-              {/* Section 6: Other Entity Assessments */}
-            <div className="bg-white border rounded-lg p-6">
-              <h4 className="font-semibold text-gray-800 mb-4">6. Other Entity or Facility Assessments, Fees, or Charges</h4>
-              <div className="space-y-4">
-                <div className="flex gap-4">
-                  <label className="flex items-center">
+              {!formData.noManagingAgent && (
+                <div className="grid md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Name:</label>
                     <input
-                      type="radio"
-                      name="otherEntity"
-                      checked={!formData.disclosures.otherEntityLiable}
-                      onChange={() => handleInputChange('disclosures.otherEntityLiable', false)}
-                      className="mr-2"
+                      type="text"
+                      value={formData.managingAgentName}
+                      onChange={(e) => handleInputChange('managingAgentName', e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
                     />
-                    <span>The owner is not liable to any other entity or facility</span>
-                  </label>
-                  
-                  <label className="flex items-center">
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Company:</label>
                     <input
-                      type="radio"
-                      name="otherEntity"
-                      checked={formData.disclosures.otherEntityLiable}
-                      onChange={() => handleInputChange('disclosures.otherEntityLiable', true)}
-                      className="mr-2"
+                      type="text"
+                      value={formData.managingAgentCompany}
+                      onChange={(e) => handleInputChange('managingAgentCompany', e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
                     />
-                    <span>The owner is liable to other entities or facilities</span>
-                  </label>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">CIC Manager License No.:</label>
+                    <input
+                      type="text"
+                      value={formData.managingAgentLicense}
+                      onChange={(e) => handleInputChange('managingAgentLicense', e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Phone Number:</label>
+                    <input
+                      type="tel"
+                      value={formData.managingAgentPhone}
+                      onChange={(e) => handleInputChange('managingAgentPhone', e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    />
+                  </div>
+                  <div className="md:col-span-2">
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Mailing Address:</label>
+                    <textarea
+                      value={formData.managingAgentAddress}
+                      onChange={(e) => handleInputChange('managingAgentAddress', e.target.value)}
+                      rows={2}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Email:</label>
+                    <input
+                      type="email"
+                      value={formData.managingAgentEmail}
+                      onChange={(e) => handleInputChange('managingAgentEmail', e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    />
+                  </div>
                 </div>
+              )}
+            </div>
+          </div>
+        );
+
+      case 3:
+        return (
+          <div className="space-y-6">
+            <h3 className="text-xl font-semibold text-gray-800 mb-6">Governing Documents & Restraints (Sections 2-3)</h3>
+            
+            {/* Section 2: Governing Documents */}
+            <div className="bg-white border rounded-lg p-6">
+              <h4 className="font-semibold text-gray-800 mb-4">2. Governing Documents and Rules</h4>
+              <div className="space-y-3">
+                <label className="flex items-center">
+                  <input
+                    type="checkbox"
+                    checked={formData.disclosures.governingDocsAttached}
+                    onChange={(e) => handleInputChange('disclosures.governingDocsAttached', e.target.checked)}
+                    className="mr-2"
+                  />
+                  <span>Association governing documents (required) are attached</span>
+                </label>
                 
-                {formData.disclosures.otherEntityLiable && (
-                  <div className="pl-6">
-                    <label className="block text-sm font-medium text-gray-700 mb-2">Entity/Facility Details:</label>
-                    {formData.disclosures.otherEntityDetails.map((entity, index) => (
-                      <div key={index} className="flex gap-2 mb-2">
-                        <input
-                          type="text"
-                          value={entity.name}
-                          onChange={(e) => {
-                            const updated = [...formData.disclosures.otherEntityDetails];
-                            updated[index] = { ...updated[index], name: e.target.value };
-                            handleInputChange('disclosures.otherEntityDetails', updated);
-                          }}
-                          className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
-                          placeholder="Entity/Facility Name"
-                        />
-                        <input
-                          type="number"
-                          step="0.01"
-                          value={entity.amount}
-                          onChange={(e) => {
-                            const updated = [...formData.disclosures.otherEntityDetails];
-                            updated[index] = { ...updated[index], amount: e.target.value };
-                            handleInputChange('disclosures.otherEntityDetails', updated);
-                          }}
-                          className="w-32 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
-                          placeholder="Amount Due"
-                        />
-                        <button
-                          onClick={() => removeArrayItem('otherEntityDetails', index)}
-                          className="px-3 py-2 bg-red-500 text-white rounded-md hover:bg-red-600"
-                        >
-                          <Minus className="h-4 w-4" />
-                        </button>
-                      </div>
-                    ))}
-                    <button
-                      onClick={() => addArrayItem('otherEntityDetails', { name: '', amount: '' })}
-                      className="flex items-center gap-2 px-3 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600"
-                    >
-                      <Plus className="h-4 w-4" />
-                      Add Entity
-                    </button>
+                <label className="flex items-center">
+                  <input
+                    type="checkbox"
+                    checked={formData.disclosures.rulesRegulationsAttached}
+                    onChange={(e) => handleInputChange('disclosures.rulesRegulationsAttached', e.target.checked)}
+                    className="mr-2"
+                  />
+                  <span>Rules and regulations are attached</span>
+                </label>
+              </div>
+            </div>
+
+            {/* Section 3: Restraints on Alienation */}
+            <div className="bg-white border rounded-lg p-6">
+              <h4 className="font-semibold text-gray-800 mb-4">3. Restraints on Alienation</h4>
+              <div className="space-y-4">
+                <label className="flex items-center">
+                  <input
+                    type="checkbox"
+                    checked={formData.disclosures.restraintsExist}
+                    onChange={(e) => handleInputChange('disclosures.restraintsExist', e.target.checked)}
+                    className="mr-2"
+                  />
+                  <span>There is a restraint on free alienability of the unit</span>
+                </label>
+                
+                {formData.disclosures.restraintsExist && (
+                  <div className="pl-6 space-y-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Article/Section Reference:</label>
+                      <input
+                        type="text"
+                        value={formData.disclosures.restraintsArticleSection}
+                        onChange={(e) => handleInputChange('disclosures.restraintsArticleSection', e.target.value)}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        placeholder="e.g., Article 5, Section 2 of CC&Rs"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Details:</label>
+                      <textarea
+                        value={formData.disclosures.restraintsDetails}
+                        onChange={(e) => handleInputChange('disclosures.restraintsDetails', e.target.value)}
+                        rows={3}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        placeholder="Describe the restraint on alienability..."
+                      />
+                    </div>
                   </div>
                 )}
               </div>
             </div>
           </div>
         );
-
+        
       case 4:
         return (
           <div className="space-y-6">
-            <h3 className="text-xl font-semibold text-gray-800 mb-6">Financial Disclosures (Sections 7-12)</h3>
+            <h3 className="text-xl font-semibold text-gray-800 mb-6">Financial Disclosures (Sections 4-12)</h3>
             
             {/* Section 4: Association Assessments */}
             <div className="bg-white border rounded-lg p-6">
@@ -585,7 +603,6 @@ const AdminResaleCertificateForm = ({
                       value={formData.disclosures.assessmentAmount}
                       onChange={(e) => handleInputChange('disclosures.assessmentAmount', e.target.value)}
                       className="flex-1 px-3 py-2 border border-gray-300 rounded-r-md focus:outline-none focus:ring-2 focus:ring-purple-500"
-                      placeholder="0.00"
                     />
                   </div>
                 </div>
@@ -598,23 +615,10 @@ const AdminResaleCertificateForm = ({
                   >
                     <option value="monthly">Monthly</option>
                     <option value="quarterly">Quarterly</option>
-                    <option value="periodic">Periodic</option>
+                    <option value="annually">Annually</option>
+                    <option value="other">Other</option>
                   </select>
                 </div>
-                
-                {formData.disclosures.assessmentFrequency === 'periodic' && (
-                  <div className="md:col-span-2">
-                    <label className="block text-sm font-medium text-gray-700 mb-2">Describe Interval:</label>
-                    <input
-                      type="text"
-                      value={formData.disclosures.periodicDescription}
-                      onChange={(e) => handleInputChange('disclosures.periodicDescription', e.target.value)}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
-                      placeholder="e.g., Semi-annually, Annually"
-                    />
-                  </div>
-                )}
-                
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">Current Assessment Due:</label>
                   <div className="flex">
@@ -625,7 +629,6 @@ const AdminResaleCertificateForm = ({
                       value={formData.disclosures.currentAssessmentDue}
                       onChange={(e) => handleInputChange('disclosures.currentAssessmentDue', e.target.value)}
                       className="flex-1 px-3 py-2 border border-gray-300 rounded-r-md focus:outline-none focus:ring-2 focus:ring-purple-500"
-                      placeholder="0.00"
                     />
                   </div>
                 </div>
@@ -653,7 +656,7 @@ const AdminResaleCertificateForm = ({
                   </div>
                 </div>
                 <div>
-                  <label className="flex items-center mb-2">
+                  <label className="flex items-center">
                     <input
                       type="checkbox"
                       checked={formData.disclosures.transferAssessment}
@@ -663,7 +666,7 @@ const AdminResaleCertificateForm = ({
                     <span className="text-sm">Transfer assessment upon sale</span>
                   </label>
                   {formData.disclosures.transferAssessment && (
-                    <div className="flex">
+                    <div className="mt-2 flex">
                       <span className="inline-flex items-center px-3 py-2 border border-r-0 border-gray-300 bg-gray-50 text-gray-500 text-sm">$</span>
                       <input
                         type="number"
@@ -671,7 +674,6 @@ const AdminResaleCertificateForm = ({
                         value={formData.disclosures.transferAssessmentAmount}
                         onChange={(e) => handleInputChange('disclosures.transferAssessmentAmount', e.target.value)}
                         className="flex-1 px-3 py-2 border border-gray-300 rounded-r-md focus:outline-none focus:ring-2 focus:ring-purple-500"
-                        placeholder="0.00"
                       />
                     </div>
                   )}
@@ -679,11 +681,295 @@ const AdminResaleCertificateForm = ({
               </div>
             </div>
 
-            {/* Additional sections 7-12 would continue here... */}
-            {/* For brevity, I'll include the key sections */}
+            {/* Section 5: Association Fees */}
+            <div className="bg-white border rounded-lg p-6">
+              <h4 className="font-semibold text-gray-800 mb-4">5. Association Fees</h4>
+              <div className="space-y-4">
+                <label className="flex items-center">
+                  <input
+                    type="checkbox"
+                    checked={formData.disclosures.hasOtherFees}
+                    onChange={(e) => handleInputChange('disclosures.hasOtherFees', e.target.checked)}
+                    className="mr-2"
+                  />
+                  <span>The association does charge fees to the owner of the unit</span>
+                </label>
+                
+                {formData.disclosures.hasOtherFees && (
+                  <div className="pl-6 space-y-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Other fees due:</label>
+                      <div className="flex">
+                        <span className="inline-flex items-center px-3 py-2 border border-r-0 border-gray-300 bg-gray-50 text-gray-500 text-sm">$</span>
+                        <input
+                          type="number"
+                          step="0.01"
+                          value={formData.disclosures.otherFees}
+                          onChange={(e) => handleInputChange('disclosures.otherFees', e.target.value)}
+                          className="flex-1 px-3 py-2 border border-gray-300 rounded-r-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Description:</label>
+                      <textarea
+                        value={formData.disclosures.otherFeesDescription}
+                        onChange={(e) => handleInputChange('disclosures.otherFeesDescription', e.target.value)}
+                        rows={2}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Unpaid fees:</label>
+                      <div className="flex">
+                        <span className="inline-flex items-center px-3 py-2 border border-r-0 border-gray-300 bg-gray-50 text-gray-500 text-sm">$</span>
+                        <input
+                          type="number"
+                          step="0.01"
+                          value={formData.disclosures.unpaidFees}
+                          onChange={(e) => handleInputChange('disclosures.unpaidFees', e.target.value)}
+                          className="flex-1 px-3 py-2 border border-gray-300 rounded-r-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Section 6: Other Entity Assessments */}
+            <div className="bg-white border rounded-lg p-6">
+              <h4 className="font-semibold text-gray-800 mb-4">6. Other Entity or Facility Assessments</h4>
+              <div className="space-y-4">
+                <label className="flex items-center">
+                  <input
+                    type="checkbox"
+                    checked={formData.disclosures.otherEntityLiable}
+                    onChange={(e) => handleInputChange('disclosures.otherEntityLiable', e.target.checked)}
+                    className="mr-2"
+                  />
+                  <span>The owner is liable to any other entity or facility for assessments, fees, or other charges</span>
+                </label>
+              </div>
+            </div>
+
+            {/* Section 7: Special Assessments */}
+            <div className="bg-white border rounded-lg p-6">
+              <h4 className="font-semibold text-gray-800 mb-4">7. Special Assessments</h4>
+              <div className="space-y-4">
+                <label className="flex items-center">
+                  <input
+                    type="checkbox"
+                    checked={formData.disclosures.hasSpecialAssessments}
+                    onChange={(e) => handleInputChange('disclosures.hasSpecialAssessments', e.target.checked)}
+                    className="mr-2"
+                  />
+                  <span>The association does have approved additional or special assessments</span>
+                </label>
+                
+                {formData.disclosures.hasSpecialAssessments && (
+                  <div className="grid md:grid-cols-2 gap-4 pl-6">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Amount:</label>
+                      <div className="flex">
+                        <span className="inline-flex items-center px-3 py-2 border border-r-0 border-gray-300 bg-gray-50 text-gray-500 text-sm">$</span>
+                        <input
+                          type="number"
+                          step="0.01"
+                          value={formData.disclosures.specialAssessmentAmount}
+                          onChange={(e) => handleInputChange('disclosures.specialAssessmentAmount', e.target.value)}
+                          className="flex-1 px-3 py-2 border border-gray-300 rounded-r-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Due Date:</label>
+                      <input
+                        type="date"
+                        value={formData.disclosures.specialAssessmentDate}
+                        onChange={(e) => handleInputChange('disclosures.specialAssessmentDate', e.target.value)}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                      />
+                    </div>
+                    <div className="md:col-span-2">
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Unpaid special assessment:</label>
+                      <div className="flex">
+                        <span className="inline-flex items-center px-3 py-2 border border-r-0 border-gray-300 bg-gray-50 text-gray-500 text-sm">$</span>
+                        <input
+                          type="number"
+                          step="0.01"
+                          value={formData.disclosures.unpaidSpecialAssessment}
+                          onChange={(e) => handleInputChange('disclosures.unpaidSpecialAssessment', e.target.value)}
+                          className="flex-1 px-3 py-2 border border-gray-300 rounded-r-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Section 8: Capital Expenditures */}
+            <div className="bg-white border rounded-lg p-6">
+              <h4 className="font-semibold text-gray-800 mb-4">8. Capital Expenditures</h4>
+              <div className="space-y-4">
+                <label className="flex items-center">
+                  <input
+                    type="checkbox"
+                    checked={formData.disclosures.hasCapitalExpenditures}
+                    onChange={(e) => handleInputChange('disclosures.hasCapitalExpenditures', e.target.checked)}
+                    className="mr-2"
+                  />
+                  <span>The association does have approved capital expenditures for the current and succeeding fiscal years</span>
+                </label>
+                
+                {formData.disclosures.hasCapitalExpenditures && (
+                  <div className="pl-6">
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Details:</label>
+                    <textarea
+                      value={formData.disclosures.capitalExpendituresDetails}
+                      onChange={(e) => handleInputChange('disclosures.capitalExpendituresDetails', e.target.value)}
+                      rows={4}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                      placeholder="Describe approved capital expenditures..."
+                    />
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Section 9: Reserves */}
+            <div className="bg-white border rounded-lg p-6">
+              <h4 className="font-semibold text-gray-800 mb-4">9. Reserves for Capital Expenditures</h4>
+              <div className="space-y-4">
+                <label className="flex items-center">
+                  <input
+                    type="checkbox"
+                    checked={formData.disclosures.hasReserves}
+                    onChange={(e) => handleInputChange('disclosures.hasReserves', e.target.checked)}
+                    className="mr-2"
+                  />
+                  <span>The association does have reserves for capital expenditures</span>
+                </label>
+                
+                {formData.disclosures.hasReserves && (
+                  <div className="pl-6 space-y-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Total Reserve Amount:</label>
+                      <div className="flex">
+                        <span className="inline-flex items-center px-3 py-2 border border-r-0 border-gray-300 bg-gray-50 text-gray-500 text-sm">$</span>
+                        <input
+                          type="number"
+                          step="0.01"
+                          value={formData.disclosures.reserveAmount}
+                          onChange={(e) => handleInputChange('disclosures.reserveAmount', e.target.value)}
+                          className="flex-1 px-3 py-2 border border-gray-300 rounded-r-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        />
+                      </div>
+                    </div>
+                    
+                    <label className="flex items-center">
+                      <input
+                        type="checkbox"
+                        checked={formData.disclosures.hasDesignatedReserves}
+                        onChange={(e) => handleInputChange('disclosures.hasDesignatedReserves', e.target.checked)}
+                        className="mr-2"
+                      />
+                      <span>Some reserves are designated for specific projects</span>
+                    </label>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Section 10: Financial Statements */}
+            <div className="bg-white border rounded-lg p-6">
+              <h4 className="font-semibold text-gray-800 mb-4">10. Balance Sheet and Income Statement</h4>
+              <div className="space-y-3">
+                <label className="flex items-center">
+                  <input
+                    type="checkbox"
+                    checked={formData.disclosures.balanceSheetAttached}
+                    onChange={(e) => handleInputChange('disclosures.balanceSheetAttached', e.target.checked)}
+                    className="mr-2"
+                  />
+                  <span>The association's most recent balance sheet is attached</span>
+                </label>
+                
+                <label className="flex items-center">
+                  <input
+                    type="checkbox"
+                    checked={formData.disclosures.incomeStatementAttached}
+                    onChange={(e) => handleInputChange('disclosures.incomeStatementAttached', e.target.checked)}
+                    className="mr-2"
+                  />
+                  <span>The association's most recent income and expense statement is attached</span>
+                </label>
+              </div>
+            </div>
+
+            {/* Section 11: Operating Budget */}
+            <div className="bg-white border rounded-lg p-6">
+              <h4 className="font-semibold text-gray-800 mb-4">11. Current Operating Budget</h4>
+              <label className="flex items-center">
+                <input
+                  type="checkbox"
+                  checked={formData.disclosures.budgetAttached}
+                  onChange={(e) => handleInputChange('disclosures.budgetAttached', e.target.checked)}
+                  className="mr-2"
+                />
+                <span>The association's current operating budget is attached</span>
+              </label>
+            </div>
+
+            {/* Section 12: Reserve Study */}
+            <div className="bg-white border rounded-lg p-6">
+              <h4 className="font-semibold text-gray-800 mb-4">12. Reserve Study</h4>
+              <div className="space-y-3">
+                <div>
+                  <label className="flex items-center">
+                    <input
+                      type="radio"
+                      name="reserveStudy"
+                      value="current"
+                      checked={formData.disclosures.reserveStudyType === 'current'}
+                      onChange={(e) => handleInputChange('disclosures.reserveStudyType', e.target.value)}
+                      className="mr-2"
+                    />
+                    <span>The current reserve study of the association is attached</span>
+                  </label>
+                </div>
+                <div>
+                  <label className="flex items-center">
+                    <input
+                      type="radio"
+                      name="reserveStudy"
+                      value="summary"
+                      checked={formData.disclosures.reserveStudyType === 'summary'}
+                      onChange={(e) => handleInputChange('disclosures.reserveStudyType', e.target.value)}
+                      className="mr-2"
+                    />
+                    <span>A summary of the current reserve study is attached</span>
+                  </label>
+                </div>
+                <div>
+                  <label className="flex items-center">
+                    <input
+                      type="radio"
+                      name="reserveStudy"
+                      value="not_required"
+                      checked={formData.disclosures.reserveStudyType === 'not_required'}
+                      onChange={(e) => handleInputChange('disclosures.reserveStudyType', e.target.value)}
+                      className="mr-2"
+                    />
+                    <span>Not applicable. A reserve study is not yet required</span>
+                  </label>
+                </div>
+              </div>
+            </div>
           </div>
         );
-
+        
       case 5:
         return (
           <div className="space-y-6">
@@ -693,35 +979,19 @@ const AdminResaleCertificateForm = ({
             <div className="bg-white border rounded-lg p-6">
               <h4 className="font-semibold text-gray-800 mb-4">13. Unsatisfied Judgments and Pending Actions</h4>
               <div className="space-y-4">
-                <div className="flex gap-4">
-                  <label className="flex items-center">
-                    <input
-                      type="radio"
-                      name="legalIssues"
-                      checked={!formData.disclosures.hasLegalIssues}
-                      onChange={() => handleInputChange('disclosures.hasLegalIssues', false)}
-                      className="mr-2"
-                    />
-                    <span>There are not unsatisfied judgments or pending actions</span>
-                  </label>
-                  
-                  <label className="flex items-center">
-                    <input
-                      type="radio"
-                      name="legalIssues"
-                      checked={formData.disclosures.hasLegalIssues}
-                      onChange={() => handleInputChange('disclosures.hasLegalIssues', true)}
-                      className="mr-2"
-                    />
-                    <span>There are unsatisfied judgments or pending actions</span>
-                  </label>
-                </div>
+                <label className="flex items-center">
+                  <input
+                    type="checkbox"
+                    checked={formData.disclosures.hasLegalIssues}
+                    onChange={(e) => handleInputChange('disclosures.hasLegalIssues', e.target.checked)}
+                    className="mr-2"
+                  />
+                  <span>There are unsatisfied judgments or pending actions</span>
+                </label>
                 
                 {formData.disclosures.hasLegalIssues && (
                   <div className="pl-6">
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Describe unsatisfied judgments or pending actions that could have material impact:
-                    </label>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Details:</label>
                     <textarea
                       value={formData.disclosures.legalIssuesDetails}
                       onChange={(e) => handleInputChange('disclosures.legalIssuesDetails', e.target.value)}
@@ -733,9 +1003,133 @@ const AdminResaleCertificateForm = ({
                 )}
               </div>
             </div>
+
+            {/* Section 14: Insurance */}
+            <div className="bg-white border rounded-lg p-6">
+              <h4 className="font-semibold text-gray-800 mb-4">14. Insurance Coverage</h4>
+              <div className="space-y-4">
+                <div>
+                  <label className="flex items-center">
+                    <input
+                      type="checkbox"
+                      checked={formData.disclosures.providesInsurance}
+                      onChange={(e) => handleInputChange('disclosures.providesInsurance', e.target.checked)}
+                      className="mr-2"
+                    />
+                    <span>The association does provide insurance coverage for owners</span>
+                  </label>
+                  
+                  {formData.disclosures.providesInsurance && (
+                    <div className="pl-6 mt-2">
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Insurance Details:</label>
+                      <textarea
+                        value={formData.disclosures.insuranceDetails}
+                        onChange={(e) => handleInputChange('disclosures.insuranceDetails', e.target.value)}
+                        rows={3}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        placeholder="Describe insurance coverage provided by the association..."
+                      />
+                    </div>
+                  )}
+                </div>
+                
+                <div>
+                  <label className="flex items-center">
+                    <input
+                      type="checkbox"
+                      checked={formData.disclosures.recommendsInsurance}
+                      onChange={(e) => handleInputChange('disclosures.recommendsInsurance', e.target.checked)}
+                      className="mr-2"
+                    />
+                    <span>The association does recommend or require owners obtain insurance</span>
+                  </label>
+                  
+                  {formData.disclosures.recommendsInsurance && (
+                    <div className="pl-6 mt-2">
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Insurance Requirements:</label>
+                      <textarea
+                        value={formData.disclosures.insuranceRequirements}
+                        onChange={(e) => handleInputChange('disclosures.insuranceRequirements', e.target.value)}
+                        rows={3}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        placeholder="Describe recommended or required insurance coverage..."
+                      />
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Section 15: Association Violations */}
+            <div className="bg-white border rounded-lg p-6">
+              <h4 className="font-semibold text-gray-800 mb-4">15. Written Notice from Association</h4>
+              <label className="flex items-center">
+                <input
+                  type="checkbox"
+                  checked={formData.disclosures.hasViolationNotices}
+                  onChange={(e) => handleInputChange('disclosures.hasViolationNotices', e.target.checked)}
+                  className="mr-2"
+                />
+                <span>The association has given or received written notice of violations for this unit</span>
+              </label>
+            </div>
+
+            {/* Section 16: Government Violations */}
+            <div className="bg-white border rounded-lg p-6">
+              <h4 className="font-semibold text-gray-800 mb-4">16. Written Notice from Governmental Agency</h4>
+              <label className="flex items-center">
+                <input
+                  type="checkbox"
+                  checked={formData.disclosures.hasGovernmentNotices}
+                  onChange={(e) => handleInputChange('disclosures.hasGovernmentNotices', e.target.checked)}
+                  className="mr-2"
+                />
+                <span>The Board has received written notice from governmental agency of violations</span>
+              </label>
+            </div>
+
+            {/* Section 17: Board Minutes */}
+            <div className="bg-white border rounded-lg p-6">
+              <h4 className="font-semibold text-gray-800 mb-4">17. Board Meeting Minutes</h4>
+              <div className="space-y-3">
+                <label className="flex items-center">
+                  <input
+                    type="checkbox"
+                    checked={formData.disclosures.boardMinutesAttached}
+                    onChange={(e) => handleInputChange('disclosures.boardMinutesAttached', e.target.checked)}
+                    className="mr-2"
+                  />
+                  <span>A copy of any approved minutes of meetings of the Board held during the last six months is attached</span>
+                </label>
+                
+                <label className="flex items-center">
+                  <input
+                    type="checkbox"
+                    checked={formData.disclosures.boardMinutesNA}
+                    onChange={(e) => handleInputChange('disclosures.boardMinutesNA', e.target.checked)}
+                    className="mr-2"
+                  />
+                  <span>Not applicable</span>
+                </label>
+              </div>
+            </div>
+
+            {/* Section 18: Association Minutes */}
+            <div className="bg-white border rounded-lg p-6">
+              <h4 className="font-semibold text-gray-800 mb-4">18. Association Meeting Minutes</h4>
+              <label className="flex items-center">
+                <input
+                  type="checkbox"
+                  checked={formData.disclosures.associationMinutesAttached}
+                  onChange={(e) => handleInputChange('disclosures.associationMinutesAttached', e.target.checked)}
+                  className="mr-2"
+                />
+                <span>A copy of any approved or draft minutes of the most recent association meeting is attached</span>
+              </label>
+            </div>
           </div>
         );
-
+        
       case 6:
         return (
           <div className="space-y-6">
@@ -745,41 +1139,222 @@ const AdminResaleCertificateForm = ({
             <div className="bg-white border rounded-lg p-6">
               <h4 className="font-semibold text-gray-800 mb-4">19. Leasehold Estates</h4>
               <div className="space-y-4">
-                <div className="flex gap-4">
-                  <label className="flex items-center">
-                    <input
-                      type="radio"
-                      name="leaseholdEstate"
-                      checked={!formData.disclosures.hasLeaseholdEstate}
-                      onChange={() => handleInputChange('disclosures.hasLeaseholdEstate', false)}
-                      className="mr-2"
-                    />
-                    <span>There is not an existing leasehold estate affecting a common area or common element</span>
-                  </label>
-                  
-                  <label className="flex items-center">
-                    <input
-                      type="radio"
-                      name="leaseholdEstate"
-                      checked={formData.disclosures.hasLeaseholdEstate}
-                      onChange={() => handleInputChange('disclosures.hasLeaseholdEstate', true)}
-                      className="mr-2"
-                    />
-                    <span>There is an existing leasehold estate affecting a common area or common element</span>
-                  </label>
-                </div>
+                <label className="flex items-center">
+                  <input
+                    type="checkbox"
+                    checked={formData.disclosures.hasLeaseholdEstate}
+                    onChange={(e) => handleInputChange('disclosures.hasLeaseholdEstate', e.target.checked)}
+                    className="mr-2"
+                  />
+                  <span>There is an existing leasehold estate affecting a common area or common element</span>
+                </label>
                 
                 {formData.disclosures.hasLeaseholdEstate && (
                   <div className="pl-6">
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      The remaining term of the leasehold estate established in the attached document(s) is:
-                    </label>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Details:</label>
+                    <textarea
+                      value={formData.disclosures.leaseholdDetails}
+                      onChange={(e) => handleInputChange('disclosures.leaseholdDetails', e.target.value)}
+                      rows={3}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                      placeholder="Describe the leasehold estate..."
+                    />
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Section 20: Occupancy Limitations */}
+            <div className="bg-white border rounded-lg p-6">
+              <h4 className="font-semibold text-gray-800 mb-4">20. Occupancy Limitations</h4>
+              <div className="space-y-4">
+                <label className="flex items-center">
+                  <input
+                    type="checkbox"
+                    checked={formData.disclosures.hasOccupancyLimitations}
+                    onChange={(e) => handleInputChange('disclosures.hasOccupancyLimitations', e.target.checked)}
+                    className="mr-2"
+                  />
+                  <span>The association does have limitations on number or age of occupants</span>
+                </label>
+                
+                {formData.disclosures.hasOccupancyLimitations && (
+                  <div className="pl-6">
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Article/Section Reference:</label>
                     <input
                       type="text"
-                      value={formData.disclosures.leaseholdTerm}
-                      onChange={(e) => handleInputChange('disclosures.leaseholdTerm', e.target.value)}
+                      value={formData.disclosures.occupancyLimitationsRef}
+                      onChange={(e) => handleInputChange('disclosures.occupancyLimitationsRef', e.target.value)}
                       className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
-                      placeholder="Enter remaining term"
+                      placeholder="e.g., Article 5, Section 2 of CC&Rs"
+                    />
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Section 21: Flag Restrictions */}
+            <div className="bg-white border rounded-lg p-6">
+              <h4 className="font-semibold text-gray-800 mb-4">21. United States Flag Restrictions</h4>
+              <div className="space-y-4">
+                <label className="flex items-center">
+                  <input
+                    type="checkbox"
+                    checked={formData.disclosures.hasFlagRestrictions}
+                    onChange={(e) => handleInputChange('disclosures.hasFlagRestrictions', e.target.checked)}
+                    className="mr-2"
+                  />
+                  <span>The association does have restrictions on displaying the US flag</span>
+                </label>
+                
+                {formData.disclosures.hasFlagRestrictions && (
+                  <div className="pl-6">
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Article/Section Reference:</label>
+                    <input
+                      type="text"
+                      value={formData.disclosures.flagRestrictionsRef}
+                      onChange={(e) => handleInputChange('disclosures.flagRestrictionsRef', e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    />
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Section 22: Solar Restrictions */}
+            <div className="bg-white border rounded-lg p-6">
+              <h4 className="font-semibold text-gray-800 mb-4">22. Solar Energy Restrictions</h4>
+              <div className="space-y-4">
+                <label className="flex items-center">
+                  <input
+                    type="checkbox"
+                    checked={formData.disclosures.hasSolarRestrictions}
+                    onChange={(e) => handleInputChange('disclosures.hasSolarRestrictions', e.target.checked)}
+                    className="mr-2"
+                  />
+                  <span>The association does have restrictions on solar energy devices</span>
+                </label>
+                
+                {formData.disclosures.hasSolarRestrictions && (
+                  <div className="pl-6">
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Article/Section Reference:</label>
+                    <input
+                      type="text"
+                      value={formData.disclosures.solarRestrictionsRef}
+                      onChange={(e) => handleInputChange('disclosures.solarRestrictionsRef', e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    />
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Section 23: Sign Restrictions */}
+            <div className="bg-white border rounded-lg p-6">
+              <h4 className="font-semibold text-gray-800 mb-4">23. Sign Restrictions</h4>
+              <div className="space-y-4">
+                <label className="flex items-center">
+                  <input
+                    type="checkbox"
+                    checked={formData.disclosures.hasSignRestrictions}
+                    onChange={(e) => handleInputChange('disclosures.hasSignRestrictions', e.target.checked)}
+                    className="mr-2"
+                  />
+                  <span>The association does have restrictions on size, placement, or duration of display of signs</span>
+                </label>
+                
+                {formData.disclosures.hasSignRestrictions && (
+                  <div className="pl-6">
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Article/Section Reference:</label>
+                    <input
+                      type="text"
+                      value={formData.disclosures.signRestrictionsRef}
+                      onChange={(e) => handleInputChange('disclosures.signRestrictionsRef', e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    />
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Section 24: Parking Restrictions */}
+            <div className="bg-white border rounded-lg p-6">
+              <h4 className="font-semibold text-gray-800 mb-4">24. Parking or Vehicle Restrictions</h4>
+              <div className="space-y-4">
+                <label className="flex items-center">
+                  <input
+                    type="checkbox"
+                    checked={formData.disclosures.hasParkingRestrictions}
+                    onChange={(e) => handleInputChange('disclosures.hasParkingRestrictions', e.target.checked)}
+                    className="mr-2"
+                  />
+                  <span>The association does have parking or vehicle restrictions</span>
+                </label>
+                
+                {formData.disclosures.hasParkingRestrictions && (
+                  <div className="pl-6">
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Article/Section Reference:</label>
+                    <input
+                      type="text"
+                      value={formData.disclosures.parkingRestrictionsRef}
+                      onChange={(e) => handleInputChange('disclosures.parkingRestrictionsRef', e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    />
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Section 25: Business Restrictions */}
+            <div className="bg-white border rounded-lg p-6">
+              <h4 className="font-semibold text-gray-800 mb-4">25. Home-Based Business Restrictions</h4>
+              <div className="space-y-4">
+                <label className="flex items-center">
+                  <input
+                    type="checkbox"
+                    checked={formData.disclosures.hasBusinessRestrictions}
+                    onChange={(e) => handleInputChange('disclosures.hasBusinessRestrictions', e.target.checked)}
+                    className="mr-2"
+                  />
+                  <span>The association does have restrictions on operation of a home-based business</span>
+                </label>
+                
+                {formData.disclosures.hasBusinessRestrictions && (
+                  <div className="pl-6">
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Article/Section Reference:</label>
+                    <input
+                      type="text"
+                      value={formData.disclosures.businessRestrictionsRef}
+                      onChange={(e) => handleInputChange('disclosures.businessRestrictionsRef', e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    />
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Section 26: Rental Restrictions */}
+            <div className="bg-white border rounded-lg p-6">
+              <h4 className="font-semibold text-gray-800 mb-4">26. Rental Restrictions</h4>
+              <div className="space-y-4">
+                <label className="flex items-center">
+                  <input
+                    type="checkbox"
+                    checked={formData.disclosures.hasRentalRestrictions}
+                    onChange={(e) => handleInputChange('disclosures.hasRentalRestrictions', e.target.checked)}
+                    className="mr-2"
+                  />
+                  <span>The association does have restrictions on owner's ability to rent</span>
+                </label>
+                
+                {formData.disclosures.hasRentalRestrictions && (
+                  <div className="pl-6">
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Article/Section Reference:</label>
+                    <input
+                      type="text"
+                      value={formData.disclosures.rentalRestrictionsRef}
+                      onChange={(e) => handleInputChange('disclosures.rentalRestrictionsRef', e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
                     />
                   </div>
                 )}
@@ -787,12 +1362,93 @@ const AdminResaleCertificateForm = ({
             </div>
           </div>
         );
-
+        
       case 7:
         return (
           <div className="space-y-6">
             <h3 className="text-xl font-semibold text-gray-800 mb-6">Final Certifications (Sections 27-30)</h3>
             
+            {/* Section 27: Tax Deductibility (Cooperatives Only) */}
+            <div className="bg-white border rounded-lg p-6">
+              <h4 className="font-semibold text-gray-800 mb-4">27. Tax Deductibility Statement (Real Estate Cooperatives Only)</h4>
+              <div className="space-y-3">
+                <label className="flex items-center">
+                  <input
+                    type="checkbox"
+                    checked={formData.disclosures.taxDeductibilityAttached}
+                    onChange={(e) => handleInputChange('disclosures.taxDeductibilityAttached', e.target.checked)}
+                    className="mr-2"
+                  />
+                  <span>A statement as to the deductibility for federal income tax purposes by the owner of real estate taxes and interest paid by the association is attached</span>
+                </label>
+                
+                <label className="flex items-center">
+                  <input
+                    type="checkbox"
+                    checked={formData.disclosures.taxDeductibilityNA}
+                    onChange={(e) => handleInputChange('disclosures.taxDeductibilityNA', e.target.checked)}
+                    className="mr-2"
+                  />
+                  <span>Not applicable</span>
+                </label>
+              </div>
+            </div>
+
+            {/* Section 28: Pending Sales */}
+            <div className="bg-white border rounded-lg p-6">
+              <h4 className="font-semibold text-gray-800 mb-4">28. Pending Sales or Encumbrances</h4>
+              <label className="flex items-center">
+                <input
+                  type="checkbox"
+                  checked={formData.disclosures.hasPendingSales}
+                  onChange={(e) => handleInputChange('disclosures.hasPendingSales', e.target.checked)}
+                  className="mr-2"
+                />
+                <span>There is a pending sale or encumbrance of common elements</span>
+              </label>
+            </div>
+
+            {/* Section 29: Mortgage Approvals */}
+            <div className="bg-white border rounded-lg p-6">
+              <h4 className="font-semibold text-gray-800 mb-4">29. Secondary Mortgage Market Agency Approvals</h4>
+              <div className="space-y-4">
+                <label className="flex items-center">
+                  <input
+                    type="checkbox"
+                    checked={formData.disclosures.hasMortgageApprovals}
+                    onChange={(e) => handleInputChange('disclosures.hasMortgageApprovals', e.target.checked)}
+                    className="mr-2"
+                  />
+                  <span>There are known project approvals from secondary mortgage market agencies</span>
+                </label>
+                
+                {formData.disclosures.hasMortgageApprovals && (
+                  <div className="pl-6">
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Approved Agencies:</label>
+                    <div className="space-y-2">
+                      {['Fannie Mae', 'Freddie Mac', 'FHA', 'VA'].map((agency) => (
+                        <label key={agency} className="flex items-center">
+                          <input
+                            type="checkbox"
+                            checked={formData.disclosures.mortgageApprovalsList?.includes(agency)}
+                            onChange={(e) => {
+                              const current = formData.disclosures.mortgageApprovalsList || [];
+                              const updated = e.target.checked 
+                                ? [...current, agency]
+                                : current.filter(a => a !== agency);
+                              handleInputChange('disclosures.mortgageApprovalsList', updated);
+                            }}
+                            className="mr-2"
+                          />
+                          <span>{agency}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
             {/* Section 30: CIC Board Certification */}
             <div className="bg-white border rounded-lg p-6">
               <h4 className="font-semibold text-gray-800 mb-4">30. Common Interest Community Board Certification *</h4>
@@ -804,13 +1460,13 @@ const AdminResaleCertificateForm = ({
                     onChange={(e) => handleInputChange('disclosures.cicBoardFiled', e.target.checked)}
                     className="mr-2"
                   />
-                  <span>The association has filed with the Common Interest Community Board the annual report required by law</span>
+                  <span>The association has filed with the CIC Board the annual report required by law</span>
                 </label>
                 
                 <div className="grid md:grid-cols-2 gap-4">
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Association Filing (Registration) Number assigned by the CIC Board: *
+                      Association Registration Number: *
                     </label>
                     <input
                       type="text"
@@ -822,7 +1478,7 @@ const AdminResaleCertificateForm = ({
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Filing (Registration) Expiration Date: *
+                      Registration Expiration Date: *
                     </label>
                     <input
                       type="date"
@@ -831,10 +1487,6 @@ const AdminResaleCertificateForm = ({
                       className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
                     />
                   </div>
-                </div>
-                
-                <div className="text-sm text-gray-600 italic">
-                  * A copy of the registration issued by the Common Interest Community Board is sufficient for the certification.
                 </div>
               </div>
             </div>
@@ -1064,227 +1716,4 @@ const AdminResaleCertificateForm = ({
   );
 };
 
-export default AdminResaleCertificateForm;!formData.noManagingAgent && (
-                <div className="grid md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">Name:</label>
-                    <input
-                      type="text"
-                      value={formData.managingAgentName}
-                      onChange={(e) => handleInputChange('managingAgentName', e.target.value)}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">Company:</label>
-                    <input
-                      type="text"
-                      value={formData.managingAgentCompany}
-                      onChange={(e) => handleInputChange('managingAgentCompany', e.target.value)}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">CIC Manager License No.:</label>
-                    <input
-                      type="text"
-                      value={formData.managingAgentLicense}
-                      onChange={(e) => handleInputChange('managingAgentLicense', e.target.value)}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">Phone Number:</label>
-                    <input
-                      type="tel"
-                      value={formData.managingAgentPhone}
-                      onChange={(e) => handleInputChange('managingAgentPhone', e.target.value)}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
-                    />
-                  </div>
-                  <div className="md:col-span-2">
-                    <label className="block text-sm font-medium text-gray-700 mb-2">Mailing Address:</label>
-                    <textarea
-                      value={formData.managingAgentAddress}
-                      onChange={(e) => handleInputChange('managingAgentAddress', e.target.value)}
-                      rows={2}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">Email:</label>
-                    <input
-                      type="email"
-                      value={formData.managingAgentEmail}
-                      onChange={(e) => handleInputChange('managingAgentEmail', e.target.value)}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
-                    />
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        );
-
-      case 3:
-        return (
-          <div className="space-y-6">
-            <h3 className="text-xl font-semibold text-gray-800 mb-6">Basic Disclosures (Sections 1-6)</h3>
-            
-            {/* Section 2: Governing Documents */}
-            <div className="bg-white border rounded-lg p-6">
-              <h4 className="font-semibold text-gray-800 mb-4">2. Governing Documents and Rules & Regulations</h4>
-              <div className="space-y-4">
-                <label className="flex items-center">
-                  <input
-                    type="checkbox"
-                    checked={formData.disclosures.governingDocsAttached}
-                    onChange={(e) => handleInputChange('disclosures.governingDocsAttached', e.target.checked)}
-                    className="mr-2"
-                  />
-                  <span>Association governing documents (required) are attached</span>
-                </label>
-                
-                <label className="flex items-center">
-                  <input
-                    type="checkbox"
-                    checked={formData.disclosures.rulesAndRegulationsAttached}
-                    onChange={(e) => handleInputChange('disclosures.rulesAndRegulationsAttached', e.target.checked)}
-                    className="mr-2"
-                  />
-                  <span>Rules and regulations are attached</span>
-                </label>
-              </div>
-            </div>
-
-            {/* Section 3: Restraints on Alienation */}
-            <div className="bg-white border rounded-lg p-6">
-              <h4 className="font-semibold text-gray-800 mb-4">3. Restraints on Alienation</h4>
-              <div className="space-y-4">
-                <div className="flex gap-4">
-                  <label className="flex items-center">
-                    <input
-                      type="radio"
-                      name="restraints"
-                      checked={!formData.disclosures.restraintsExist}
-                      onChange={() => handleInputChange('disclosures.restraintsExist', false)}
-                      className="mr-2"
-                    />
-                    <span>There is not any restraint on free alienability</span>
-                  </label>
-                  
-                  <label className="flex items-center">
-                    <input
-                      type="radio"
-                      name="restraints"
-                      checked={formData.disclosures.restraintsExist}
-                      onChange={() => handleInputChange('disclosures.restraintsExist', true)}
-                      className="mr-2"
-                    />
-                    <span>There is a restraint on free alienability</span>
-                  </label>
-                </div>
-                
-                {formData.disclosures.restraintsExist && (
-                  <div className="pl-6 space-y-3">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">Article/Section Reference:</label>
-                      <input
-                        type="text"
-                        value={formData.disclosures.restraintsArticleSection}
-                        onChange={(e) => handleInputChange('disclosures.restraintsArticleSection', e.target.value)}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
-                        placeholder="e.g., Article 5, Section 2"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">Details:</label>
-                      <textarea
-                        value={formData.disclosures.restraintsDetails}
-                        onChange={(e) => handleInputChange('disclosures.restraintsDetails', e.target.value)}
-                        rows={3}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
-                        placeholder="Describe the restraint on alienability..."
-                      />
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Section 5: Association Fees */}
-            <div className="bg-white border rounded-lg p-6">
-              <h4 className="font-semibold text-gray-800 mb-4">5. Association Fees</h4>
-              <div className="space-y-4">
-                <div className="flex gap-4">
-                  <label className="flex items-center">
-                    <input
-                      type="radio"
-                      name="otherFees"
-                      checked={!formData.disclosures.hasOtherFees}
-                      onChange={() => handleInputChange('disclosures.hasOtherFees', false)}
-                      className="mr-2"
-                    />
-                    <span>The association does not charge fees to the owner</span>
-                  </label>
-                  
-                  <label className="flex items-center">
-                    <input
-                      type="radio"
-                      name="otherFees"
-                      checked={formData.disclosures.hasOtherFees}
-                      onChange={() => handleInputChange('disclosures.hasOtherFees', true)}
-                      className="mr-2"
-                    />
-                    <span>The association does charge fees to the owner</span>
-                  </label>
-                </div>
-                
-                {formData.disclosures.hasOtherFees && (
-                  <div className="pl-6 grid md:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">Other Fees Due ($):</label>
-                      <input
-                        type="number"
-                        step="0.01"
-                        value={formData.disclosures.otherFees}
-                        onChange={(e) => handleInputChange('disclosures.otherFees', e.target.value)}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">Description:</label>
-                      <input
-                        type="text"
-                        value={formData.disclosures.otherFeesDescription}
-                        onChange={(e) => handleInputChange('disclosures.otherFeesDescription', e.target.value)}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
-                        placeholder="Describe the fees"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">Unpaid Fees ($):</label>
-                      <input
-                        type="number"
-                        step="0.01"
-                        value={formData.disclosures.unpaidFees}
-                        onChange={(e) => handleInputChange('disclosures.unpaidFees', e.target.value)}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">Unpaid Description:</label>
-                      <input
-                        type="text"
-                        value={formData.disclosures.unpaidFeesDescription}
-                        onChange={(e) => handleInputChange('disclosures.unpaidFeesDescription', e.target.value)}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
-                        placeholder="Describe unpaid fees"
-                      />
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {
+export default AdminResaleCertificateForm;
