@@ -394,6 +394,35 @@ const AdminResaleCertificateForm = ({
     { id: 8, title: 'Final Certifications (App. 27-30)', icon: CheckCircle }
   ];
 
+  const isComplete = formData.developmentName && 
+                   formData.developmentLocation && 
+                   formData.associationName && 
+                   formData.associationAddress && 
+                   formData.preparer.name && 
+                   formData.disclosures.assessmentSchedule.hasAssessments &&
+                   formData.disclosures.cicCertification.registrationNumber &&
+                   formData.disclosures.cicCertification.expirationDate;
+
+  const getCompletionPercentage = () => {
+    const requiredFields = [
+      formData.developmentName,
+      formData.developmentLocation,
+      formData.associationName,
+      formData.associationAddress,
+      formData.lotAddress,
+      formData.preparer.name,
+      formData.preparer.company,
+      formData.preparer.address,
+      formData.preparer.phone,
+      formData.preparer.email,
+      formData.disclosures.cicCertification.registrationNumber,
+      formData.disclosures.cicCertification.expirationDate
+    ];
+    
+    const completedFields = requiredFields.filter(field => field && field.toString().trim() !== '').length;
+    return Math.round((completedFields / requiredFields.length) * 100);
+  };
+
   const renderSection = () => {
     switch (currentSection) {
       case 1:
@@ -478,7 +507,7 @@ const AdminResaleCertificateForm = ({
           </div>
         );
         
-      case 2:
+     case 2:
         return (
           <div className="space-y-6">
             <h3 className="text-xl font-semibold text-gray-800 mb-6">Contact Information (Appendix 1)</h3>
@@ -682,7 +711,7 @@ const AdminResaleCertificateForm = ({
                       onChange={(e) => handleInputChange('disclosures.restraintsExist', true)}
                       className="mr-2"
                     />
-                    <span>There <strong>is</strong> any restraint on free alienability of any of the units</span>
+                    <span>There <strong>is</strong> any restraint on free alienability of any of the units. See Appendix 3.</span>
                   </label>
                   
                   <label className="flex items-center">
@@ -693,14 +722,14 @@ const AdminResaleCertificateForm = ({
                       onChange={(e) => handleInputChange('disclosures.restraintsExist', false)}
                       className="mr-2"
                     />
-                    <span>There <strong>is not</strong> any restraint on free alienability of any of the units</span>
+                    <span>There <strong>is not</strong> any restraint on free alienability of any of the units. See Appendix 3.</span>
                   </label>
                 </div>
                 
                 {formData.disclosures.restraintsExist && (
                   <div className="pl-6 space-y-4 bg-yellow-50 p-4 rounded-lg">
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">Article/Section Reference:</label>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Article/Section _______ creates a right(s) of first refusal or other restraint(s) on free alienability of the unit:</label>
                       <input
                         type="text"
                         value={formData.disclosures.restraintsArticleSection}
@@ -708,7 +737,6 @@ const AdminResaleCertificateForm = ({
                         className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
                         placeholder="e.g., Article 5, Section 2"
                       />
-                      <p className="text-xs text-gray-500 mt-1">creates a right(s) of first refusal or other restraint(s) on free alienability of the unit.</p>
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-2">Description of Restraint:</label>
@@ -746,13 +774,13 @@ const AdminResaleCertificateForm = ({
                   onChange={(e) => handleInputChange('disclosures.assessmentSchedule.hasAssessments', e.target.checked)}
                   className="mr-2"
                 />
-                <span>The association levies assessments payable by the owners to the association for common expenses.</span>
+                <span>The association levies assessments payable by the owners to the association for common expenses. See Appendix 4.</span>
               </label>
 
               {formData.disclosures.assessmentSchedule.hasAssessments && (
                 <div className="space-y-4 pl-6">
                   <div className="bg-gray-50 p-4 rounded-lg">
-                    <h5 className="font-medium mb-3">Assessment Schedule:</h5>
+                    <h5 className="font-medium mb-3">The association levies assessments, payable according to the following schedule:</h5>
                     <div className="grid md:grid-cols-3 gap-4">
                       <div>
                         <label className="flex items-center mb-2">
@@ -762,7 +790,7 @@ const AdminResaleCertificateForm = ({
                             onChange={(e) => handleInputChange('disclosures.assessmentSchedule.monthly', e.target.checked)}
                             className="mr-2"
                           />
-                          <span>Monthly</span>
+                          <span>monthly, in the amount of</span>
                         </label>
                         {formData.disclosures.assessmentSchedule.monthly && (
                           <div className="flex">
@@ -786,7 +814,7 @@ const AdminResaleCertificateForm = ({
                             onChange={(e) => handleInputChange('disclosures.assessmentSchedule.quarterly', e.target.checked)}
                             className="mr-2"
                           />
-                          <span>Quarterly</span>
+                          <span>quarterly, in the amount of</span>
                         </label>
                         {formData.disclosures.assessmentSchedule.quarterly && (
                           <div className="flex">
@@ -810,7 +838,7 @@ const AdminResaleCertificateForm = ({
                             onChange={(e) => handleInputChange('disclosures.assessmentSchedule.periodic', e.target.checked)}
                             className="mr-2"
                           />
-                          <span>Periodic</span>
+                          <span>periodic, in the amount of</span>
                         </label>
                         {formData.disclosures.assessmentSchedule.periodic && (
                           <div className="space-y-2">
@@ -839,7 +867,7 @@ const AdminResaleCertificateForm = ({
                   
                   <div className="grid md:grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">Current Assessment Due:</label>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Current assessment due:</label>
                       <div className="flex">
                         <span className="inline-flex items-center px-3 py-2 border border-r-0 border-gray-300 bg-gray-50 text-gray-500 text-sm">$</span>
                         <input
@@ -861,7 +889,7 @@ const AdminResaleCertificateForm = ({
                       />
                     </div>
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">Unpaid Assessments:</label>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Unpaid assessments:</label>
                       <div className="flex">
                         <span className="inline-flex items-center px-3 py-2 border border-r-0 border-gray-300 bg-gray-50 text-gray-500 text-sm">$</span>
                         <input
@@ -884,7 +912,7 @@ const AdminResaleCertificateForm = ({
                         onChange={(e) => handleInputChange('disclosures.assessmentSchedule.hasTransferAssessment', e.target.checked)}
                         className="mr-2"
                       />
-                      <span>The association levies an assessment upon transfer of a unit</span>
+                      <span>The association levies an assessment in the amount of $ _______ upon transfer of a unit.</span>
                     </label>
                     {formData.disclosures.assessmentSchedule.hasTransferAssessment && (
                       <div className="pl-6">
@@ -918,7 +946,7 @@ const AdminResaleCertificateForm = ({
                       onChange={(e) => handleInputChange('disclosures.fees.hasOtherFees', true)}
                       className="mr-2"
                     />
-                    <span>The association <strong>does</strong> charge fees to the owner of the unit</span>
+                    <span>The association <strong>does</strong> charge fees to the owner of the unit. See Appendix 5.</span>
                   </label>
                   
                   <label className="flex items-center">
@@ -929,7 +957,7 @@ const AdminResaleCertificateForm = ({
                       onChange={(e) => handleInputChange('disclosures.fees.hasOtherFees', false)}
                       className="mr-2"
                     />
-                    <span>The association <strong>does not</strong> charge fees to the owner of the unit</span>
+                    <span>The association <strong>does not</strong> charge fees to the owner of the unit. See Appendix 5.</span>
                   </label>
                 </div>
                 
@@ -999,7 +1027,7 @@ const AdminResaleCertificateForm = ({
                       onChange={(e) => handleInputChange('disclosures.otherEntity.isLiable', true)}
                       className="mr-2"
                     />
-                    <span>The owner <strong>is</strong> liable to any other entity or facility for assessments, fees, or other charges due to ownership of the unit</span>
+                    <span>The owner <strong>is</strong> liable to any other entity or facility for assessments, fees, or other charges due to ownership of the unit. See Appendix 6.</span>
                   </label>
                   
                   <label className="flex items-center">
@@ -1010,7 +1038,7 @@ const AdminResaleCertificateForm = ({
                       onChange={(e) => handleInputChange('disclosures.otherEntity.isLiable', false)}
                       className="mr-2"
                     />
-                    <span>The owner <strong>is not</strong> liable to any other entity or facility for assessments, fees, or other charges due to ownership of the unit</span>
+                    <span>The owner <strong>is not</strong> liable to any other entity or facility for assessments, fees, or other charges due to ownership of the unit. See Appendix 6.</span>
                   </label>
                 </div>
                 
@@ -1018,7 +1046,7 @@ const AdminResaleCertificateForm = ({
                   <div className="pl-6">
                     <div className="bg-yellow-50 p-4 rounded-lg">
                       <div className="flex items-center justify-between mb-4">
-                        <h5 className="font-medium">Entity/Facility Details</h5>
+                        <h5 className="font-medium">Entity/Facility Name and Amount Due</h5>
                         <button
                           type="button"
                           onClick={() => addArrayItem('disclosures.otherEntity.entities', { name: '', amountDue: '' })}
@@ -1079,7 +1107,7 @@ const AdminResaleCertificateForm = ({
                       onChange={(e) => handleInputChange('disclosures.specialAssessments.hasApproved', true)}
                       className="mr-2"
                     />
-                    <span>The association <strong>does</strong> have other approved additional or special assessments due and payable to the association</span>
+                    <span>The association <strong>does</strong> have other approved additional or special assessments due and payable to the association. See Appendix 7.</span>
                   </label>
                   
                   <label className="flex items-center">
@@ -1090,7 +1118,7 @@ const AdminResaleCertificateForm = ({
                       onChange={(e) => handleInputChange('disclosures.specialAssessments.hasApproved', false)}
                       className="mr-2"
                     />
-                    <span>The association <strong>does not</strong> have other approved additional or special assessments due and payable to the association</span>
+                    <span>The association <strong>does not</strong> have other approved additional or special assessments due and payable to the association. See Appendix 7.</span>
                   </label>
                 </div>
                 
@@ -1181,7 +1209,7 @@ const AdminResaleCertificateForm = ({
               </div>
             </div>
 
-            {/* Section 9: Reserves (Appendix 9) */}
+           {/* Section 9: Reserves (Appendix 9) */}
             <div className="bg-white border rounded-lg p-6">
               <h4 className="font-semibold text-gray-800 mb-4">9. Reserves for Capital Expenditures (Appendix 9)</h4>
               <div className="space-y-4">
@@ -1194,7 +1222,7 @@ const AdminResaleCertificateForm = ({
                       onChange={(e) => handleInputChange('disclosures.reserves.hasReserves', true)}
                       className="mr-2"
                     />
-                    <span>The association <strong>does</strong> have reserves for capital expenditures</span>
+                    <span>The association <strong>does</strong> have reserves for capital expenditures. See Appendix 9.</span>
                   </label>
                   
                   <label className="flex items-center">
@@ -1205,7 +1233,7 @@ const AdminResaleCertificateForm = ({
                       onChange={(e) => handleInputChange('disclosures.reserves.hasReserves', false)}
                       className="mr-2"
                     />
-                    <span>The association <strong>does not</strong> have reserves for capital expenditures</span>
+                    <span>The association <strong>does not</strong> have reserves for capital expenditures. See Appendix 9.</span>
                   </label>
                 </div>
                 
@@ -1233,13 +1261,13 @@ const AdminResaleCertificateForm = ({
                           onChange={(e) => handleInputChange('disclosures.reserves.hasDesignated', e.target.checked)}
                           className="mr-2"
                         />
-                        <span>The association <strong>has</strong> designated some portion of those reserves for a specific project(s)</span>
+                        <span>The association <strong>has</strong> designated some portion of those reserves for a specific project(s). See Appendix 9.</span>
                       </label>
                       
                       {formData.disclosures.reserves.hasDesignated && (
                         <div className="pl-6">
                           <div className="flex items-center justify-between mb-3">
-                            <h6 className="font-medium">Designated Reserve Projects</h6>
+                            <h6 className="font-medium">Amount of total reserves designated for specific projects (attach list or complete below):</h6>
                             <button
                               type="button"
                               onClick={() => addArrayItem('disclosures.reserves.designatedProjects', { project: '', amount: '' })}
@@ -1303,7 +1331,7 @@ const AdminResaleCertificateForm = ({
                       onChange={(e) => handleInputChange('disclosures.financialStatements.balanceSheetAttached', true)}
                       className="mr-2"
                     />
-                    <span>The association's most recent balance sheet <strong>is</strong> attached</span>
+                    <span>The association's most recent balance sheet <strong>is</strong> attached. See Appendix 10.</span>
                   </label>
                   
                   <label className="flex items-center">
@@ -1314,7 +1342,7 @@ const AdminResaleCertificateForm = ({
                       onChange={(e) => handleInputChange('disclosures.financialStatements.balanceSheetAttached', false)}
                       className="mr-2"
                     />
-                    <span>The association's most recent balance sheet <strong>is not</strong> attached</span>
+                    <span>The association's most recent balance sheet <strong>is not</strong> attached. See Appendix 10.</span>
                   </label>
                 </div>
                 
@@ -1327,7 +1355,7 @@ const AdminResaleCertificateForm = ({
                       onChange={(e) => handleInputChange('disclosures.financialStatements.incomeStatementAttached', true)}
                       className="mr-2"
                     />
-                    <span>The association's most recent income and expense statement <strong>is</strong> attached</span>
+                    <span>The association's most recent income and expense statement <strong>is</strong> attached. See Appendix 10.</span>
                   </label>
                   
                   <label className="flex items-center">
@@ -1338,7 +1366,7 @@ const AdminResaleCertificateForm = ({
                       onChange={(e) => handleInputChange('disclosures.financialStatements.incomeStatementAttached', false)}
                       className="mr-2"
                     />
-                    <span>The association's most recent income and expense statement <strong>is not</strong> attached</span>
+                    <span>The association's most recent income and expense statement <strong>is not</strong> attached. See Appendix 10.</span>
                   </label>
                 </div>
               </div>
@@ -1354,7 +1382,7 @@ const AdminResaleCertificateForm = ({
                   onChange={(e) => handleInputChange('disclosures.operatingBudget.budgetAttached', e.target.checked)}
                   className="mr-2"
                 />
-                <span>The association's current operating budget is attached</span>
+                <span>The association's current operating budget is attached. See Appendix 11.</span>
               </label>
             </div>
 
@@ -1372,7 +1400,7 @@ const AdminResaleCertificateForm = ({
                       onChange={(e) => handleInputChange('disclosures.reserveStudy.type', e.target.value)}
                       className="mr-2"
                     />
-                    <span>The current reserve study of the association is attached</span>
+                    <span>The current reserve study of the association is attached. See Appendix 12.</span>
                   </label>
                 </div>
                 <div>
@@ -1385,7 +1413,7 @@ const AdminResaleCertificateForm = ({
                       onChange={(e) => handleInputChange('disclosures.reserveStudy.type', e.target.value)}
                       className="mr-2"
                     />
-                    <span>A summary of the current reserve study of the association is attached</span>
+                    <span>A summary of the current reserve study of the association is attached. See Appendix 12.</span>
                   </label>
                 </div>
                 <div>
@@ -1398,7 +1426,7 @@ const AdminResaleCertificateForm = ({
                       onChange={(e) => handleInputChange('disclosures.reserveStudy.type', e.target.value)}
                       className="mr-2"
                     />
-                    <span>Not applicable. A reserve study is not yet required</span>
+                    <span>Not applicable. A reserve study is not yet required.</span>
                   </label>
                 </div>
               </div>
@@ -1427,7 +1455,7 @@ const AdminResaleCertificateForm = ({
                       onChange={(e) => handleInputChange('disclosures.legalIssues.hasIssues', true)}
                       className="mr-2"
                     />
-                    <span>There <strong>are</strong> unsatisfied judgments or pending actions in which the association is a party that could have a material impact on the association, the owners, or the unit being sold</span>
+                    <span>There <strong>are</strong> unsatisfied judgments or pending actions in which the association is a party that could have a material impact on the association, the owners, or the unit being sold. See Appendix 13.</span>
                   </label>
                   
                   <label className="flex items-center">
@@ -1438,13 +1466,13 @@ const AdminResaleCertificateForm = ({
                       onChange={(e) => handleInputChange('disclosures.legalIssues.hasIssues', false)}
                       className="mr-2"
                     />
-                    <span>There <strong>are not</strong> unsatisfied judgments or pending actions in which the association is a party that could have a material impact on the association, the owners, or the unit being sold</span>
+                    <span>There <strong>are not</strong> unsatisfied judgments or pending actions in which the association is a party that could have a material impact on the association, the owners, or the unit being sold. See Appendix 13.</span>
                   </label>
                 </div>
                 
                 {formData.disclosures.legalIssues.hasIssues && (
                   <div className="pl-6">
-                    <label className="block text-sm font-medium text-gray-700 mb-2">Details:</label>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">There are unsatisfied judgments against the association or pending action(s) in which the association is a party and that could have a material impact on the association, the owners, or the unit being sold. Describe below:</label>
                     <textarea
                       value={formData.disclosures.legalIssues.details}
                       onChange={(e) => handleInputChange('disclosures.legalIssues.details', e.target.value)}
@@ -1470,7 +1498,7 @@ const AdminResaleCertificateForm = ({
                       onChange={(e) => handleInputChange('disclosures.insurance.associationProvides', true)}
                       className="mr-2"
                     />
-                    <span>The association <strong>does</strong> provide insurance coverage for the benefit of the owners, including fidelity coverage</span>
+                    <span>The association <strong>does</strong> provide insurance coverage for the benefit of the owners, including fidelity coverage. See Appendix 14.</span>
                   </label>
                   
                   <label className="flex items-center">
@@ -1481,13 +1509,13 @@ const AdminResaleCertificateForm = ({
                       onChange={(e) => handleInputChange('disclosures.insurance.associationProvides', false)}
                       className="mr-2"
                     />
-                    <span>The association <strong>does not</strong> provide insurance coverage for the benefit of the owners, including fidelity coverage</span>
+                    <span>The association <strong>does not</strong> provide insurance coverage for the benefit of the owners, including fidelity coverage. See Appendix 14.</span>
                   </label>
                 </div>
                 
                 {formData.disclosures.insurance.associationProvides && (
                   <div className="pl-6 bg-blue-50 p-4 rounded-lg">
-                    <h5 className="font-medium mb-3">Insurance Coverage Provided by the Association for the Benefit of the Owners, Including Fidelity Coverage:</h5>
+                    <h5 className="font-medium mb-3">Insurance coverage provided by the association for the benefit of the owners, including fidelity coverage:</h5>
                     <div className="space-y-3">
                       <div className="flex items-center justify-between mb-3">
                         <span className="font-medium">Description of Insurance</span>
@@ -1558,7 +1586,7 @@ const AdminResaleCertificateForm = ({
                       onChange={(e) => handleInputChange('disclosures.insurance.recommendsOwnerCoverage', true)}
                       className="mr-2"
                     />
-                    <span>The association <strong>does</strong> recommend or require that owners obtain insurance coverage</span>
+                    <span>The association <strong>does</strong> recommend or require that owners obtain insurance coverage. See Appendix 14.</span>
                   </label>
                   
                   <label className="flex items-center">
@@ -1569,7 +1597,7 @@ const AdminResaleCertificateForm = ({
                       onChange={(e) => handleInputChange('disclosures.insurance.recommendsOwnerCoverage', false)}
                       className="mr-2"
                     />
-                    <span>The association <strong>does not</strong> recommend or require that owners obtain insurance coverage</span>
+                    <span>The association <strong>does not</strong> recommend or require that owners obtain insurance coverage. See Appendix 14.</span>
                   </label>
                 </div>
                 
@@ -1601,7 +1629,7 @@ const AdminResaleCertificateForm = ({
                       onChange={(e) => handleInputChange('disclosures.associationViolations.hasNotices', true)}
                       className="mr-2"
                     />
-                    <span>The association <strong>has</strong> given or received written notice(s) that any existing uses, occupancies, alterations or improvements in or to the unit being sold or to the limited elements assigned thereto violate a provision of the governing documents or rules and regulations</span>
+                    <span>The association <strong>has</strong> given or received written notice(s) that any existing uses, occupancies, alterations or improvements in or to the unit being sold or to the limited elements assigned thereto violate a provision of the governing documents or rules and regulations. See Appendix 15.</span>
                   </label>
                   
                   <label className="flex items-center">
@@ -1612,7 +1640,7 @@ const AdminResaleCertificateForm = ({
                       onChange={(e) => handleInputChange('disclosures.associationViolations.hasNotices', false)}
                       className="mr-2"
                     />
-                    <span>The association <strong>has not</strong> given or received written notice(s) that any existing uses, occupancies, alterations or improvements in or to the unit being sold or to the limited elements assigned thereto violate a provision of the governing documents or rules and regulations</span>
+                    <span>The association <strong>has not</strong> given or received written notice(s) that any existing uses, occupancies, alterations or improvements in or to the unit being sold or to the limited elements assigned thereto violate a provision of the governing documents or rules and regulations. See Appendix 15.</span>
                   </label>
                 </div>
                 
@@ -1645,7 +1673,7 @@ const AdminResaleCertificateForm = ({
                       onChange={(e) => handleInputChange('disclosures.governmentViolations.hasNotices', true)}
                       className="mr-2"
                     />
-                    <span>The Board <strong>has</strong> received written notice(s) from a governmental agency of a violation of environmental, health, or building code with respect to the unit being sold, the limited elements assigned thereto, or a portion of the common interest community that has not been cured</span>
+                    <span>The Board <strong>has</strong> received written notice(s) from a governmental agency of a violation of environmental, health, or building code with respect to the unit being sold, the limited elements assigned thereto, or a portion of the common interest community that has not been cured. See Appendix 16.</span>
                   </label>
                   
                   <label className="flex items-center">
@@ -1656,7 +1684,7 @@ const AdminResaleCertificateForm = ({
                       onChange={(e) => handleInputChange('disclosures.governmentViolations.hasNotices', false)}
                       className="mr-2"
                     />
-                    <span>The Board <strong>has not</strong> received written notice(s) from a governmental agency of a violation of environmental, health, or building code with respect to the unit being sold, the limited elements assigned thereto, or a portion of the common interest community that has not been cured</span>
+                    <span>The Board <strong>has not</strong> received written notice(s) from a governmental agency of a violation of environmental, health, or building code with respect to the unit being sold, the limited elements assigned thereto, or a portion of the common interest community that has not been cured. See Appendix 16.</span>
                   </label>
                 </div>
                 
@@ -1765,7 +1793,7 @@ const AdminResaleCertificateForm = ({
                       onChange={(e) => handleInputChange('disclosures.leaseholdEstates.exists', true)}
                       className="mr-2"
                     />
-                    <span>There <strong>is</strong> an existing leasehold estate affecting a common area or common element in the common interest community</span>
+                    <span>There <strong>is</strong> an existing leasehold estate affecting a common area or common element in the common interest community. See Appendix 19.</span>
                   </label>
                   
                   <label className="flex items-center">
@@ -1776,7 +1804,7 @@ const AdminResaleCertificateForm = ({
                       onChange={(e) => handleInputChange('disclosures.leaseholdEstates.exists', false)}
                       className="mr-2"
                     />
-                    <span>There <strong>is not</strong> an existing leasehold estate affecting a common area or common element in the common interest community</span>
+                    <span>There <strong>is not</strong> an existing leasehold estate affecting a common area or common element in the common interest community. See Appendix 19.</span>
                   </label>
                 </div>
                 
@@ -1791,17 +1819,6 @@ const AdminResaleCertificateForm = ({
                         className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
                         placeholder="e.g., 25 years"
                       />
-                    </div>
-                    <div>
-                      <label className="flex items-center">
-                        <input
-                          type="checkbox"
-                          checked={formData.disclosures.leaseholdEstates.documentsAttached}
-                          onChange={(e) => handleInputChange('disclosures.leaseholdEstates.documentsAttached', e.target.checked)}
-                          className="mr-2"
-                        />
-                        <span>Documents attached</span>
-                      </label>
                     </div>
                   </div>
                 )}
@@ -1824,7 +1841,7 @@ const AdminResaleCertificateForm = ({
                       onChange={(e) => handleInputChange('disclosures.occupancyLimitations.hasLimitations', true)}
                       className="mr-2"
                     />
-                    <span>The association <strong>does</strong> have any limitation(s) in the governing documents on the number or age of persons who may occupy the unit as a dwelling</span>
+                    <span>The association <strong>does</strong> have any limitation(s) in the governing documents on the number or age of persons who may occupy the unit as a dwelling. See Appendix 20.</span>
                   </label>
                   
                   <label className="flex items-center">
@@ -1835,14 +1852,14 @@ const AdminResaleCertificateForm = ({
                       onChange={(e) => handleInputChange('disclosures.occupancyLimitations.hasLimitations', false)}
                       className="mr-2"
                     />
-                    <span>The association <strong>does not</strong> have any limitation(s) in the governing documents on the number or age of persons who may occupy the unit as a dwelling</span>
+                    <span>The association <strong>does not</strong> have any limitation(s) in the governing documents on the number or age of persons who may occupy the unit as a dwelling. See Appendix 20.</span>
                   </label>
                 </div>
                 
                 {formData.disclosures.occupancyLimitations.hasLimitations && (
                   <div className="pl-6 space-y-3">
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">Article/Section:</label>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Article/Section _______ of the _______* describes any limitation(s) on the number or age of persons who may occupy the unit as a dwelling:</label>
                       <input
                         type="text"
                         value={formData.disclosures.occupancyLimitations.articleSection}
@@ -1860,7 +1877,7 @@ const AdminResaleCertificateForm = ({
                         className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
                         placeholder="governing documents, rules, regulations, resolutions, architectural guidelines"
                       />
-                      <p className="text-xs text-gray-500 mt-1">describes any limitation(s) on the number or age of persons who may occupy the unit as a dwelling.</p>
+                      <p className="text-xs text-gray-500 mt-1">* Include applicable reference, i.e., governing documents, rules, regulations, resolutions, architectural guidelines</p>
                     </div>
                   </div>
                 )}
@@ -1883,7 +1900,7 @@ const AdminResaleCertificateForm = ({
                       onChange={(e) => handleInputChange('disclosures.flagRestrictions.hasRestrictions', true)}
                       className="mr-2"
                     />
-                    <span>The association <strong>does</strong> have any restriction(s), limitation(s), or prohibition(s) on the right of an owner to display the flag of the United States, including any reasonable restrictions as to size, time, place, and manner of placement or display of such flag</span>
+                    <span>The association <strong>does</strong> have any restriction(s), limitation(s), or prohibition(s) on the right of an owner to display the flag of the United States, including any reasonable restrictions as to size, time, place, and manner of placement or display of such flag. See Appendix 21.</span>
                   </label>
                   
                   <label className="flex items-center">
@@ -1894,14 +1911,14 @@ const AdminResaleCertificateForm = ({
                       onChange={(e) => handleInputChange('disclosures.flagRestrictions.hasRestrictions', false)}
                       className="mr-2"
                     />
-                    <span>The association <strong>does not</strong> have any restriction(s), limitation(s), or prohibition(s) on the right of an owner to display the flag of the United States, including any reasonable restrictions as to size, time, place, and manner of placement or display of such flag</span>
+                    <span>The association <strong>does not</strong> have any restriction(s), limitation(s), or prohibition(s) on the right of an owner to display the flag of the United States, including any reasonable restrictions as to size, time, place, and manner of placement or display of such flag. See Appendix 21.</span>
                   </label>
                 </div>
                 
                 {formData.disclosures.flagRestrictions.hasRestrictions && (
                   <div className="pl-6 space-y-3">
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">Article/Section:</label>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Article/Section _______ of the _______* describes any restriction(s), limitation(s), or prohibition(s) on the right of any owner to display the flag of the United States:</label>
                       <input
                         type="text"
                         value={formData.disclosures.flagRestrictions.articleSection}
@@ -1918,6 +1935,7 @@ const AdminResaleCertificateForm = ({
                         className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
                         placeholder="governing documents, rules, regulations, resolutions, architectural guidelines"
                       />
+                      <p className="text-xs text-gray-500 mt-1">* Include applicable reference, i.e., governing documents, rules, regulations, resolutions, architectural guidelines</p>
                     </div>
                   </div>
                 )}
@@ -1940,7 +1958,7 @@ const AdminResaleCertificateForm = ({
                       onChange={(e) => handleInputChange('disclosures.solarRestrictions.hasRestrictions', true)}
                       className="mr-2"
                     />
-                    <span>The association <strong>does</strong> have any restriction(s), limitation(s), or prohibition(s) on the right of an owner to install or use solar energy collection devices on the owner's unit or limited element</span>
+                    <span>The association <strong>does</strong> have any restriction(s), limitation(s), or prohibition(s) on the right of an owner to install or use solar energy collection devices on the owner's unit or limited element. See Appendix 22.</span>
                   </label>
                   
                   <label className="flex items-center">
@@ -1951,14 +1969,14 @@ const AdminResaleCertificateForm = ({
                       onChange={(e) => handleInputChange('disclosures.solarRestrictions.hasRestrictions', false)}
                       className="mr-2"
                     />
-                    <span>The association <strong>does not</strong> have any restriction(s), limitation(s), or prohibition(s) on the right of an owner to install or use solar energy collection devices on the owner's unit or limited element</span>
+                    <span>The association <strong>does not</strong> have any restriction(s), limitation(s), or prohibition(s) on the right of an owner to install or use solar energy collection devices on the owner's unit or limited element. See Appendix 22.</span>
                   </label>
                 </div>
                 
                 {formData.disclosures.solarRestrictions.hasRestrictions && (
                   <div className="pl-6 space-y-3">
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">Article/Section:</label>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Article/Section _______ of the _______* describes any restriction(s), limitation(s), or prohibition(s) on the right of any owner to install or use solar energy collection devices:</label>
                       <input
                         type="text"
                         value={formData.disclosures.solarRestrictions.articleSection}
@@ -1975,6 +1993,7 @@ const AdminResaleCertificateForm = ({
                         className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
                         placeholder="governing documents, rules, regulations, resolutions, architectural guidelines"
                       />
+                      <p className="text-xs text-gray-500 mt-1">* Include applicable reference, i.e., governing documents, rules, regulations, resolutions, architectural guidelines</p>
                     </div>
                   </div>
                 )}
@@ -1997,7 +2016,7 @@ const AdminResaleCertificateForm = ({
                       onChange={(e) => handleInputChange('disclosures.signRestrictions.hasRestrictions', true)}
                       className="mr-2"
                     />
-                    <span>The association <strong>does</strong> have any restriction(s), limitation(s), or prohibition(s) on the size, placement, or duration of display of political, for sale, or any other signs on the property</span>
+                    <span>The association <strong>does</strong> have any restriction(s), limitation(s), or prohibition(s) on the size, placement, or duration of display of political, for sale, or any other signs on the property. See Appendix 23.</span>
                   </label>
                   
                   <label className="flex items-center">
@@ -2008,14 +2027,14 @@ const AdminResaleCertificateForm = ({
                       onChange={(e) => handleInputChange('disclosures.signRestrictions.hasRestrictions', false)}
                       className="mr-2"
                     />
-                    <span>The association <strong>does not</strong> have any restriction(s), limitation(s), or prohibition(s) on the size, placement, or duration of display of political, for sale, or any other signs on the property</span>
+                    <span>The association <strong>does not</strong> have any restriction(s), limitation(s), or prohibition(s) on the size, placement, or duration of display of political, for sale, or any other signs on the property. See Appendix 23.</span>
                   </label>
                 </div>
                 
                 {formData.disclosures.signRestrictions.hasRestrictions && (
                   <div className="pl-6 space-y-3">
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">Article/Section:</label>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Article/Section _______ of the _______* describes any restriction(s), limitation(s), or prohibition(s) on the size, placement, or duration of display of political, for sale, or any other signs on the property:</label>
                       <input
                         type="text"
                         value={formData.disclosures.signRestrictions.articleSection}
@@ -2032,6 +2051,7 @@ const AdminResaleCertificateForm = ({
                         className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
                         placeholder="governing documents, rules, regulations, resolutions, architectural guidelines"
                       />
+                      <p className="text-xs text-gray-500 mt-1">* Include applicable reference, i.e., governing documents, rules, regulations, resolutions, architectural guidelines</p>
                     </div>
                   </div>
                 )}
@@ -2054,7 +2074,7 @@ const AdminResaleCertificateForm = ({
                       onChange={(e) => handleInputChange('disclosures.parkingRestrictions.hasRestrictions', true)}
                       className="mr-2"
                     />
-                    <span>The association <strong>does</strong> have any parking or vehicle restriction(s), limitation(s), or prohibition(s) in the governing documents or rules and regulations</span>
+                    <span>The association <strong>does</strong> have any parking or vehicle restriction(s), limitation(s), or prohibition(s) in the governing documents or rules and regulations. See Appendix 24.</span>
                   </label>
                   
                   <label className="flex items-center">
@@ -2065,14 +2085,14 @@ const AdminResaleCertificateForm = ({
                       onChange={(e) => handleInputChange('disclosures.parkingRestrictions.hasRestrictions', false)}
                       className="mr-2"
                     />
-                    <span>The association <strong>does not</strong> have any parking or vehicle restriction(s), limitation(s), or prohibition(s) in the governing documents or rules and regulations</span>
+                    <span>The association <strong>does not</strong> have any parking or vehicle restriction(s), limitation(s), or prohibition(s) in the governing documents or rules and regulations. See Appendix 24.</span>
                   </label>
                 </div>
                 
                 {formData.disclosures.parkingRestrictions.hasRestrictions && (
                   <div className="pl-6 space-y-3">
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">Article/Section:</label>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Article/Section _______ of the _______* describes any parking or vehicle restriction(s), limitation(s), or prohibition(s):</label>
                       <input
                         type="text"
                         value={formData.disclosures.parkingRestrictions.articleSection}
@@ -2089,6 +2109,7 @@ const AdminResaleCertificateForm = ({
                         className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
                         placeholder="governing documents, rules, regulations, resolutions, architectural guidelines"
                       />
+                      <p className="text-xs text-gray-500 mt-1">* Include applicable reference, i.e., governing documents, rules, regulations, resolutions, architectural guidelines</p>
                     </div>
                   </div>
                 )}
@@ -2111,7 +2132,7 @@ const AdminResaleCertificateForm = ({
                       onChange={(e) => handleInputChange('disclosures.businessRestrictions.hasRestrictions', true)}
                       className="mr-2"
                     />
-                    <span>The association <strong>does</strong> have any restriction(s), limitation(s), or prohibition(s) on the operation of a home-based business that otherwise complies with all applicable local ordinances</span>
+                    <span>The association <strong>does</strong> have any restriction(s), limitation(s), or prohibition(s) on the operation of a home-based business that otherwise complies with all applicable local ordinances. See Appendix 25.</span>
                   </label>
                   
                   <label className="flex items-center">
@@ -2122,14 +2143,14 @@ const AdminResaleCertificateForm = ({
                       onChange={(e) => handleInputChange('disclosures.businessRestrictions.hasRestrictions', false)}
                       className="mr-2"
                     />
-                    <span>The association <strong>does not</strong> have any restriction(s), limitation(s), or prohibition(s) on the operation of a home-based business that otherwise complies with all applicable local ordinances</span>
+                    <span>The association <strong>does not</strong> have any restriction(s), limitation(s), or prohibition(s) on the operation of a home-based business that otherwise complies with all applicable local ordinances. See Appendix 25.</span>
                   </label>
                 </div>
                 
                 {formData.disclosures.businessRestrictions.hasRestrictions && (
                   <div className="pl-6 space-y-3">
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">Article/Section:</label>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Article/Section _______ of the _______* describes any restriction(s), limitation(s), or prohibition(s) on the operation of a home-based business:</label>
                       <input
                         type="text"
                         value={formData.disclosures.businessRestrictions.articleSection}
@@ -2146,6 +2167,7 @@ const AdminResaleCertificateForm = ({
                         className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
                         placeholder="governing documents, rules, regulations, resolutions, architectural guidelines"
                       />
+                      <p className="text-xs text-gray-500 mt-1">* Include applicable reference, i.e., governing documents, rules, regulations, resolutions, architectural guidelines</p>
                     </div>
                   </div>
                 )}
@@ -2165,7 +2187,7 @@ const AdminResaleCertificateForm = ({
                       onChange={(e) => handleInputChange('disclosures.rentalRestrictions.hasRestrictions', true)}
                       className="mr-2"
                     />
-                    <span>The association <strong>does</strong> have any restriction(s), limitation(s), or prohibition(s) on an owner's ability to rent the unit</span>
+                    <span>The association <strong>does</strong> have any restriction(s), limitation(s), or prohibition(s) on an owner's ability to rent the unit. See Appendix 26.</span>
                   </label>
                   
                   <label className="flex items-center">
@@ -2176,14 +2198,14 @@ const AdminResaleCertificateForm = ({
                       onChange={(e) => handleInputChange('disclosures.rentalRestrictions.hasRestrictions', false)}
                       className="mr-2"
                     />
-                    <span>The association <strong>does not</strong> have any restriction(s), limitation(s), or prohibition(s) on an owner's ability to rent the unit</span>
+                    <span>The association <strong>does not</strong> have any restriction(s), limitation(s), or prohibition(s) on an owner's ability to rent the unit. See Appendix 26.</span>
                   </label>
                 </div>
                 
                 {formData.disclosures.rentalRestrictions.hasRestrictions && (
                   <div className="pl-6 space-y-3">
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">Article/Section:</label>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Article/Section _______ of the _______* describes any restriction(s), limitation(s), or prohibition(s) on the owner's ability to rent the unit:</label>
                       <input
                         type="text"
                         value={formData.disclosures.rentalRestrictions.articleSection}
@@ -2200,6 +2222,7 @@ const AdminResaleCertificateForm = ({
                         className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
                         placeholder="governing documents, rules, regulations, resolutions, architectural guidelines"
                       />
+                      <p className="text-xs text-gray-500 mt-1">* Include applicable reference, i.e., governing documents, rules, regulations, resolutions, architectural guidelines</p>
                     </div>
                   </div>
                 )}
@@ -2232,7 +2255,7 @@ const AdminResaleCertificateForm = ({
                     onChange={(e) => handleInputChange('disclosures.taxDeductibility.statementAttached', e.target.checked)}
                     className="mr-2"
                   />
-                  <span>A statement as to the deductibility for federal income tax purposes by the owner of real estate taxes and interest paid by the association is attached</span>
+                  <span>A statement as to the deductibility for federal income tax purposes by the owner of real estate taxes and interest paid by the association is attached.</span>
                 </label>
                 
                 <label className="flex items-center">
@@ -2260,7 +2283,7 @@ const AdminResaleCertificateForm = ({
                       onChange={(e) => handleInputChange('disclosures.pendingSales.hasPending', true)}
                       className="mr-2"
                     />
-                    <span>There <strong>is</strong> a pending sale(s) or encumbrance of common elements</span>
+                    <span>There <strong>is</strong> a pending sale(s) or encumbrance of common elements. See Appendix 28.</span>
                   </label>
                   
                   <label className="flex items-center">
@@ -2271,7 +2294,7 @@ const AdminResaleCertificateForm = ({
                       onChange={(e) => handleInputChange('disclosures.pendingSales.hasPending', false)}
                       className="mr-2"
                     />
-                    <span>There <strong>is not</strong> a pending sale(s) or encumbrance of common elements</span>
+                    <span>There <strong>is not</strong> a pending sale(s) or encumbrance of common elements. See Appendix 28.</span>
                   </label>
                 </div>
                 
@@ -2284,7 +2307,7 @@ const AdminResaleCertificateForm = ({
                         onChange={(e) => handleInputChange('disclosures.pendingSales.documentsAttached', e.target.checked)}
                         className="mr-2"
                       />
-                      <span>Any documents pertaining to a pending sale or encumbrance of a common element(s) are attached</span>
+                      <span>Any documents pertaining to a pending sale or encumbrance of a common element(s) are attached.</span>
                     </label>
                   </div>
                 )}
@@ -2304,7 +2327,7 @@ const AdminResaleCertificateForm = ({
                       onChange={(e) => handleInputChange('disclosures.mortgageApprovals.hasApprovals', true)}
                       className="mr-2"
                     />
-                    <span>There <strong>is</strong> any known project approval(s) currently in effect issued by secondary mortgage market agencies</span>
+                    <span>There <strong>is</strong> any known project approval(s) currently in effect issued by secondary mortgage market agencies. See Appendix 29.</span>
                   </label>
                   
                   <label className="flex items-center">
@@ -2315,7 +2338,7 @@ const AdminResaleCertificateForm = ({
                       onChange={(e) => handleInputChange('disclosures.mortgageApprovals.hasApprovals', false)}
                       className="mr-2"
                     />
-                    <span>There <strong>is not</strong> any known project approval(s) currently in effect issued by secondary mortgage market agencies</span>
+                    <span>There <strong>is not</strong> any known project approval(s) currently in effect issued by secondary mortgage market agencies. See Appendix 29.</span>
                   </label>
                 </div>
                 
@@ -2379,7 +2402,7 @@ const AdminResaleCertificateForm = ({
                     onChange={(e) => handleInputChange('disclosures.cicCertification.reportFiled', e.target.checked)}
                     className="mr-2"
                   />
-                  <span>The association has filed with the Common Interest Community Board the annual report required by law</span>
+                  <span>The association has filed with the Common Interest Community Board the annual report required by law. See Appendix 30.</span>
                 </label>
                 
                 <div className="grid md:grid-cols-2 gap-4">
@@ -2459,35 +2482,6 @@ const AdminResaleCertificateForm = ({
       default:
         return <div>Section not found</div>;
     }
-  };
-
-  const isComplete = formData.developmentName && 
-                   formData.developmentLocation && 
-                   formData.associationName && 
-                   formData.associationAddress && 
-                   formData.preparer.name && 
-                   formData.disclosures.assessmentSchedule.hasAssessments &&
-                   formData.disclosures.cicCertification.registrationNumber &&
-                   formData.disclosures.cicCertification.expirationDate;
-
-  const getCompletionPercentage = () => {
-    const requiredFields = [
-      formData.developmentName,
-      formData.developmentLocation,
-      formData.associationName,
-      formData.associationAddress,
-      formData.lotAddress,
-      formData.preparer.name,
-      formData.preparer.company,
-      formData.preparer.address,
-      formData.preparer.phone,
-      formData.preparer.email,
-      formData.disclosures.cicCertification.registrationNumber,
-      formData.disclosures.cicCertification.expirationDate
-    ];
-    
-    const completedFields = requiredFields.filter(field => field && field.toString().trim() !== '').length;
-    return Math.round((completedFields / requiredFields.length) * 100);
   };
 
   return (
