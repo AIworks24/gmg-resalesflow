@@ -1,12 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
 import { Save, Send, FileText, Calendar, ArrowLeft, Building, CheckCircle, AlertTriangle, Plus, Trash2, DollarSign, Clock, Users, Home, Car, Briefcase, Flag, Sun, MessageSquare } from 'lucide-react';
+import { useRouter } from 'next/router';
 
 const AdminResaleCertificateForm = ({ 
   applicationData,
   formId,
   onComplete
 }) => {
+  const router = useRouter();
   const [formData, setFormData] = useState({
     // Header Information
     developmentName: applicationData?.hoa_properties?.name || '',
@@ -229,7 +231,8 @@ const AdminResaleCertificateForm = ({
       // 29. Mortgage Approvals (Appendix 29)
       mortgageApprovals: {
         hasApprovals: false,
-        approvedAgencies: []
+        approvedAgencies: [],
+        otherAgencyName: ''
       },
       
       // 30. CIC Board Certification (Appendix 30)
@@ -309,23 +312,38 @@ const AdminResaleCertificateForm = ({
   const handleSave = async () => {
     setIsSaving(true);
     setError(null);
-    
+
+    // Patch: Merge otherAgencyName into approvedAgencies if present
+    let patchedFormData = { ...formData };
+    const agencies =
+      patchedFormData.disclosures.mortgageApprovals.approvedAgencies || [];
+    const otherAgency =
+      patchedFormData.disclosures.mortgageApprovals.otherAgencyName?.trim();
+    if (otherAgency && !agencies.includes(otherAgency)) {
+      patchedFormData.disclosures.mortgageApprovals.approvedAgencies = [
+        ...agencies.filter((a) => a !== 'Other'),
+        otherAgency,
+      ];
+    }
+
     try {
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from('property_owner_forms')
         .update({
-          form_data: formData,
-          response_data: formData,
-          status: 'opened',
-          updated_at: new Date().toISOString()
+          form_data: patchedFormData,
+          response_data: patchedFormData,
+          status: 'in_progress',
+          updated_at: new Date().toISOString(),
         })
-        .eq('id', formId);
+        .eq('id', formId)
+        .select();
 
       if (error) throw error;
-      
+
       setSuccess('Virginia Resale Certificate saved successfully!');
       setTimeout(() => setSuccess(null), 3000);
     } catch (err) {
+      console.error('Save error:', err);
       setError('Failed to save certificate: ' + err.message);
     } finally {
       setIsSaving(false);
@@ -335,26 +353,66 @@ const AdminResaleCertificateForm = ({
   const handleSubmit = async () => {
     setIsSubmitting(true);
     setError(null);
-    
+
+    // Patch: Merge otherAgencyName into approvedAgencies if present
+    let patchedFormData = { ...formData };
+    const agencies =
+      patchedFormData.disclosures.mortgageApprovals.approvedAgencies || [];
+    const otherAgency =
+      patchedFormData.disclosures.mortgageApprovals.otherAgencyName?.trim();
+    if (otherAgency && !agencies.includes(otherAgency)) {
+      patchedFormData.disclosures.mortgageApprovals.approvedAgencies = [
+        ...agencies.filter((a) => a !== 'Other'),
+        otherAgency,
+      ];
+    }
+
     try {
+      // First try to get the current form data
+      const { data: currentForm, error: getError } = await supabase
+        .from('property_owner_forms')
+        .select('*')
+        .eq('id', formId)
+        .single();
+
+      if (getError) {
+        console.error('Error getting current form:', getError);
+        throw getError;
+      }
+
       const submissionData = {
-        ...formData,
+        ...patchedFormData,
         status: 'completed',
         completedAt: new Date().toISOString(),
-        completedBy: 'admin'
+        completedBy: 'admin',
       };
 
-      const { error: formError } = await supabase
+      // Then update with new data
+      const { data: updatedForm, error: updateError } = await supabase
         .from('property_owner_forms')
         .update({
           form_data: submissionData,
           response_data: submissionData,
-          status: 'completed',
-          completed_at: new Date().toISOString()
+          status: isComplete ? 'completed' : 'in_progress',
+          completed_at: isComplete ? new Date().toISOString() : null,
         })
-        .eq('id', formId);
+        .eq('id', formId)
+        .select()
+        .single();
 
-      if (formError) throw formError;
+      if (updateError) throw updateError;
+
+      // Verify the update worked by getting the form again
+      const { data: verifyForm, error: verifyError } = await supabase
+        .from('property_owner_forms')
+        .select('*')
+        .eq('id', formId)
+        .single();
+
+      if (verifyError) {
+        console.error('Error verifying form update:', verifyError);
+        throw verifyError;
+      }
 
       // Check if both forms are completed
       const { data: allForms } = await supabase
@@ -362,21 +420,26 @@ const AdminResaleCertificateForm = ({
         .select('status')
         .eq('application_id', applicationData.id);
 
-      const allCompleted = allForms?.every(form => form.status === 'completed');
+      const allCompleted = allForms?.every(
+        (form) => form.status === 'completed'
+      );
 
       if (allCompleted) {
         await supabase
           .from('applications')
           .update({
             status: 'compliance_completed',
-            updated_at: new Date().toISOString()
+            updated_at: new Date().toISOString(),
           })
           .eq('id', applicationData.id);
       }
-      
-      setSuccess('Virginia Resale Certificate completed successfully! Redirecting to dashboard...');
+
+      setSuccess(
+        'Virginia Resale Certificate completed successfully! Redirecting to dashboard...'
+      );
       setTimeout(() => onComplete?.(), 2000);
     } catch (err) {
+      console.error('Submit error:', err);
       setError('Failed to complete certificate: ' + err.message);
     } finally {
       setIsSubmitting(false);
@@ -2383,6 +2446,8 @@ const AdminResaleCertificateForm = ({
                           type="text"
                           placeholder="Specify other agency"
                           className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                          value={formData.disclosures.mortgageApprovals.otherAgencyName || ''}
+                          onChange={e => handleInputChange('disclosures.mortgageApprovals.otherAgencyName', e.target.value)}
                         />
                       </div>
                     </div>
@@ -2497,7 +2562,7 @@ const AdminResaleCertificateForm = ({
             </div>
           </div>
           <button
-            onClick={() => window.history.back()}
+            onClick={() => router.push('/admin/dashboard')}
             className="flex items-center gap-2 px-4 py-2 text-purple-600 border border-purple-600 rounded-md hover:bg-purple-50"
           >
             <ArrowLeft className="w-4 h-4" />

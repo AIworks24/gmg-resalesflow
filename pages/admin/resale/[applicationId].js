@@ -73,14 +73,13 @@ const checkAuthAndLoadData = async () => {
 
     // If no form exists, create it
     if (formError && formError.code === 'PGRST116') {
-      console.log('No resale certificate form found, creating one...');
       
       const { data: newForm, error: createError } = await supabase
         .from('property_owner_forms')
         .insert([{
           application_id: applicationId,
           form_type: 'resale_certificate',
-          status: 'sent',
+          status: 'not_started',
           access_token: crypto.randomUUID(),
           recipient_email: appData.hoa_properties?.property_owner_email || appData.submitter_email || 'admin@gmgva.com',
           expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
@@ -101,7 +100,6 @@ const checkAuthAndLoadData = async () => {
       property_owner_forms: [formData]
     };
 
-    console.log('Loaded application data:', combinedData);
     setApplicationData(combinedData);
     
   } catch (err) {

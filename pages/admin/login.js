@@ -17,15 +17,48 @@ export default function AdminLogin() {
     setError('');
 
     try {
-      const { error } = await supabase.auth.signInWithPassword({
+      console.log('🔐 Attempting login with email:', email);
+      
+      const { data, error } = await supabase.auth.signInWithPassword({
         email,
         password,
       });
 
-      if (error) throw error;
+      if (error) {
+        console.error('❌ Auth error:', error);
+        throw error;
+      }
 
-      router.push('/admin/dashboard');
+      console.log('✅ Auth successful, user ID:', data.user.id);
+
+      // Check user role in profiles table
+      const userId = data.user.id;
+      console.log('🔍 Looking up profile for user:', userId);
+      
+      const { data: profile, error: profileError } = await supabase
+        .from('profiles')
+        .select('role')
+        .eq('id', userId)
+        .single();
+
+      if (profileError) {
+        console.error('❌ Profile lookup error:', profileError);
+        throw new Error(`Profile lookup failed: ${profileError.message}`);
+      }
+
+      console.log('👤 Profile found:', profile);
+
+      if (profile?.role === 'admin' || profile?.role === 'staff') {
+        console.log('✅ Admin access granted, redirecting...');
+        router.push('/admin/dashboard');
+      } else {
+        console.warn('❌ Access denied - user role:', profile?.role);
+        setError(`You do not have admin access. Current role: ${profile?.role || 'none'}`);
+        // Optionally, sign out the user
+        await supabase.auth.signOut();
+      }
     } catch (error) {
+      console.error('💥 Login error:', error);
       setError(error.message);
     } finally {
       setLoading(false);
