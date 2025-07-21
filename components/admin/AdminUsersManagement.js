@@ -28,6 +28,7 @@ import {
   useDeleteUser,
   usePrefetchUser,
 } from '../../hooks/useUsers';
+import AdminLayout from './AdminLayout';
 
 const AdminUsersManagement = () => {
   // UI State
@@ -38,7 +39,6 @@ const AdminUsersManagement = () => {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [userToDelete, setUserToDelete] = useState(null);
   const [showPassword, setShowPassword] = useState(false);
-  const [showUserMenu, setShowUserMenu] = useState(false);
   const [formError, setFormError] = useState('');
   
   // Pagination state
@@ -202,10 +202,6 @@ const AdminUsersManagement = () => {
     }
   };
 
-  const handleLogout = async () => {
-    await signOut();
-    router.push('/admin/login');
-  };
 
   const getRoleBadgeColor = (userRole) => {
     switch (userRole) {
@@ -257,87 +253,18 @@ const AdminUsersManagement = () => {
   }
 
   return (
-    <div className="min-h-screen bg-gray-100">
+    <AdminLayout>
       <div className="max-w-7xl mx-auto p-6">
         {/* Header */}
-        <div className="flex items-center justify-between mb-8 bg-white p-4 rounded-lg shadow-md border">
-          <div className="flex items-center gap-3">
-            <Building className="w-8 h-8 text-blue-600" />
-            <span className="text-xl font-bold text-gray-900">Admin Dashboard</span>
-          </div>
-          <div className="flex items-center gap-4">
-            <button
-              onClick={() => router.push('/admin/dashboard')}
-              className="px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md text-sm font-medium"
-            >
-              Dashboard
-            </button>
-            <button
-              onClick={() => router.push('/admin/properties')}
-              className="px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md text-sm font-medium"
-            >
-              Properties
-            </button>
-            <button
-              onClick={() => router.push('/admin/reports')}
-              className="px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md text-sm font-medium"
-            >
-              Reports
-            </button>
-            <button
-              onClick={() => router.push('/admin/profile')}
-              className="px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md text-sm font-medium"
-            >
-              My Profile
-            </button>
-            
-            {/* User Menu */}
-            <div className="relative">
-              <button
-                onClick={() => setShowUserMenu(!showUserMenu)}
-                className="flex items-center gap-2 px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md text-sm font-medium"
-              >
-                <User className="w-4 h-4" />
-                {role && (
-                  <span className="px-2 py-1 bg-blue-100 text-blue-800 text-xs rounded">
-                    {role}
-                  </span>
-                )}
-                <ChevronDown className="w-4 h-4" />
-              </button>
-
-              {showUserMenu && (
-                <div className="absolute right-0 mt-2 w-64 bg-white rounded-md shadow-lg border z-50">
-                  <div className="py-2">
-                    <div className="px-4 py-2 text-sm text-gray-700 border-b">
-                      <div className="font-medium">Signed in as:</div>
-                      <div className="text-gray-600 truncate">{user?.email}</div>
-                    </div>
-                    <div className="border-t mt-2">
-                      <button
-                        onClick={() => {
-                          handleLogout();
-                          setShowUserMenu(false);
-                        }}
-                        className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"
-                      >
-                        <LogOut className="w-4 h-4" />
-                        Logout
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-
-        {/* Page Title and Controls */}
-        <div className="mb-8">
-          <div className="flex items-center justify-between">
+        <div className='mb-8'>
+          <div className='flex items-center justify-between'>
             <div>
-              <h1 className="text-3xl font-bold text-gray-900 mb-2">User Management</h1>
-              <p className="text-gray-600">Manage admin and staff users</p>
+              <h1 className='text-3xl font-bold text-gray-900 mb-2'>
+                User Management
+              </h1>
+              <p className='text-gray-600'>
+                Manage admin and staff users
+              </p>
             </div>
             <div className="flex gap-3">
               <button
@@ -346,7 +273,7 @@ const AdminUsersManagement = () => {
                 className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50"
               >
                 <RefreshCw className={`w-4 h-4 ${isFetching ? 'animate-spin' : ''}`} />
-                Refresh
+                {isFetching ? 'Refreshing...' : 'Refresh'}
               </button>
               <button
                 onClick={handleAddUser}
@@ -744,7 +671,7 @@ const AdminUsersManagement = () => {
           </div>
         )}
       </div>
-    </div>
+    </AdminLayout>
   );
 };
 

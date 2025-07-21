@@ -19,8 +19,10 @@ import {
   FileText,
   Upload,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  RefreshCw
 } from 'lucide-react';
+import AdminLayout from './AdminLayout';
 
 const AdminPropertiesManagement = ({ userRole }) => {
   const [properties, setProperties] = useState([]);
@@ -29,10 +31,8 @@ const AdminPropertiesManagement = ({ userRole }) => {
   const [showModal, setShowModal] = useState(false);
   const [modalMode, setModalMode] = useState('add'); // 'add' or 'edit'
   const [selectedProperty, setSelectedProperty] = useState(null);
-  const [userEmail, setUserEmail] = useState('');
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [propertyToDelete, setPropertyToDelete] = useState(null);
-  const [showUserMenu, setShowUserMenu] = useState(false);
   const [propertyFiles, setPropertyFiles] = useState({});
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [uploading, setUploading] = useState(false);
@@ -59,7 +59,6 @@ const AdminPropertiesManagement = ({ userRole }) => {
 
   useEffect(() => {
     loadProperties();
-    fetchUserEmail();
   }, []);
 
   useEffect(() => {
@@ -72,19 +71,6 @@ const AdminPropertiesManagement = ({ userRole }) => {
     }
   }, [properties]);
 
-  // Close user menu when clicking outside
-  useEffect(() => {
-    const handleClickOutside = (event) => {
-      if (showUserMenu && !event.target.closest('.user-menu-container')) {
-        setShowUserMenu(false);
-      }
-    };
-
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-    };
-  }, [showUserMenu]);
 
   // Handle auto-opening edit modal from query parameter
   useEffect(() => {
@@ -99,10 +85,6 @@ const AdminPropertiesManagement = ({ userRole }) => {
     }
   }, [router.query.edit, properties]);
 
-  const fetchUserEmail = async () => {
-    const { data: { user } } = await supabase.auth.getUser();
-    setUserEmail(user?.email || '');
-  };
 
   const loadProperties = async (page = currentPage, search = searchTerm) => {
     try {
@@ -137,10 +119,6 @@ const AdminPropertiesManagement = ({ userRole }) => {
     }
   };
 
-  const handleLogout = async () => {
-    await supabase.auth.signOut();
-    router.push('/admin/login');
-  };
 
   // File management functions
   const loadPropertyFiles = async (propertyId) => {
@@ -349,74 +327,27 @@ const AdminPropertiesManagement = ({ userRole }) => {
   }
 
   return (
-    <div className="min-h-screen bg-gray-100">
+    <AdminLayout>
       <div className="max-w-7xl mx-auto p-6">
         {/* Header */}
-        <div className="flex items-center justify-between mb-8 bg-white p-4 rounded-lg shadow-md border">
-          <div className="flex items-center gap-3">
-            <Building className="w-8 h-8 text-blue-600" />
-            <span className="text-xl font-bold text-gray-900">Properties Management</span>
-          </div>
-          <div className="flex items-center gap-4">
-            <button
-              onClick={() => router.push('/admin/dashboard')}
-              className="px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md text-sm font-medium"
-            >
-              Dashboard
-            </button>
-            {userRole === 'admin' && (
-              <button
-                onClick={() => router.push('/admin/users')}
-                className="px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md text-sm font-medium"
-              >
-                Users
-              </button>
-            )}
-            <button
-              onClick={() => router.push('/admin/reports')}
-              className="px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md text-sm font-medium"
-            >
-              Reports
-            </button>
-            {/* User Menu */}
-            <div className='relative user-menu-container'>
-              <button
-                onClick={() => setShowUserMenu(!showUserMenu)}
-                className='flex items-center gap-2 px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md text-sm font-medium'
-              >
-                <User className='w-4 h-4' />
-                {userRole && (
-                  <span className='px-2 py-1 bg-blue-100 text-blue-800 text-xs rounded'>
-                    {userRole}
-                  </span>
-                )}
-                <ChevronDown className='w-4 h-4' />
-              </button>
-
-              {/* Dropdown Menu */}
-              {showUserMenu && (
-                <div className='absolute right-0 mt-2 w-64 bg-white rounded-md shadow-lg border z-50'>
-                  <div className='py-2'>
-                    <div className='px-4 py-2 text-sm text-gray-700 border-b'>
-                      <div className='font-medium'>Signed in as:</div>
-                      <div className='text-gray-600 truncate'>{userEmail}</div>
-                    </div>
-                    <div className='border-t mt-2'>
-                      <button
-                        onClick={() => {
-                          handleLogout();
-                          setShowUserMenu(false);
-                        }}
-                        className='w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 flex items-center gap-2'
-                      >
-                        <LogOut className='w-4 h-4' />
-                        Logout
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              )}
+        <div className='mb-8'>
+          <div className='flex items-center justify-between'>
+            <div>
+              <h1 className='text-3xl font-bold text-gray-900 mb-2'>
+                Properties Management
+              </h1>
+              <p className='text-gray-600'>
+                Manage HOA properties and associated documents
+              </p>
             </div>
+            <button
+              onClick={() => loadProperties(currentPage, searchTerm)}
+              disabled={loading}
+              className='flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50'
+            >
+              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+              {loading ? 'Refreshing...' : 'Refresh'}
+            </button>
           </div>
         </div>
 
@@ -859,7 +790,7 @@ const AdminPropertiesManagement = ({ userRole }) => {
           </div>
         )}
       </div>
-    </div>
+    </AdminLayout>
   );
 };
 

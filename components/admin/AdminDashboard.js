@@ -18,10 +18,7 @@ import {
   RefreshCw,
   MessageSquare,
   Edit,
-  LogOut,
   XCircle,
-  HelpCircle,
-  ChevronDown,
   ChevronLeft,
   ChevronRight,
   ChevronsLeft,
@@ -33,6 +30,7 @@ import {
 } from 'lucide-react';
 import { useRouter } from 'next/router';
 import { mapFormDataToPDFFields } from '../../lib/pdfService';
+import AdminLayout from './AdminLayout';
 
 const AdminDashboard = ({ userRole }) => {
   const [applications, setApplications] = useState([]);
@@ -41,11 +39,9 @@ const AdminDashboard = ({ userRole }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedApplication, setSelectedApplication] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
-  const [userEmail, setUserEmail] = useState('');
   const [sendingEmail, setSendingEmail] = useState(false);
   const [generatingPDF, setGeneratingPDF] = useState(false);
   const [runTour, setRunTour] = useState(false);
-  const [showUserMenu, setShowUserMenu] = useState(false);
   const [dateFilter, setDateFilter] = useState('all'); // 'all', 'today', 'week', 'month', 'custom'
   const [customDateRange, setCustomDateRange] = useState({
     startDate: '',
@@ -179,14 +175,6 @@ const AdminDashboard = ({ userRole }) => {
 
   useEffect(() => {
     loadApplications();
-    // Fetch user email for navbar and log auth.uid()
-    const fetchUser = async () => {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      setUserEmail(user?.email || '');
-    };
-    fetchUser();
   }, []);
 
   // Reload applications when date filter changes (reset to page 1)
@@ -206,19 +194,6 @@ const AdminDashboard = ({ userRole }) => {
     loadApplications();
   }, [selectedStatus, searchTerm]);
 
-  // Close user menu when clicking outside
-  useEffect(() => {
-    const handleClickOutside = (event) => {
-      if (showUserMenu && !event.target.closest('.user-menu-container')) {
-        setShowUserMenu(false);
-      }
-    };
-
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-    };
-  }, [showUserMenu]);
 
   const loadApplications = async () => {
     setRefreshing(true);
@@ -528,10 +503,6 @@ const AdminDashboard = ({ userRole }) => {
     router.push(`/admin/${formType}/${applicationId}`);
   };
 
-  const handleLogout = async () => {
-    await supabase.auth.signOut();
-    window.location.reload();
-  };
 
   const handleGeneratePDF = async (formData, applicationId) => {
     try {
@@ -1683,7 +1654,7 @@ const AdminDashboard = ({ userRole }) => {
   }
 
   return (
-    <div className='min-h-screen bg-gray-100'>
+    <AdminLayout onStartTour={() => setRunTour(true)}>
       <Joyride
         steps={steps}
         run={runTour}
@@ -1700,91 +1671,13 @@ const AdminDashboard = ({ userRole }) => {
       />
 
       <div className='max-w-7xl mx-auto p-6'>
-        {/* Admin Navbar */}
-        <div className='flex items-center justify-between mb-8 bg-white p-4 rounded-lg shadow-md border'>
-          <div className='flex items-center gap-3'>
-            <Building className='w-8 h-8 text-blue-600' />
-            <span className='text-xl font-bold text-gray-900 dashboard-header'>
-              Admin Dashboard
-            </span>
-          </div>
-          <div className='flex items-center gap-4'>
-            {userRole === 'admin' && (
-              <button
-                onClick={() => router.push('/admin/users')}
-                className='px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md text-sm font-medium'
-              >
-                Users
-              </button>
-            )}
-            <button
-              onClick={() => router.push('/admin/properties')}
-              className='px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md text-sm font-medium'
-            >
-              Properties
-            </button>
-            <button
-              onClick={() => router.push('/admin/reports')}
-              className='px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md text-sm font-medium'
-            >
-              Reports
-            </button>
-            <button
-              onClick={() => setRunTour(true)}
-              className='flex items-center gap-2 px-3 py-2 bg-gmg-green-50 hover:bg-gmg-green-100 text-gmg-green-600 rounded-md text-sm font-medium border border-gmg-green-200'
-            >
-              <HelpCircle className='w-4 h-4' />
-              Start Tour
-            </button>
-            
-            {/* User Menu */}
-            <div className='relative user-menu-container'>
-              <button
-                onClick={() => setShowUserMenu(!showUserMenu)}
-                className='flex items-center gap-2 px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md text-sm font-medium'
-              >
-                <User className='w-4 h-4' />
-                {userRole && (
-                  <span className='px-2 py-1 bg-blue-100 text-blue-800 text-xs rounded'>
-                    {userRole}
-                  </span>
-                )}
-                <ChevronDown className='w-4 h-4' />
-              </button>
-
-              {/* Dropdown Menu */}
-              {showUserMenu && (
-                <div className='absolute right-0 mt-2 w-64 bg-white rounded-md shadow-lg border z-50'>
-                  <div className='py-2'>
-                    <div className='px-4 py-2 text-sm text-gray-700 border-b'>
-                      <div className='font-medium'>Signed in as:</div>
-                      <div className='text-gray-600 truncate'>{userEmail}</div>
-                    </div>
-                    <div className='border-t mt-2'>
-                      <button
-                        onClick={() => {
-                          handleLogout();
-                          setShowUserMenu(false);
-                        }}
-                        className='w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 flex items-center gap-2'
-                      >
-                        <LogOut className='w-4 h-4' />
-                        Logout
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
 
         {/* Header */}
         <div className='mb-8'>
           <div className='flex items-center justify-between'>
             <div>
               <h1 className='text-3xl font-bold text-gray-900 mb-2'>
-                GMG ResaleFlow Admin Dashboard
+                Dashboard Overview
               </h1>
               <p className='text-gray-600'>
                 Monitor application workflows and complete required forms
@@ -1798,7 +1691,7 @@ const AdminDashboard = ({ userRole }) => {
               <RefreshCw
                 className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`}
               />
-              Refresh
+              {refreshing ? 'Refreshing...' : 'Refresh'}
             </button>
           </div>
         </div>
@@ -2255,7 +2148,7 @@ const AdminDashboard = ({ userRole }) => {
           </div>
         )}
       </div>
-    </div>
+    </AdminLayout>
   );
 };
 
