@@ -35,34 +35,7 @@ END $$;
 -- Switch to postgres role
 SET ROLE postgres;
 
--- Storage policies for PDF access
-CREATE POLICY "Allow public access to PDFs" ON storage.objects
-  FOR SELECT
-  USING (bucket_id = 'resale-certificates' AND (storage.extension(name) = 'pdf'));
-
-CREATE POLICY "Allow authenticated users to upload PDFs" ON storage.objects
-  FOR INSERT
-  WITH CHECK (
-    bucket_id = 'resale-certificates' 
-    AND auth.role() = 'authenticated'
-    AND (storage.extension(name) = 'pdf')
-  );
-
-CREATE POLICY "Allow authenticated users to update PDFs" ON storage.objects
-  FOR UPDATE
-  USING (
-    bucket_id = 'resale-certificates' 
-    AND auth.role() = 'authenticated'
-    AND (storage.extension(name) = 'pdf')
-  );
-
-CREATE POLICY "Allow authenticated users to delete PDFs" ON storage.objects
-  FOR DELETE
-  USING (
-    bucket_id = 'resale-certificates' 
-    AND auth.role() = 'authenticated'
-    AND (storage.extension(name) = 'pdf')
-  );
+-- Storage policies removed - bucket0 is now public
 
 -- Notifications table policies
 CREATE POLICY "Allow authenticated users to view notifications" ON public.notifications

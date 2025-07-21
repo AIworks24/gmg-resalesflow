@@ -154,3 +154,6 @@ Resale1.pdf
 # Local configuration files
 config.local.js
 config.local.json
+
+# AI Editors
+CLAUDE.md

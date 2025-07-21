@@ -2,7 +2,8 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import { loadStripe } from '@stripe/stripe-js';
 import { useAppContext } from '../lib/AppContext';
-import { useAuth } from '../lib/AuthContext';
+import { useApplicantAuth } from '../providers/ApplicantAuthProvider';
+import useApplicantAuthStore from '../stores/applicantAuthStore';
 import {
   Building2,
   FileText,
@@ -1196,14 +1197,20 @@ export default function GMGResaleFlow() {
   // Get auth data from context
   const { 
     user, 
-    userRole, 
     isAuthenticated, 
-    isLoading: authLoading,
-    signIn,
-    signUp,
-    signOut,
-    getUserProfileData
-  } = useAuth();
+    isLoading: authLoading
+  } = useApplicantAuth();
+  
+  // Get auth methods from store
+  const { 
+    signIn, 
+    signUp, 
+    signOut, 
+    profile 
+  } = useApplicantAuthStore();
+  
+  // Get userRole from profile
+  const userRole = profile?.role;
   
   const [applications, setApplications] = useState([]);
   const [currentStep, setCurrentStep] = useState(0);
@@ -1537,19 +1544,13 @@ export default function GMGResaleFlow() {
     // Get user profile data for auto-population
     let autoFillData = { submitterName: '', submitterEmail: '' };
     if (user) {
-      try {
-        const profileData = await getUserProfileData();
-        if (profileData) {
-          const fullName = [profileData.first_name, profileData.last_name].filter(Boolean).join(' ');
-          autoFillData = {
-            submitterName: fullName || '',
-            submitterEmail: profileData.email || user.email || '',
-          };
-        } else {
-          autoFillData.submitterEmail = user.email || '';
-        }
-      } catch (error) {
-        console.error('Error loading profile data:', error);
+      if (profile) {
+        const fullName = [profile.first_name, profile.last_name].filter(Boolean).join(' ');
+        autoFillData = {
+          submitterName: fullName || '',
+          submitterEmail: profile.email || user.email || '',
+        };
+      } else {
         autoFillData.submitterEmail = user.email || '';
       }
     }
@@ -1579,7 +1580,7 @@ export default function GMGResaleFlow() {
     
     // Navigate to first step
     setCurrentStep(1);
-  }, [user, getUserProfileData]);
+  }, [user, profile]);
 
   // Load applications when user or role changes
   useEffect(() => {

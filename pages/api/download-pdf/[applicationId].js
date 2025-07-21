@@ -12,7 +12,7 @@ export default async function handler(req, res) {
     }
 
     const supabase = createPagesServerClient({ req, res });
-    const bucketName = process.env.SUPABASE_BUCKET_NAME || 'pdfs';
+    const bucketName = 'bucket0';
     const outputPdfPath = `resale-certificates/${applicationId}/resale-certificate-${applicationId}.pdf`;
 
     // Get the public URL for the existing PDF

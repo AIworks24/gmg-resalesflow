@@ -6,7 +6,8 @@ import { useRouter } from 'next/router';
 const AdminResaleCertificateForm = ({ 
   applicationData,
   formId,
-  onComplete
+  onComplete,
+  isModal = false
 }) => {
   const router = useRouter();
   const [formData, setFormData] = useState({
@@ -402,16 +403,17 @@ const AdminResaleCertificateForm = ({
 
       if (updateError) throw updateError;
 
-      // Verify the update worked by getting the form again
-      const { data: verifyForm, error: verifyError } = await supabase
-        .from('property_owner_forms')
-        .select('*')
-        .eq('id', formId)
-        .single();
+      // Update the applications table to mark this task as completed (only if form is complete)
+      if (isComplete) {
+        const { error: updateAppError } = await supabase
+          .from('applications')
+          .update({
+            resale_certificate_completed_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', applicationData.id);
 
-      if (verifyError) {
-        console.error('Error verifying form update:', verifyError);
-        throw verifyError;
+        if (updateAppError) throw updateAppError;
       }
 
       // Check if both forms are completed
@@ -2550,7 +2552,7 @@ const AdminResaleCertificateForm = ({
   };
 
   return (
-    <div className="max-w-6xl mx-auto p-6 bg-white min-h-screen">
+    <div className={`${isModal ? 'p-6' : 'max-w-6xl mx-auto p-6'} bg-white ${isModal ? '' : 'min-h-screen'}`}>
       {/* Admin Header */}
       <div className="bg-purple-50 p-6 rounded-lg mb-8 border border-purple-200">
         <div className="flex items-center justify-between mb-4">
@@ -2561,13 +2563,15 @@ const AdminResaleCertificateForm = ({
               <p className="text-gray-600">Official State Form A492-05RESALE-v4 - Application #{applicationData?.id}</p>
             </div>
           </div>
-          <button
-            onClick={() => router.push('/admin/dashboard')}
-            className="flex items-center gap-2 px-4 py-2 text-purple-600 border border-purple-600 rounded-md hover:bg-purple-50"
-          >
-            <ArrowLeft className="w-4 h-4" />
-            Back to Dashboard
-          </button>
+          {!isModal && (
+            <button
+              onClick={() => router.push('/admin/dashboard')}
+              className="flex items-center gap-2 px-4 py-2 text-purple-600 border border-purple-600 rounded-md hover:bg-purple-50"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              Back to Dashboard
+            </button>
+          )}
         </div>
         
         <div className="bg-white p-4 rounded-lg border">

@@ -1,4 +1,4 @@
-import { createPagesServerClient } from '@supabase/auth-helpers-nextjs';
+import { createClient } from '@supabase/supabase-js';
 import { mapFormDataToPDFFields, generateAndUploadPDF } from '../../lib/pdfService';
 
 export default async function handler(req, res) {
@@ -10,17 +10,25 @@ export default async function handler(req, res) {
     const fields = mapFormDataToPDFFields(formData);
     const apiKey = process.env.PDFCO_API_KEY;
     const outputPdfPath = `resale-certificates/${applicationId}/resale-certificate-${applicationId}.pdf`;
-    const supabase = createPagesServerClient({ req, res });
-    const bucketName = process.env.SUPABASE_BUCKET_NAME || 'pdfs';
+    
+    // Use service role key for server-side operations (no auth required)
+    const supabase = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL,
+      process.env.SUPABASE_SERVICE_ROLE_KEY
+    );
+    const bucketName = 'bucket0';
 
     const { publicURL } = await generateAndUploadPDF(fields, outputPdfPath, apiKey, supabase, bucketName);
 
-    // Restore: Update the applications table with the new PDF URL
+    // Update the applications table with the new PDF URL
+    const generatedAt = new Date();
+    
     const { error: updateError } = await supabase
       .from('applications')
       .update({
         pdf_url: publicURL,
-        pdf_generated_at: new Date().toISOString(),
+        pdf_generated_at: generatedAt.toISOString(),
+        pdf_completed_at: generatedAt.toISOString(),
       })
       .eq('id', applicationId);
     if (updateError) {

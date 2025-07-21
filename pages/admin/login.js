@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
 import { useRouter } from 'next/router';
+import useAdminAuthStore from '../../stores/adminAuthStore';
 
 export default function AdminLogin() {
   const [email, setEmail] = useState('');
@@ -8,8 +8,8 @@ export default function AdminLogin() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  const supabase = createClientComponentClient();
   const router = useRouter();
+  const { signIn } = useAdminAuthStore();
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -17,49 +17,15 @@ export default function AdminLogin() {
     setError('');
 
     try {
-      console.log('🔐 Attempting login with email:', email);
+      const result = await signIn(email, password);
       
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
-
-      if (error) {
-        console.error('❌ Auth error:', error);
-        throw error;
-      }
-
-      console.log('✅ Auth successful, user ID:', data.user.id);
-
-      // Check user role in profiles table
-      const userId = data.user.id;
-      console.log('🔍 Looking up profile for user:', userId);
-      
-      const { data: profile, error: profileError } = await supabase
-        .from('profiles')
-        .select('role')
-        .eq('id', userId)
-        .single();
-
-      if (profileError) {
-        console.error('❌ Profile lookup error:', profileError);
-        throw new Error(`Profile lookup failed: ${profileError.message}`);
-      }
-
-      console.log('👤 Profile found:', profile);
-
-      if (profile?.role === 'admin' || profile?.role === 'staff') {
-        console.log('✅ Admin access granted, redirecting...');
+      if (result.success) {
         router.push('/admin/dashboard');
       } else {
-        console.warn('❌ Access denied - user role:', profile?.role);
-        setError(`You do not have admin access. Current role: ${profile?.role || 'none'}`);
-        // Optionally, sign out the user
-        await supabase.auth.signOut();
+        setError(result.error);
       }
     } catch (error) {
-      console.error('💥 Login error:', error);
-      setError(error.message);
+      setError('An unexpected error occurred. Please try again.');
     } finally {
       setLoading(false);
     }

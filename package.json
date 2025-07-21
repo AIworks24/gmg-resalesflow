@@ -4,13 +4,11 @@
   "private": true,
   "description": "Goodman Management Group - Resale Certificate System",
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
+    "dev": "cross-env NODE_ENV=development next dev",
     "build:dev": "cross-env NODE_ENV=development next build",
-    "build:prod": "cross-env NODE_ENV=production next build",
-    "start": "next start",
+    "build": "cross-env NODE_ENV=production next build",
     "start:dev": "cross-env NODE_ENV=development next start",
-    "start:prod": "cross-env NODE_ENV=production next start",
+    "start": "cross-env NODE_ENV=production next start",
     "lint": "next lint"
   },
   "dependencies": {
@@ -18,6 +16,8 @@
     "@supabase/auth-helpers-nextjs": "^0.8.7",
     "@supabase/auth-helpers-react": "^0.4.2",
     "@supabase/supabase-js": "^2.38.5",
+    "@tanstack/react-query": "^5.83.0",
+    "@tanstack/react-query-devtools": "^5.83.0",
     "date-fns": "^2.30.0",
     "dotenv": "^16.5.0",
     "lucide-react": "^0.263.1",
@@ -32,7 +32,8 @@
     "react-hook-form": "^7.47.0",
     "react-joyride": "^2.7.2",
     "resend": "^4.6.0",
-    "stripe": "^18.3.0"
+    "stripe": "^18.3.0",
+    "zustand": "^5.0.6"
   },
   "devDependencies": {
     "autoprefixer": "^10.0.1",
