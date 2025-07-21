@@ -1,11 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
 import { Save, Send, FileText, Calendar, Clock, User, CheckCircle, ArrowLeft, Building } from 'lucide-react';
+import { useRouter } from 'next/router';
 
 const AdminPropertyInspectionForm = ({ 
   applicationData,
   formId,
-  onComplete
+  onComplete,
+  isModal = false
 }) => {
   const [formData, setFormData] = useState({
     association: applicationData?.hoa_properties?.name || '',
@@ -26,6 +28,7 @@ const AdminPropertyInspectionForm = ({
   const [success, setSuccess] = useState(null);
 
   const supabase = createClientComponentClient();
+  const router = useRouter();
 
   // Load existing form data if any
   useEffect(() => {
@@ -58,8 +61,8 @@ const AdminPropertyInspectionForm = ({
         .update({
           form_data: formData,
           response_data: formData,
-          status: 'opened',
-          updated_at: new Date().toISOString()
+          status: 'in_progress',
+          updated_at: new Date().toISOString(),
         })
         .eq('id', formId);
 
@@ -99,6 +102,17 @@ const AdminPropertyInspectionForm = ({
 
       if (formError) throw formError;
 
+      // Update the applications table to mark this task as completed
+      const { error: updateAppError } = await supabase
+        .from('applications')
+        .update({
+          inspection_form_completed_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', applicationData.id);
+
+      if (updateAppError) throw updateAppError;
+
       // Check if both forms are completed to update application status
       const { data: allForms } = await supabase
         .from('property_owner_forms')
@@ -133,7 +147,7 @@ const AdminPropertyInspectionForm = ({
                    formData.primaryContact;
 
   return (
-    <div className="max-w-4xl mx-auto p-6 bg-white min-h-screen">
+    <div className={`${isModal ? 'p-6' : 'max-w-4xl mx-auto p-6'} bg-white ${isModal ? '' : 'min-h-screen'}`}>
       {/* Admin Header */}
       <div className="bg-blue-50 p-6 rounded-lg mb-8 border border-blue-200">
         <div className="flex items-center justify-between mb-4">
@@ -144,13 +158,15 @@ const AdminPropertyInspectionForm = ({
               <p className="text-gray-600">Complete for Application #{applicationData?.id}</p>
             </div>
           </div>
-          <button
-            onClick={() => window.history.back()}
-            className="flex items-center gap-2 px-4 py-2 text-blue-600 border border-blue-600 rounded-md hover:bg-blue-50"
-          >
-            <ArrowLeft className="w-4 h-4" />
-            Back to Dashboard
-          </button>
+          {!isModal && (
+            <button
+              onClick={() => router.push('/admin/dashboard')}
+              className="flex items-center gap-2 px-4 py-2 text-blue-600 border border-blue-600 rounded-md hover:bg-blue-50"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              Back to Dashboard
+            </button>
+          )}
         </div>
         
         <div className="bg-white p-4 rounded-lg border">

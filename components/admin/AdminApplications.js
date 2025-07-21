@@ -1,0 +1,1957 @@
+import React, { useState, useEffect } from 'react';
+import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
+import {
+  FileText,
+  CheckCircle,
+  Clock,
+  AlertTriangle,
+  Eye,
+  Calendar,
+  Building,
+  User,
+  Filter,
+  Search,
+  RefreshCw,
+  Edit,
+  XCircle,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
+  X,
+  Upload,
+  Trash2,
+  Paperclip,
+} from 'lucide-react';
+import { useRouter } from 'next/router';
+import { mapFormDataToPDFFields } from '../../lib/pdfService';
+import AdminPropertyInspectionForm from './AdminPropertyInspectionForm';
+import AdminResaleCertificateForm from './AdminResaleCertificateForm';
+import AdminLayout from './AdminLayout';
+
+const AdminApplications = ({ userRole }) => {
+  const [applications, setApplications] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedStatus, setSelectedStatus] = useState('all');
+  const [searchTerm, setSearchTerm] = useState('');
+  const [selectedApplication, setSelectedApplication] = useState(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [sendingEmail, setSendingEmail] = useState(false);
+  const [generatingPDF, setGeneratingPDF] = useState(false);
+  const [dateFilter, setDateFilter] = useState('all'); // 'all', 'today', 'week', 'month', 'custom'
+  const [customDateRange, setCustomDateRange] = useState({
+    startDate: '',
+    endDate: ''
+  });
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(10);
+  const [totalCount, setTotalCount] = useState(0);
+  const [showAttachmentModal, setShowAttachmentModal] = useState(false);
+  const [temporaryAttachments, setTemporaryAttachments] = useState([]);
+  const [uploading, setUploading] = useState(false);
+  const [showPropertyEditModal, setShowPropertyEditModal] = useState(false);
+  const [selectedProperty, setSelectedProperty] = useState(null);
+  const [propertyFormData, setPropertyFormData] = useState({
+    name: '',
+    location: '',
+    property_owner_name: '',
+    property_owner_email: '',
+    property_owner_phone: '',
+    management_contact: '',
+    phone: '',
+    email: '',
+    special_requirements: ''
+  });
+  const [selectedFiles, setSelectedFiles] = useState([]);
+  const [uploadingProperty, setUploadingProperty] = useState(false);
+  const [propertyFiles, setPropertyFiles] = useState([]);
+  const [loadingPropertyFiles, setLoadingPropertyFiles] = useState(false);
+  const [snackbar, setSnackbar] = useState({ show: false, message: '', type: 'success' });
+  const [assignedToMe, setAssignedToMe] = useState(false);
+  const [staffMembers, setStaffMembers] = useState([]);
+  const [assigningApplication, setAssigningApplication] = useState(null);
+  const [showInspectionFormModal, setShowInspectionFormModal] = useState(false);
+  const [showResaleFormModal, setShowResaleFormModal] = useState(false);
+  const [inspectionFormData, setInspectionFormData] = useState(null);
+  const [resaleFormData, setResaleFormData] = useState(null);
+  const [loadingFormData, setLoadingFormData] = useState(false);
+
+  const supabase = createClientComponentClient();
+  const router = useRouter();
+
+  // Snackbar helper function
+  const showSnackbar = (message, type = 'success') => {
+    setSnackbar({ show: true, message, type });
+    setTimeout(() => {
+      setSnackbar({ show: false, message: '', type: 'success' });
+    }, 4000); // Hide after 4 seconds
+  };
+
+  // Helper function to calculate business days deadline
+  const calculateBusinessDaysDeadline = (startDate, businessDays) => {
+    const date = new Date(startDate);
+    let daysAdded = 0;
+    
+    while (daysAdded < businessDays) {
+      date.setDate(date.getDate() + 1);
+      // Skip weekends (Saturday = 6, Sunday = 0)
+      if (date.getDay() !== 0 && date.getDay() !== 6) {
+        daysAdded++;
+      }
+    }
+    
+    return date;
+  };
+
+
+  const getDateRange = () => {
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    
+    switch (dateFilter) {
+      case 'today':
+        return {
+          start: today,
+          end: new Date(today.getTime() + 24 * 60 * 60 * 1000 - 1)
+        };
+      case 'week':
+        const weekStart = new Date(today.getTime() - (today.getDay() * 24 * 60 * 60 * 1000));
+        const weekEnd = new Date(weekStart.getTime() + (7 * 24 * 60 * 60 * 1000) - 1);
+        return { start: weekStart, end: weekEnd };
+      case 'month':
+        const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+        const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+        return { start: monthStart, end: monthEnd };
+      case 'custom':
+        if (customDateRange.startDate && customDateRange.endDate) {
+          return {
+            start: new Date(customDateRange.startDate),
+            end: new Date(customDateRange.endDate + 'T23:59:59.999Z')
+          };
+        }
+        return null;
+      default:
+        return null;
+    }
+  };
+
+  const isApplicationUrgent = (application) => {
+    // Skip completed applications
+    if (application.notifications?.some(n => n.notification_type === 'application_approved')) {
+      return false;
+    }
+
+    // Skip applications that haven't been submitted
+    if (!application.submitted_at) {
+      return false;
+    }
+
+    // Calculate deadline based on package type using business days
+    const submittedDate = new Date(application.submitted_at);
+    const businessDays = application.package_type === 'rush' ? 5 : 15; // Use max for standard (10-15 days)
+    const deadline = calculateBusinessDaysDeadline(submittedDate, businessDays);
+
+    const now = new Date();
+    const hoursUntilDeadline = (deadline - now) / (1000 * 60 * 60);
+
+    // Urgent if overdue or within 48 hours of deadline
+    return hoursUntilDeadline < 48;
+  };
+
+  useEffect(() => {
+    // Handle URL query parameters on component mount
+    const { query } = router;
+    if (query.status) {
+      setSelectedStatus(query.status);
+    }
+    if (query.date) {
+      setDateFilter(query.date);
+    }
+
+    // Load staff members for assignment dropdown
+    const loadStaffMembers = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('profiles')
+          .select('email, first_name, last_name, role')
+          .in('role', ['admin', 'staff'])
+          .eq('active', true)
+          .order('first_name');
+
+        if (error) throw error;
+        setStaffMembers(data || []);
+      } catch (error) {
+        console.error('Failed to load staff members:', error);
+      }
+    };
+    loadStaffMembers();
+  }, [router.query]);
+
+  // Initial load of applications
+  useEffect(() => {
+    loadApplications();
+  }, []);
+
+  // Reload applications when date filter changes (reset to page 1)
+  useEffect(() => {
+    setCurrentPage(1);
+    loadApplications();
+  }, [dateFilter, customDateRange, assignedToMe]);
+
+  // Reload applications when page or items per page changes
+  useEffect(() => {
+    loadApplications();
+  }, [currentPage, itemsPerPage]);
+
+  // Reload applications when status filter or search term changes (reset to page 1)
+  useEffect(() => {
+    setCurrentPage(1);
+    loadApplications();
+  }, [selectedStatus, searchTerm]);
+
+
+  // Load property files when attachment modal opens
+  useEffect(() => {
+    console.log('Attachment modal useEffect triggered:', { 
+      showAttachmentModal, 
+      propertyId: selectedApplication?.hoa_property_id,
+      applicationId: selectedApplication?.id 
+    });
+    if (showAttachmentModal && selectedApplication?.hoa_property_id) {
+      loadPropertyFiles(selectedApplication.hoa_property_id);
+    } else if (showAttachmentModal && !selectedApplication?.hoa_property_id) {
+      console.log('Attachment modal is open but no hoa_property_id found');
+      setLoadingPropertyFiles(false);
+      setPropertyFiles([]);
+    }
+  }, [showAttachmentModal, selectedApplication?.hoa_property_id]);
+
+  const loadApplications = async () => {
+    setRefreshing(true);
+    try {
+      // First, get the total count for pagination
+      let countQuery = supabase
+        .from('applications')
+        .select('*', { count: 'exact', head: true });
+
+      // Apply filters to count query
+      const dateRange = getDateRange();
+      if (dateRange) {
+        countQuery = countQuery
+          .gte('created_at', dateRange.start.toISOString())
+          .lte('created_at', dateRange.end.toISOString());
+      }
+      
+      if (selectedStatus !== 'all' && selectedStatus !== 'urgent') {
+        countQuery = countQuery.eq('status', selectedStatus);
+      }
+
+      if (searchTerm) {
+        countQuery = countQuery.or(`property_address.ilike.%${searchTerm}%,submitter_name.ilike.%${searchTerm}%,hoa_properties.name.ilike.%${searchTerm}%`);
+      }
+
+      // Add assigned to me filter
+      if (assignedToMe) {
+        countQuery = countQuery.eq('assigned_to', userEmail);
+      }
+
+      const { count, error: countError } = await countQuery;
+      if (countError) throw countError;
+      
+      // For urgent filter, we'll need to calculate count after filtering
+      if (selectedStatus !== 'urgent') {
+        setTotalCount(count || 0);
+      }
+
+      // Then get the paginated data
+      let query = supabase
+        .from('applications')
+        .select(
+          `
+          *,
+          hoa_properties(name, property_owner_email, property_owner_name),
+          property_owner_forms(id, form_type, status, completed_at, form_data, response_data),
+          notifications(id, notification_type, status, sent_at)
+        `
+        );
+
+      // Apply all filters to data query
+      if (dateRange) {
+        query = query
+          .gte('created_at', dateRange.start.toISOString())
+          .lte('created_at', dateRange.end.toISOString());
+      }
+
+      if (selectedStatus !== 'all' && selectedStatus !== 'urgent') {
+        query = query.eq('status', selectedStatus);
+      }
+
+      if (searchTerm) {
+        query = query.or(`property_address.ilike.%${searchTerm}%,submitter_name.ilike.%${searchTerm}%,hoa_properties.name.ilike.%${searchTerm}%`);
+      }
+
+      // Add assigned to me filter
+      if (assignedToMe) {
+        query = query.eq('assigned_to', userEmail);
+      }
+
+      // Apply pagination (skip for urgent filter since we filter post-query)
+      if (selectedStatus !== 'urgent') {
+        const startIndex = (currentPage - 1) * itemsPerPage;
+        query = query.range(startIndex, startIndex + itemsPerPage - 1);
+      }
+      query = query.order('created_at', { ascending: false });
+
+      const { data, error } = await query;
+
+      if (error) {
+        console.error('❌ Applications query error:', error);
+        throw error;
+      }
+
+      // Process the data to group forms by application
+      const processedData = data.map((app) => {
+        // Find the inspection form and resale certificate form for this application
+        const inspectionForm = app.property_owner_forms?.find(
+          (f) => f.form_type === 'inspection_form'
+        );
+        const resaleCertificate = app.property_owner_forms?.find(
+          (f) => f.form_type === 'resale_certificate'
+        );
+
+        const processedApp = {
+          ...app,
+          forms: {
+            inspectionForm: inspectionForm || {
+              status: 'not_created',
+              id: null,
+            },
+            resaleCertificate: resaleCertificate || {
+              status: 'not_created',
+              id: null,
+            },
+          },
+          notifications: app.notifications || [],
+        };
+
+        return processedApp;
+      });
+
+      // Apply urgent filter if selected
+      let finalData = processedData;
+      if (selectedStatus === 'urgent') {
+        const urgentApps = processedData.filter(app => isApplicationUrgent(app));
+        // Set total count for urgent applications
+        setTotalCount(urgentApps.length);
+        
+        // Apply pagination manually for urgent applications
+        const startIndex = (currentPage - 1) * itemsPerPage;
+        finalData = urgentApps.slice(startIndex, startIndex + itemsPerPage);
+      }
+
+      setApplications(finalData);
+    } catch (err) {
+      console.error('❌ Failed to load applications:', err);
+      setApplications([]); // Set empty array on error to prevent crashes
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  };
+
+
+  const handleAssignApplication = async (applicationId, assignedTo) => {
+    setAssigningApplication(applicationId);
+    try {
+      const response = await fetch('/api/assign-application', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ applicationId, assignedTo }),
+      });
+
+      if (response.ok) {
+        showSnackbar(assignedTo ? `Application assigned to ${assignedTo}` : 'Application unassigned', 'success');
+        loadApplications(); // Refresh the applications list
+        
+        // Update the selected application if it's open in the modal
+        if (selectedApplication && selectedApplication.id === applicationId) {
+          setSelectedApplication({
+            ...selectedApplication,
+            assigned_to: assignedTo
+          });
+        }
+      } else {
+        const error = await response.json();
+        showSnackbar(error.error || 'Failed to assign application', 'error');
+      }
+    } catch (error) {
+      showSnackbar('Failed to assign application', 'error');
+    } finally {
+      setAssigningApplication(null);
+    }
+  };
+
+  const handleCompleteTask = async (applicationId, taskName) => {
+    try {
+      const response = await fetch('/api/complete-task', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ applicationId, taskName }),
+      });
+
+      if (response.ok) {
+        showSnackbar(`${taskName.replace('_', ' ')} task completed`, 'success');
+        
+        // Update the selected application if it's open in the modal
+        await refreshSelectedApplication(applicationId);
+        
+        // Refresh applications list in background (don't wait for it)
+        loadApplications();
+      } else {
+        const error = await response.json();
+        showSnackbar(error.error || 'Failed to complete task', 'error');
+      }
+    } catch (error) {
+      showSnackbar('Failed to complete task', 'error');
+    }
+  };
+
+  const handleSaveComments = async (applicationId, comments) => {
+    try {
+      const response = await fetch('/api/save-comments', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ applicationId, comments }),
+      });
+
+      if (response.ok) {
+        showSnackbar('Comments saved successfully', 'success');
+        
+        // Update the selected application if it's open in the modal
+        await refreshSelectedApplication(applicationId);
+        
+        // Refresh applications list in background (don't wait for it)
+        loadApplications();
+      } else {
+        const error = await response.json();
+        showSnackbar(error.error || 'Failed to save comments', 'error');
+      }
+    } catch (error) {
+      showSnackbar('Failed to save comments', 'error');
+    }
+  };
+
+
+  const getWorkflowStep = (application) => {
+    const inspectionStatus = application.forms.inspectionForm.status;
+    const resaleStatus = application.forms.resaleCertificate.status;
+    const hasPDF = application.pdf_url;
+    const hasNotificationSent = application.notifications?.some(n => n.notification_type === 'application_approved');
+
+    if ((inspectionStatus === 'not_created' || inspectionStatus === 'not_started') && 
+        (resaleStatus === 'not_created' || resaleStatus === 'not_started')) {
+      return { step: 1, text: 'Forms Required', color: 'bg-yellow-100 text-yellow-800' };
+    }
+    
+    if (inspectionStatus !== 'completed' || resaleStatus !== 'completed') {
+      return { step: 2, text: 'Forms In Progress', color: 'bg-blue-100 text-blue-800' };
+    }
+    
+    if (!hasPDF) {
+      return { step: 3, text: 'Generate PDF', color: 'bg-orange-100 text-orange-800' };
+    }
+    
+    if (!hasNotificationSent) {
+      return { step: 4, text: 'Send Email', color: 'bg-purple-100 text-purple-800' };
+    }
+    
+    return { step: 5, text: 'Completed', color: 'bg-green-100 text-green-800' };
+  };
+
+  // Helper functions for modal
+  const getTaskStatusIcon = (status, isGenerating = false) => {
+    if (isGenerating) {
+      return <RefreshCw className='w-5 h-5 text-blue-600 animate-spin' />;
+    }
+    
+    switch (status) {
+      case 'completed':
+        return <CheckCircle className='w-5 h-5 text-green-600' />;
+      case 'update_needed':
+        return <AlertTriangle className='w-5 h-5 text-orange-600' />;
+      case 'generating':
+      case 'sending':
+        return <RefreshCw className='w-5 h-5 text-blue-600 animate-spin' />;
+      case 'in_progress':
+        return <Edit className='w-5 h-5 text-blue-600' />;
+      case 'not_started':
+      default:
+        return <Clock className='w-5 h-5 text-gray-400' />;
+    }
+  };
+
+  const getTaskStatusText = (status) => {
+    switch (status) {
+      case 'completed':
+        return 'Completed';
+      case 'update_needed':
+        return 'Update Needed';
+      case 'generating':
+        return 'Generating...';
+      case 'sending':
+        return 'Sending...';
+      case 'in_progress':
+        return 'In Progress';
+      case 'not_started':
+      default:
+        return 'Not Started';
+    }
+  };
+
+  const getTaskStatusColor = (status) => {
+    switch (status) {
+      case 'completed':
+        return 'text-green-600 bg-green-50 border-green-200';
+      case 'update_needed':
+        return 'text-orange-600 bg-orange-50 border-orange-200';
+      case 'generating':
+      case 'sending':
+      case 'in_progress':
+        return 'text-blue-600 bg-blue-50 border-blue-200';
+      case 'not_started':
+      default:
+        return 'text-gray-600 bg-gray-50 border-gray-200';
+    }
+  };
+
+  const getTaskStatuses = (application) => {
+    const inspectionFormStatus = application.forms.inspectionForm.status;
+    const resaleFormStatus = application.forms.resaleCertificate.status;
+    
+    // Derive PDF status from existing fields
+    let pdfStatus = 'not_started';
+    if (application.pdf_url) {
+      // Check if forms were updated after PDF generation
+      const pdfGeneratedAt = new Date(application.pdf_generated_at || 0);
+      const formsUpdatedAt = new Date(application.forms_updated_at || application.updated_at || 0);
+      
+      // If forms were updated after PDF generation, mark as needing update
+      if (formsUpdatedAt > pdfGeneratedAt) {
+        pdfStatus = 'update_needed';
+      } else {
+        pdfStatus = 'completed';
+      }
+    }
+    
+    const hasNotificationSent = application.notifications?.some(n => n.notification_type === 'application_approved');
+
+    return {
+      inspection: inspectionFormStatus,
+      resale: resaleFormStatus,
+      pdf: pdfStatus,
+      email: hasNotificationSent ? 'completed' : 'not_started'
+    };
+  };
+
+  const getFormButtonText = (status) => {
+    switch (status) {
+      case 'completed':
+        return 'View';
+      case 'in_progress':
+        return 'Continue';
+      case 'not_started':
+      default:
+        return 'Fill Form';
+    }
+  };
+
+  const handleCompleteForm = async (applicationId, formType) => {
+    setLoadingFormData(true);
+    try {
+      await loadFormData(applicationId, formType);
+      if (formType === 'inspection') {
+        setShowInspectionFormModal(true);
+      } else if (formType === 'resale') {
+        setShowResaleFormModal(true);
+      }
+    } catch (error) {
+      showSnackbar('Failed to load form data: ' + error.message, 'error');
+    } finally {
+      setLoadingFormData(false);
+    }
+  };
+
+  const loadFormData = async (applicationId, formType) => {
+    try {
+      // Load application data with HOA properties
+      const { data: appData, error: appError } = await supabase
+        .from('applications')
+        .select(`
+          *,
+          hoa_properties(name, property_owner_email, property_owner_name)
+        `)
+        .eq('id', applicationId)
+        .single();
+
+      if (appError) throw appError;
+
+      // Get or create the form
+      let { data: formData, error: formError } = await supabase
+        .from('property_owner_forms')
+        .select('id, form_data, response_data, status')
+        .eq('application_id', applicationId)
+        .eq('form_type', formType === 'inspection' ? 'inspection_form' : 'resale_certificate')
+        .single();
+
+      // If no form exists, create it
+      if (formError && formError.code === 'PGRST116') {
+        const { data: newForm, error: createError } = await supabase
+          .from('property_owner_forms')
+          .insert([{
+            application_id: applicationId,
+            form_type: formType === 'inspection' ? 'inspection_form' : 'resale_certificate',
+            status: 'not_started',
+            access_token: crypto.randomUUID(),
+            recipient_email: appData.hoa_properties?.property_owner_email || appData.submitter_email || 'admin@gmgva.com',
+            expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+            created_at: new Date().toISOString()
+          }])
+          .select()
+          .single();
+
+        if (createError) throw createError;
+        formData = newForm;
+      } else if (formError) {
+        throw formError;
+      }
+
+      // Combine the data
+      const combinedData = {
+        ...appData,
+        property_owner_forms: [formData]
+      };
+
+      if (formType === 'inspection') {
+        setInspectionFormData(combinedData);
+      } else {
+        setResaleFormData(combinedData);
+      }
+    } catch (error) {
+      console.error('Error loading form data:', error);
+      throw error;
+    }
+  };
+
+  const refreshSelectedApplication = async (applicationId) => {
+    if (selectedApplication && selectedApplication.id === applicationId) {
+      // Refetch the specific application with updated data
+      const { data: updatedApp } = await supabase
+        .from('applications')
+        .select(`
+          *,
+          hoa_properties(name, property_owner_email, property_owner_name),
+          property_owner_forms(id, form_type, status, completed_at, form_data, response_data),
+          notifications(id, notification_type, status, sent_at)
+        `)
+        .eq('id', applicationId)
+        .single();
+      
+      if (updatedApp) {
+        // Process the data to match the format
+        const inspectionForm = updatedApp.property_owner_forms?.find(
+          (f) => f.form_type === 'inspection_form'
+        );
+        const resaleCertificate = updatedApp.property_owner_forms?.find(
+          (f) => f.form_type === 'resale_certificate'
+        );
+        
+        const processedApp = {
+          ...updatedApp,
+          forms: {
+            inspectionForm: inspectionForm || { status: 'not_created', id: null },
+            resaleCertificate: resaleCertificate || { status: 'not_created', id: null },
+          },
+          notifications: updatedApp.notifications || [],
+        };
+        
+        setSelectedApplication(processedApp);
+      }
+    }
+  };
+
+  const handleFormComplete = async () => {
+    // Only refresh the selected application if open (not all applications)
+    if (selectedApplication) {
+      await refreshSelectedApplication(selectedApplication.id);
+    }
+    
+    setShowInspectionFormModal(false);
+    setShowResaleFormModal(false);
+    setInspectionFormData(null);
+    setResaleFormData(null);
+    
+    // Refresh applications list in background (don't wait for it)
+    loadApplications();
+  };
+
+  const handleGeneratePDF = async (formData, applicationId) => {
+    try {
+      setGeneratingPDF(true);
+
+      const response = await fetch('/api/regenerate-pdf', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          formData,
+          applicationId,
+        }),
+      });
+      
+      const result = await response.json();
+      if (!result.success) throw new Error(result.error || 'Failed to generate PDF');
+      
+      // Update the selected application if it's open in the modal
+      await refreshSelectedApplication(applicationId);
+      
+      // Refresh applications list in background (don't wait for it)
+      loadApplications();
+    } catch (error) {
+      console.error('Failed to generate PDF:', error);
+      showSnackbar('Failed to generate PDF. Please try again.', 'error');
+    } finally {
+      setGeneratingPDF(false);
+    }
+  };
+
+  const handleSendApprovalEmail = async (applicationId) => {
+    setSendingEmail(true);
+    try {
+      // Include temporary attachments in the email request
+      const response = await fetch('/api/send-approval-email', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ 
+          applicationId
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to send approval email');
+      }
+
+      // Clear temporary attachments after successful send
+      setTemporaryAttachments([]);
+      
+      // Update the selected application if it's open in the modal
+      await refreshSelectedApplication(applicationId);
+      
+      // Refresh applications list in background (don't wait for it)
+      loadApplications();
+      
+      showSnackbar('Email sent successfully!', 'success');
+    } catch (error) {
+      console.error('Failed to send approval email:', error);
+      
+      // Handle specific PDF validation errors with helpful messages
+      if (error.message.includes('PDF has not been generated')) {
+        showSnackbar('PDF has not been generated yet. Please generate the PDF first.', 'error');
+      } else {
+        showSnackbar('Failed to send email. Please try again.', 'error');
+      }
+    } finally {
+      setSendingEmail(false);
+    }
+  };
+
+  // Helper functions for attachment management
+  const handleFileSelect = (event) => {
+    const files = Array.from(event.target.files);
+    setUploading(true);
+    
+    // Convert files to temporary attachment objects
+    const newAttachments = files.map(file => ({
+      id: Date.now() + Math.random(),
+      name: file.name,
+      size: file.size,
+      type: file.type,
+      file: file,
+      isTemporary: true
+    }));
+    
+    setTemporaryAttachments(prev => [...prev, ...newAttachments]);
+    setUploading(false);
+    
+    // Clear the input
+    event.target.value = '';
+  };
+
+  const removeTemporaryAttachment = (attachmentId) => {
+    setTemporaryAttachments(prev => prev.filter(att => att.id !== attachmentId));
+  };
+
+  const formatFileSize = (bytes) => {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  };
+
+  // Property files loading function
+  const loadPropertyFiles = async (propertyId) => {
+    if (!propertyId) {
+      console.log('No propertyId provided to loadPropertyFiles');
+      setPropertyFiles([]);
+      return;
+    }
+    
+    console.log('Loading property files for propertyId:', propertyId);
+    setLoadingPropertyFiles(true);
+    try {
+      const { data, error } = await supabase.storage
+        .from('bucket0')
+        .list(`property_files/${propertyId}`, {
+          limit: 100,
+          offset: 0
+        });
+
+      if (error) {
+        console.error('Storage list error:', error);
+        throw error;
+      }
+      
+      console.log('Found files:', data?.length || 0);
+      
+      // Convert to format with URLs
+      const filesWithUrls = await Promise.all((data || []).map(async (file) => {
+        const { data: urlData, error: urlError } = await supabase.storage
+          .from('bucket0')
+          .createSignedUrl(`property_files/${propertyId}/${file.name}`, 3600); // 1 hour expiry
+        
+        if (urlError) {
+          console.error('Error creating signed URL for file:', file.name, urlError);
+        }
+        
+        return {
+          id: `property-${file.name}`,
+          name: file.name.split('_').slice(1).join('_'), // Remove timestamp prefix
+          originalName: file.name,
+          size: file.metadata?.size || 0,
+          type: file.metadata?.mimetype || 'application/octet-stream',
+          url: urlData?.signedUrl,
+          isProperty: true
+        };
+      }));
+      
+      console.log('Property files loaded successfully:', filesWithUrls.length);
+      setPropertyFiles(filesWithUrls);
+    } catch (error) {
+      console.error('Error loading property files:', error);
+      setPropertyFiles([]);
+      showSnackbar('Failed to load property files: ' + error.message, 'error');
+    } finally {
+      setLoadingPropertyFiles(false);
+    }
+  };
+
+  // Property editing functions
+  const loadPropertyForEdit = async (propertyId, openModal = true) => {
+    try {
+      console.log('🔄 Loading property data for ID:', propertyId);
+      
+      const { data, error } = await supabase
+        .from('hoa_properties')
+        .select('*')
+        .eq('id', propertyId)
+        .single();
+
+      if (error) throw error;
+
+      console.log('📄 Fresh property data from database:', data);
+      console.log('📧 Management email from DB:', data.email);
+
+      setSelectedProperty(data);
+      const formData = {
+        name: data.name || '',
+        location: data.location || '',
+        property_owner_name: data.property_owner_name || '',
+        property_owner_email: data.property_owner_email || '',
+        property_owner_phone: data.property_owner_phone || '',
+        management_contact: data.management_contact || '',
+        phone: data.phone || '',
+        email: data.email || '',
+        special_requirements: data.special_requirements || ''
+      };
+      
+      console.log('📝 Setting form data:', formData);
+      console.log('📧 Management email in form:', formData.email);
+      
+      setPropertyFormData(formData);
+      setSelectedFiles([]);
+      
+      // Load property files for this property
+      await loadPropertyFiles(propertyId);
+      
+      if (openModal) {
+        setShowPropertyEditModal(true);
+      }
+    } catch (error) {
+      console.error('Error loading property:', error);
+      showSnackbar('Failed to load property details', 'error');
+    }
+  };
+
+  const renderAttachmentModal = () => {
+    if (!selectedApplication) return null;
+
+    // Get current PDF file
+    const pdfFile = selectedApplication.pdf_url ? {
+      id: 'pdf-file',
+      name: `${selectedApplication.submitter_name}_Resale_Certificate.pdf`,
+      type: 'application/pdf',
+      url: selectedApplication.pdf_url,
+      isPDF: true
+    } : null;
+
+    const allAttachments = [
+      ...(pdfFile ? [pdfFile] : []),
+      ...propertyFiles,
+      ...temporaryAttachments
+    ];
+
+    return (
+      <div className='bg-white rounded-lg max-w-2xl w-full max-h-[90vh] overflow-y-auto'>
+        <div className='p-6 border-b border-gray-200'>
+          <div className='flex items-center justify-between'>
+            <div className='flex items-center gap-3'>
+              <Paperclip className='w-6 h-6 text-blue-600' />
+              <div>
+                <h2 className='text-xl font-semibold text-gray-900'>Email Attachments</h2>
+                <p className='text-sm text-gray-600'>Manage files that will be sent with the completion email</p>
+              </div>
+            </div>
+            <button
+              onClick={() => setShowAttachmentModal(false)}
+              className='text-gray-400 hover:text-gray-600 p-1'
+            >
+              <X className='w-6 h-6' />
+            </button>
+          </div>
+        </div>
+
+        <div className='p-6 space-y-6'>
+          {/* PDF Certificate */}
+          {pdfFile && (
+            <div>
+              <h3 className='text-lg font-medium text-gray-900 mb-4'>PDF Certificate</h3>
+              <div className='flex items-center justify-between p-3 border border-gray-200 rounded-lg bg-blue-50'>
+                <div className='flex items-center gap-3'>
+                  <FileText className='w-5 h-5 text-blue-600' />
+                  <div>
+                    <p className='font-medium text-gray-900'>{pdfFile.name}</p>
+                    <span className='px-2 py-1 bg-blue-100 text-blue-700 rounded text-xs'>PDF Certificate</span>
+                  </div>
+                </div>
+                <button
+                  onClick={() => window.open(pdfFile.url, '_blank')}
+                  className='p-2 text-gray-400 hover:text-blue-600'
+                  title="View PDF"
+                >
+                  <Eye className='w-4 h-4' />
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Property Files */}
+          <div>
+            <div className='flex items-center justify-between mb-4'>
+              <h3 className='text-lg font-medium text-gray-900'>Property Files</h3>
+              <button
+                onClick={() => loadPropertyFiles(selectedApplication.hoa_property_id)}
+                disabled={loadingPropertyFiles}
+                className='inline-flex items-center gap-1 px-2 py-1 text-sm text-blue-600 hover:text-blue-800 disabled:opacity-50'
+                title="Refresh property files"
+              >
+                <RefreshCw className={`w-4 h-4 ${loadingPropertyFiles ? 'animate-spin' : ''}`} />
+                {loadingPropertyFiles ? 'Loading...' : 'Refresh'}
+              </button>
+            </div>
+            {loadingPropertyFiles ? (
+              <div className='text-center py-6 text-gray-500 border border-gray-200 rounded-lg bg-gray-50'>
+                <RefreshCw className='w-10 h-10 mx-auto mb-3 text-gray-300 animate-spin' />
+                <p className='font-medium'>Loading property files...</p>
+              </div>
+            ) : propertyFiles.length === 0 ? (
+              <div className='text-center py-6 text-gray-500 border border-gray-200 rounded-lg bg-gray-50'>
+                <Building className='w-10 h-10 mx-auto mb-3 text-gray-300' />
+                <p className='font-medium'>No property files found</p>
+                <p className='text-sm mb-4'>Upload HOA bylaws, CC&Rs, and other property documents</p>
+                <button
+                  onClick={() => loadPropertyForEdit(selectedApplication.hoa_property_id)}
+                  className='inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 text-sm'
+                >
+                  <Upload className='w-4 h-4' />
+                  Upload Property Files
+                </button>
+              </div>
+            ) : (
+              <div className='space-y-3'>
+                {propertyFiles.map((file, index) => (
+                  <div
+                    key={index}
+                    className='flex items-center justify-between p-3 border border-gray-200 rounded-lg hover:bg-gray-50'
+                  >
+                    <div className='flex items-center gap-3'>
+                      <FileText className='w-5 h-5 text-green-500' />
+                      <div>
+                        <p className='font-medium text-gray-900'>{file.name}</p>
+                        <div className='flex items-center gap-2 text-sm text-gray-500'>
+                          {file.size && <span>{formatFileSize(file.size)}</span>}
+                          <span className='px-2 py-1 bg-green-100 text-green-700 rounded text-xs'>Property File</span>
+                        </div>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => window.open(file.url, '_blank')}
+                      className='p-2 text-gray-400 hover:text-blue-600'
+                      title="View file"
+                    >
+                      <Eye className='w-4 h-4' />
+                    </button>
+                  </div>
+                ))}
+                <div className='pt-2'>
+                  <button
+                    onClick={() => loadPropertyForEdit(selectedApplication.hoa_property_id)}
+                    className='inline-flex items-center gap-2 px-3 py-1.5 bg-gray-100 text-gray-700 border border-gray-300 rounded-md hover:bg-gray-200 text-sm'
+                  >
+                    <Edit className='w-4 h-4' />
+                    Edit Property Files
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Temporary Attachments */}
+          {temporaryAttachments.length > 0 && (
+            <div>
+              <h3 className='text-lg font-medium text-gray-900 mb-4'>Additional Files ({temporaryAttachments.length})</h3>
+              <div className='space-y-3'>
+                {temporaryAttachments.map((attachment) => (
+                  <div
+                    key={attachment.id}
+                    className='flex items-center justify-between p-3 border border-gray-200 rounded-lg hover:bg-gray-50'
+                  >
+                    <div className='flex items-center gap-3'>
+                      <FileText className='w-5 h-5 text-blue-500' />
+                      <div>
+                        <p className='font-medium text-gray-900'>{attachment.name}</p>
+                        <div className='flex items-center gap-2 text-sm text-gray-500'>
+                          {attachment.size && <span>{formatFileSize(attachment.size)}</span>}
+                          <span className='px-2 py-1 bg-blue-100 text-blue-700 rounded text-xs'>New Upload</span>
+                        </div>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => removeTemporaryAttachment(attachment.id)}
+                      className='p-2 text-gray-400 hover:text-red-600'
+                      title="Remove file"
+                    >
+                      <Trash2 className='w-4 h-4' />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Upload New Files */}
+          <div>
+            <h3 className='text-lg font-medium text-gray-900 mb-4'>Add Additional Files</h3>
+            <div className='border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-gray-400 transition-colors'>
+              <Upload className='w-8 h-8 text-gray-400 mx-auto mb-3' />
+              <p className='text-gray-600 mb-2'>Upload additional documents</p>
+              <p className='text-sm text-gray-500 mb-4'>These files will be attached to the completion email</p>
+              <input
+                type="file"
+                multiple
+                onChange={handleFileSelect}
+                className='hidden'
+                id='attachment-upload'
+                accept='.pdf,.doc,.docx,.jpg,.jpeg,.png,.txt'
+              />
+              <label
+                htmlFor='attachment-upload'
+                className='inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 cursor-pointer disabled:opacity-50'
+              >
+                <Upload className='w-4 h-4' />
+                {uploading ? 'Uploading...' : 'Choose Files'}
+              </label>
+              <p className='text-xs text-gray-500 mt-2'>Supports: PDF, DOC, DOCX, JPG, PNG, TXT</p>
+            </div>
+          </div>
+        </div>
+
+        <div className='p-6 border-t border-gray-200 flex justify-between'>
+          <button
+            onClick={() => setShowAttachmentModal(false)}
+            className='px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50'
+          >
+            Close
+          </button>
+          <div className='text-sm text-gray-600'>
+            {allAttachments.length} file(s) ready to send
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  if (loading) {
+    return (
+      <div className='flex items-center justify-center min-h-screen'>
+        <div className='flex items-center gap-3 text-gray-600'>
+          <RefreshCw className='w-5 h-5 animate-spin' />
+          <span>Loading applications...</span>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <AdminLayout>
+      <div className='max-w-7xl mx-auto p-6'>
+
+        {/* Header */}
+        <div className='mb-8'>
+          <div className='flex items-center justify-between'>
+            <div>
+              <h1 className='text-3xl font-bold text-gray-900 mb-2'>
+                Applications Management
+              </h1>
+              <p className='text-gray-600'>
+                Monitor and manage all resale certificate applications
+              </p>
+            </div>
+            <button
+              onClick={loadApplications}
+              disabled={refreshing}
+              className='flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50'
+            >
+              <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
+              {refreshing ? 'Refreshing...' : 'Refresh'}
+            </button>
+          </div>
+        </div>
+
+        {/* Filters */}
+        <div className='bg-white p-6 rounded-lg shadow-md border mb-8 filters-section'>
+          <div className='grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4'>
+            {/* Date Filter */}
+            <div>
+              <label className='block text-sm font-medium text-gray-700 mb-2'>
+                Date Range
+              </label>
+              <select
+                value={dateFilter}
+                onChange={(e) => setDateFilter(e.target.value)}
+                className='w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500'
+              >
+                <option value='all'>All Time</option>
+                <option value='today'>Today</option>
+                <option value='week'>This Week</option>
+                <option value='month'>This Month</option>
+                <option value='custom'>Custom Range</option>
+              </select>
+            </div>
+
+            {/* Custom Date Range */}
+            {dateFilter === 'custom' && (
+              <>
+                <div>
+                  <label className='block text-sm font-medium text-gray-700 mb-2'>
+                    Start Date
+                  </label>
+                  <input
+                    type='date'
+                    value={customDateRange.startDate}
+                    onChange={(e) => setCustomDateRange({...customDateRange, startDate: e.target.value})}
+                    className='w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500'
+                  />
+                </div>
+                <div>
+                  <label className='block text-sm font-medium text-gray-700 mb-2'>
+                    End Date
+                  </label>
+                  <input
+                    type='date'
+                    value={customDateRange.endDate}
+                    onChange={(e) => setCustomDateRange({...customDateRange, endDate: e.target.value})}
+                    className='w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500'
+                  />
+                </div>
+              </>
+            )}
+
+            {/* Workflow Step Filter */}
+            <div>
+              <label className='block text-sm font-medium text-gray-700 mb-2'>
+                Workflow Step
+              </label>
+              <select
+                value={selectedStatus}
+                onChange={(e) => setSelectedStatus(e.target.value)}
+                className='w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500'
+              >
+                <option value='all'>All Steps</option>
+                <option value='urgent'>Urgent Applications</option>
+                <option value='draft'>Forms Required</option>
+                <option value='pending_review'>Forms In Progress</option>
+                <option value='approved'>Completed</option>
+              </select>
+            </div>
+
+            {/* Assigned to Me Filter */}
+            <div>
+              <label className='block text-sm font-medium text-gray-700 mb-2'>
+                Assignment Filter
+              </label>
+              <label className='flex items-center'>
+                <input
+                  type='checkbox'
+                  checked={assignedToMe}
+                  onChange={(e) => setAssignedToMe(e.target.checked)}
+                  className='rounded border-gray-300 text-blue-600 focus:ring-blue-500'
+                />
+                <span className='ml-2 text-sm text-gray-700'>Assigned to me only</span>
+              </label>
+            </div>
+          </div>
+
+          {/* Search */}
+          <div className='mt-4'>
+            <div className='relative'>
+              <Search className='w-5 h-5 absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400' />
+              <input
+                type='text'
+                placeholder='Search by property address, submitter name, or HOA...'
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className='w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500'
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* Applications Table */}
+        <div className='bg-white rounded-lg shadow-md border overflow-hidden applications-table'>
+          <div className='overflow-x-auto'>
+            <table className='w-full'>
+              <thead className='bg-gray-50 border-b'>
+                <tr>
+                  <th className='px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider'>
+                    Property Details
+                  </th>
+                  <th className='px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider workflow-column'>
+                    Workflow Step
+                  </th>
+                  <th className='px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider'>
+                    Submitted
+                  </th>
+                  <th className='px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider'>
+                    Assigned
+                  </th>
+                  <th className='px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider'>
+                    Actions
+                  </th>
+                </tr>
+              </thead>
+              <tbody className='bg-white divide-y divide-gray-200'>
+                {applications.map((app) => {
+                  const workflowStep = getWorkflowStep(app);
+                  return (
+                    <tr key={app.id} className='hover:bg-gray-50'>
+                      <td className='px-6 py-4 whitespace-nowrap'>
+                        <div className='flex items-center gap-3'>
+                          <Building className='w-5 h-5 text-gray-400' />
+                          <div>
+                            <div className='text-sm font-medium text-gray-900'>
+                              {app.property_address}
+                            </div>
+                            <div className='text-sm text-gray-500'>
+                              {app.submitter_name} • {app.hoa_properties?.name || 'Unknown HOA'}
+                            </div>
+                          </div>
+                        </div>
+                      </td>
+
+                      <td className='px-6 py-4 whitespace-nowrap'>
+                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${workflowStep.color}`}>
+                          Step {workflowStep.step}: {workflowStep.text}
+                        </span>
+                      </td>
+
+                      <td className='px-6 py-4 whitespace-nowrap text-sm text-gray-900'>
+                        {app.submitted_at ? (
+                          <div className='space-y-1'>
+                            <div className='flex items-center gap-1'>
+                              <Calendar className='w-3 h-3 text-gray-400' />
+                              <span>
+                                {new Date(app.submitted_at).toLocaleDateString()}
+                              </span>
+                            </div>
+                            <div className='flex items-center gap-1 text-xs'>
+                              <Clock className='w-3 h-3 text-gray-400' />
+                              <span className='text-gray-600'>
+                                Deadline: {(() => {
+                                  const submittedDate = new Date(app.submitted_at);
+                                  const businessDays = app.package_type === 'rush' ? 5 : 15; // Use max for standard (10-15 days)
+                                  const deadline = calculateBusinessDaysDeadline(submittedDate, businessDays);
+                                  return deadline.toLocaleDateString();
+                                })()}
+                              </span>
+                            </div>
+                          </div>
+                        ) : (
+                          <span className='text-gray-400'>Not submitted</span>
+                        )}
+                      </td>
+
+                      <td className='px-6 py-4 whitespace-nowrap text-sm text-gray-900'>
+                        {app.assigned_to ? (
+                          <div className='flex items-center gap-1'>
+                            <User className='w-3 h-3 text-gray-400' />
+                            <span>
+                              {(() => {
+                                const staff = staffMembers.find(s => s.email === app.assigned_to);
+                                return staff 
+                                  ? `${staff.first_name} ${staff.last_name}` 
+                                  : app.assigned_to;
+                              })()}
+                            </span>
+                          </div>
+                        ) : (
+                          <span className='text-gray-400'>Unassigned</span>
+                        )}
+                      </td>
+
+                      <td className='px-6 py-4 whitespace-nowrap text-sm font-medium action-buttons'>
+                        <button
+                          onClick={() => setSelectedApplication(app)}
+                          className='px-3 py-1 text-sm bg-blue-100 text-blue-800 rounded-md hover:bg-blue-200 flex items-center space-x-1'
+                        >
+                          <Eye className='w-4 h-4' />
+                          <span>View</span>
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {applications.length === 0 && (
+            <div className='text-center py-12'>
+              <FileText className='w-12 h-12 text-gray-400 mx-auto mb-4' />
+              <h3 className='text-lg font-medium text-gray-900 mb-2'>
+                {searchTerm || dateFilter !== 'all' || assignedToMe ? 'No applications found' : 'No applications yet'}
+              </h3>
+              <p className='text-gray-500'>
+                {searchTerm || dateFilter !== 'all' || assignedToMe
+                  ? 'Try adjusting your search criteria or filters'
+                  : 'Applications will appear here once submitted'}
+              </p>
+            </div>
+          )}
+        </div>
+
+        {/* Pagination */}
+        {totalCount > 0 && (
+          <div className='bg-white rounded-lg shadow-md border p-4 mt-6'>
+            <div className='flex items-center justify-between'>
+              <div className='flex items-center gap-4'>
+                <span className='text-sm text-gray-700'>
+                  Showing {((currentPage - 1) * itemsPerPage) + 1} to {Math.min(currentPage * itemsPerPage, totalCount)} of {totalCount} applications
+                </span>
+                <select
+                  value={itemsPerPage}
+                  onChange={(e) => {
+                    setItemsPerPage(Number(e.target.value));
+                    setCurrentPage(1);
+                  }}
+                  className='px-3 py-1 border border-gray-300 rounded-md text-sm'
+                >
+                  <option value={10}>10 per page</option>
+                  <option value={20}>20 per page</option>
+                  <option value={50}>50 per page</option>
+                </select>
+              </div>
+              
+              <div className='flex items-center gap-2'>
+                <button
+                  onClick={() => setCurrentPage(1)}
+                  disabled={currentPage === 1}
+                  className='p-2 rounded-md border border-gray-300 text-gray-500 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed'
+                  title="First page"
+                >
+                  <ChevronsLeft className='w-4 h-4' />
+                </button>
+                <button
+                  onClick={() => setCurrentPage(currentPage - 1)}
+                  disabled={currentPage === 1}
+                  className='p-2 rounded-md border border-gray-300 text-gray-500 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed'
+                  title="Previous page"
+                >
+                  <ChevronLeft className='w-4 h-4' />
+                </button>
+
+                <div className='flex items-center gap-1'>
+                  {(() => {
+                    const totalPages = Math.ceil(totalCount / itemsPerPage);
+                    const pages = [];
+                    const maxVisiblePages = 5;
+                    
+                    let startPage = Math.max(1, currentPage - Math.floor(maxVisiblePages / 2));
+                    let endPage = Math.min(totalPages, startPage + maxVisiblePages - 1);
+                    
+                    if (endPage - startPage + 1 < maxVisiblePages) {
+                      startPage = Math.max(1, endPage - maxVisiblePages + 1);
+                    }
+
+                    for (let i = startPage; i <= endPage; i++) {
+                      pages.push(
+                        <button
+                          key={i}
+                          onClick={() => setCurrentPage(i)}
+                          className={`px-3 py-2 text-sm rounded-md ${
+                            i === currentPage
+                              ? 'bg-blue-600 text-white'
+                              : 'border border-gray-300 text-gray-700 hover:bg-gray-50'
+                          }`}
+                        >
+                          {i}
+                        </button>
+                      );
+                    }
+                    return pages;
+                  })()}
+                </div>
+
+                <button
+                  onClick={() => setCurrentPage(currentPage + 1)}
+                  disabled={currentPage >= Math.ceil(totalCount / itemsPerPage)}
+                  className='p-2 rounded-md border border-gray-300 text-gray-500 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed'
+                  title="Next page"
+                >
+                  <ChevronRight className='w-4 h-4' />
+                </button>
+                <button
+                  onClick={() => setCurrentPage(Math.ceil(totalCount / itemsPerPage))}
+                  disabled={currentPage >= Math.ceil(totalCount / itemsPerPage)}
+                  className='p-2 rounded-md border border-gray-300 text-gray-500 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed'
+                  title="Last page"
+                >
+                  <ChevronsRight className='w-4 h-4' />
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Application Detail Modal */}
+        {selectedApplication && (
+          <div className='fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50'>
+            <div className='bg-white rounded-lg max-w-4xl w-full max-h-[90vh] overflow-y-auto p-6'>
+              <div className='p-6 border-b'>
+                <div className='flex justify-between items-center'>
+                  <h2 className='text-xl font-bold text-gray-900'>
+                    Application #{selectedApplication.id} Details
+                  </h2>
+                  <button
+                    onClick={() => setSelectedApplication(null)}
+                    className='text-gray-400 hover:text-gray-600'
+                  >
+                    <X className='w-6 h-6' />
+                  </button>
+                </div>
+              </div>
+
+              <div className='p-6 space-y-6'>
+                {/* Application Overview */}
+                <div className='grid md:grid-cols-2 gap-6'>
+                  <div>
+                    <h3 className='text-lg font-semibold text-gray-800 mb-3'>
+                      Property Information
+                    </h3>
+                    <div className='space-y-2 text-sm'>
+                      <div>
+                        <strong>Address:</strong>{' '}
+                        {selectedApplication.property_address}
+                      </div>
+                      <div>
+                        <strong>Unit:</strong>{' '}
+                        {selectedApplication.unit_number || 'N/A'}
+                      </div>
+                      <div>
+                        <strong>HOA:</strong>{' '}
+                        {selectedApplication.hoa_properties?.name}
+                      </div>
+                      <div>
+                        <strong>Buyer:</strong> {selectedApplication.buyer_name}
+                      </div>
+                      <div>
+                        <strong>Seller:</strong> {selectedApplication.seller_name}
+                      </div>
+                      <div>
+                        <strong>Sale Price:</strong> $
+                        {selectedApplication.sale_price?.toLocaleString()}
+                      </div>
+                      <div>
+                        <strong>Closing Date:</strong>{' '}
+                        {selectedApplication.closing_date
+                          ? new Date(
+                              selectedApplication.closing_date
+                            ).toLocaleDateString()
+                          : 'TBD'}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <h3 className='text-lg font-semibold text-gray-800 mb-3'>
+                      Submission Details
+                    </h3>
+                    <div className='space-y-2 text-sm'>
+                      <div>
+                        <strong>Submitted by:</strong>{' '}
+                        {selectedApplication.submitter_name}
+                      </div>
+                      <div>
+                        <strong>Email:</strong>{' '}
+                        {selectedApplication.submitter_email}
+                      </div>
+                      <div>
+                        <strong>Phone:</strong>{' '}
+                        {selectedApplication.submitter_phone}
+                      </div>
+                      <div>
+                        <strong>Type:</strong> {selectedApplication.submitter_type}
+                      </div>
+                      <div>
+                        <strong>License:</strong>{' '}
+                        {selectedApplication.realtor_license || 'N/A'}
+                      </div>
+                      <div>
+                        <strong>Package:</strong> {selectedApplication.package_type}
+                      </div>
+                      <div>
+                        <strong>Total Amount:</strong> $
+                        {selectedApplication.total_amount?.toFixed(2)}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                
+                {/* Assignment Section */}
+                <div>
+                  <h3 className='text-lg font-semibold text-gray-800 mb-4'>
+                    Assignment
+                  </h3>
+                  <div className='bg-gray-50 rounded-lg p-4'>
+                    <div className='flex items-center justify-between'>
+                      <div className='flex items-center gap-3'>
+                        <User className='w-5 h-5 text-gray-400' />
+                        <div>
+                          <label className='block text-sm font-medium text-gray-700 mb-1'>
+                            Assigned to:
+                          </label>
+                          <select
+                            value={selectedApplication.assigned_to || ''}
+                            onChange={(e) => handleAssignApplication(selectedApplication.id, e.target.value || null)}
+                            disabled={assigningApplication === selectedApplication.id}
+                            className='px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white min-w-[200px]'
+                          >
+                            <option value="">Unassigned</option>
+                            {staffMembers.map((staff) => (
+                              <option key={staff.email} value={staff.email}>
+                                {staff.first_name} {staff.last_name} ({staff.role})
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+                      {assigningApplication === selectedApplication.id && (
+                        <div className='flex items-center gap-2 text-blue-600'>
+                          <RefreshCw className='w-4 h-4 animate-spin' />
+                          <span className='text-sm'>Updating...</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Comments Section */}
+                <div>
+                  <h3 className='text-lg font-semibold text-gray-800 mb-4'>
+                    Comments & Notes
+                  </h3>
+                  <div className='bg-gray-50 rounded-lg p-4'>
+                    <div className='space-y-3'>
+                      <div>
+                        <label className='block text-sm font-medium text-gray-700 mb-2'>
+                          Add a comment:
+                        </label>
+                        <textarea
+                          value={selectedApplication.comments || ''}
+                          onChange={(e) => setSelectedApplication({
+                            ...selectedApplication,
+                            comments: e.target.value
+                          })}
+                          className='w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none'
+                          rows='4'
+                          placeholder='Add notes about this application, task progress, issues, or important information...'
+                        />
+                      </div>
+                      <div className='flex justify-end'>
+                        <button
+                          onClick={() => handleSaveComments(selectedApplication.id, selectedApplication.comments)}
+                          className='px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors text-sm font-medium'
+                        >
+                          Save Comments
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Task-Based Workflow */}
+                <div>
+                  <h3 className='text-lg font-semibold text-gray-800 mb-4'>
+                    Tasks
+                  </h3>
+                  <div className='space-y-4'>
+                    {(() => {
+                      const taskStatuses = getTaskStatuses(selectedApplication);
+                      const bothFormsCompleted = taskStatuses.inspection === 'completed' && taskStatuses.resale === 'completed';
+                      const pdfCanBeGenerated = bothFormsCompleted && (taskStatuses.pdf === 'not_started' || taskStatuses.pdf === 'update_needed');
+                      const emailCanBeSent = bothFormsCompleted && taskStatuses.pdf === 'completed';
+
+                      return (
+                        <>
+                          {/* Task 1: Property Inspection Form */}
+                          <div className={`border rounded-lg p-4 ${getTaskStatusColor(taskStatuses.inspection)}`}>
+                            <div className='flex items-center justify-between'>
+                              <div className='flex items-center gap-3'>
+                                <div className='flex items-center justify-center w-8 h-8 rounded-full bg-white border-2 border-current'>
+                                  <span className='text-sm font-bold'>1</span>
+                                </div>
+                                {getTaskStatusIcon(taskStatuses.inspection)}
+                                <div>
+                                  <h4 className='font-medium'>Property Inspection Form</h4>
+                                  <p className='text-sm opacity-75'>{getTaskStatusText(taskStatuses.inspection)}</p>
+                                  <p className='text-xs opacity-60 mt-1'>Complete the property inspection checklist and verify compliance requirements</p>
+                                </div>
+                              </div>
+                              <div className='flex gap-2'>
+                                <button
+                                  onClick={() => handleCompleteForm(selectedApplication.id, 'inspection')}
+                                  disabled={loadingFormData}
+                                  className='px-4 py-2 bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed'
+                                >
+                                  {loadingFormData ? 'Loading...' : getFormButtonText(taskStatuses.inspection)}
+                                </button>
+                                {!selectedApplication.inspection_form_completed_at && (
+                                  <button
+                                    onClick={() => handleCompleteTask(selectedApplication.id, 'inspection_form')}
+                                    className='px-3 py-2 bg-green-100 text-green-800 border border-green-300 rounded-md hover:bg-green-200 transition-colors text-sm font-medium'
+                                    title='Mark this task as completed'
+                                  >
+                                    Mark Complete
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                            <div className='mt-2 space-y-1'>
+                              {selectedApplication.inspection_form_completed_at && (
+                                <div className='text-sm opacity-75'>
+                                  Task Completed: {new Date(selectedApplication.inspection_form_completed_at).toLocaleString()}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Task 2: Virginia Resale Certificate */}
+                          <div className={`border rounded-lg p-4 ${getTaskStatusColor(taskStatuses.resale)}`}>
+                            <div className='flex items-center justify-between'>
+                              <div className='flex items-center gap-3'>
+                                <div className='flex items-center justify-center w-8 h-8 rounded-full bg-white border-2 border-current'>
+                                  <span className='text-sm font-bold'>2</span>
+                                </div>
+                                {getTaskStatusIcon(taskStatuses.resale)}
+                                <div>
+                                  <h4 className='font-medium'>Virginia Resale Certificate</h4>
+                                  <p className='text-sm opacity-75'>{getTaskStatusText(taskStatuses.resale)}</p>
+                                  <p className='text-xs opacity-60 mt-1'>Fill out the official Virginia resale disclosure form with property and HOA information</p>
+                                </div>
+                              </div>
+                              <div className='flex gap-2'>
+                                <button
+                                  onClick={() => handleCompleteForm(selectedApplication.id, 'resale')}
+                                  disabled={loadingFormData}
+                                  className='px-4 py-2 bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed'
+                                >
+                                  {loadingFormData ? 'Loading...' : getFormButtonText(taskStatuses.resale)}
+                                </button>
+                                {!selectedApplication.resale_certificate_completed_at && (
+                                  <button
+                                    onClick={() => handleCompleteTask(selectedApplication.id, 'resale_certificate')}
+                                    className='px-3 py-2 bg-green-100 text-green-800 border border-green-300 rounded-md hover:bg-green-200 transition-colors text-sm font-medium'
+                                    title='Mark this task as completed'
+                                  >
+                                    Mark Complete
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                            <div className='mt-2 space-y-1'>
+                              {selectedApplication.resale_certificate_completed_at && (
+                                <div className='text-sm opacity-75'>
+                                  Task Completed: {new Date(selectedApplication.resale_certificate_completed_at).toLocaleString()}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Task 3: Generate PDF */}
+                          <div className={`border rounded-lg p-4 ${getTaskStatusColor(taskStatuses.pdf)}`}>
+                            <div className='flex items-center justify-between'>
+                              <div className='flex items-center gap-3'>
+                                <div className='flex items-center justify-center w-8 h-8 rounded-full bg-white border-2 border-current'>
+                                  <span className='text-sm font-bold'>3</span>
+                                </div>
+                                {getTaskStatusIcon(taskStatuses.pdf, generatingPDF)}
+                                <div>
+                                  <h4 className='font-medium'>Generate PDF</h4>
+                                  <p className='text-sm opacity-75'>
+                                    {generatingPDF ? 'Generating...' : getTaskStatusText(taskStatuses.pdf)}
+                                  </p>
+                                  <p className='text-xs opacity-60 mt-1'>Create the final PDF document combining both completed forms for delivery</p>
+                                </div>
+                              </div>
+                              <div className='flex gap-2'>
+                                <button
+                                  onClick={() => handleGeneratePDF(selectedApplication.forms.resaleCertificate.form_data, selectedApplication.id)}
+                                  disabled={generatingPDF}
+                                  className='px-4 py-2 bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed'
+                                  title="Generate or regenerate PDF"
+                                >
+                                  {generatingPDF ? 'Generating...' : 
+                                    (taskStatuses.pdf === 'completed' || taskStatuses.pdf === 'update_needed' ? 'Regenerate' : 'Generate')
+                                  }
+                                </button>
+                                {selectedApplication.pdf_url && (
+                                  <button
+                                    onClick={() => window.open(selectedApplication.pdf_url, '_blank')}
+                                    className='px-3 py-2 bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity text-sm font-medium flex items-center gap-1'
+                                    title='View PDF'
+                                  >
+                                    <Eye className='w-4 h-4' />
+                                    View
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                            <div className='mt-2 space-y-1'>
+                              {selectedApplication.pdf_completed_at && (
+                                <div className='text-sm opacity-75'>
+                                  Task Completed: {new Date(selectedApplication.pdf_completed_at).toLocaleString()}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Task 4: Send Completion Email */}
+                          <div className={`border rounded-lg p-4 ${getTaskStatusColor(taskStatuses.email)}`}>
+                            <div className='flex items-center justify-between'>
+                              <div className='flex items-center gap-3'>
+                                <div className='flex items-center justify-center w-8 h-8 rounded-full bg-white border-2 border-current'>
+                                  <span className='text-sm font-bold'>4</span>
+                                </div>
+                                {getTaskStatusIcon(taskStatuses.email, sendingEmail)}
+                                <div>
+                                  <h4 className='font-medium'>Send Completion Email</h4>
+                                  <p className='text-sm opacity-75'>
+                                    {sendingEmail ? 'Sending...' : getTaskStatusText(taskStatuses.email)}
+                                  </p>
+                                  <p className='text-xs opacity-60 mt-1'>Send the completed resale certificate PDF and property files to the applicant</p>
+                                </div>
+                              </div>
+                              <div className='flex items-center gap-2'>
+                                <button
+                                  onClick={() => setShowAttachmentModal(true)}
+                                  className='px-3 py-1.5 bg-gray-100 text-gray-700 border border-gray-300 rounded-md hover:opacity-80 transition-opacity text-xs font-medium'
+                                  title="Manage email attachments"
+                                >
+                                  Update Attachment
+                                </button>
+                                <button
+                                  onClick={() => handleSendApprovalEmail(selectedApplication.id)}
+                                  disabled={!emailCanBeSent || sendingEmail || taskStatuses.pdf === 'update_needed'}
+                                  className='px-4 py-2 bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed'
+                                  title={
+                                    !bothFormsCompleted 
+                                      ? 'Both forms must be completed first' 
+                                      : taskStatuses.pdf !== 'completed' 
+                                        ? 'PDF must be generated first' 
+                                        : taskStatuses.pdf === 'update_needed'
+                                          ? 'PDF needs to be regenerated after form updates'
+                                          : ''
+                                  }
+                                >
+                                  {sendingEmail ? 'Sending...' : 'Send Email'}
+                                </button>
+                                {!selectedApplication.email_completed_at && (
+                                  <button
+                                    onClick={() => handleCompleteTask(selectedApplication.id, 'email')}
+                                    className='px-3 py-2 bg-green-100 text-green-800 border border-green-300 rounded-md hover:bg-green-200 transition-colors text-sm font-medium'
+                                    title='Mark this task as completed'
+                                  >
+                                    Mark Complete
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                            <div className='mt-2 space-y-1'>
+                              {selectedApplication.email_completed_at && (
+                                <div className='text-sm opacity-75'>
+                                  Task Completed: {new Date(selectedApplication.email_completed_at).toLocaleString()}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </>
+                      );
+                    })()}
+                  </div>
+                </div>
+
+                {/* Close Button */}
+                <div className='flex justify-center pt-6 border-t'>
+                  <button
+                    onClick={() => setSelectedApplication(null)}
+                    className='px-6 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50 font-medium'
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Attachment Management Modal */}
+        {showAttachmentModal && (
+          <div className='fixed inset-0 bg-black bg-opacity-30 flex items-center justify-center p-4 z-[70]'>
+            {renderAttachmentModal()}
+          </div>
+        )}
+
+        {/* Snackbar Notification */}
+        {snackbar.show && (
+          <div className='fixed bottom-4 right-4 z-[90]'>
+            <div className={`
+              px-6 py-4 rounded-lg shadow-lg border flex items-center gap-3 max-w-md
+              ${snackbar.type === 'success' 
+                ? 'bg-green-50 border-green-200 text-green-800' 
+                : 'bg-red-50 border-red-200 text-red-800'
+              }
+            `}>
+              <span className='text-sm font-medium'>{snackbar.message}</span>
+              <button
+                onClick={() => setSnackbar({ show: false, message: '', type: 'success' })}
+                className='text-current opacity-70 hover:opacity-100'
+              >
+                <X className='w-4 h-4' />
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Inspection Form Modal */}
+        {showInspectionFormModal && inspectionFormData && (
+          <div className='fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-[60]'>
+            <div className='bg-white rounded-lg max-w-6xl w-full max-h-[95vh] flex flex-col'>
+              <div className='p-4 border-b flex justify-between items-center'>
+                <h2 className='text-xl font-bold text-gray-900'>
+                  Property Inspection Form
+                </h2>
+                <button
+                  onClick={() => {
+                    setShowInspectionFormModal(false);
+                    setInspectionFormData(null);
+                  }}
+                  className='text-gray-400 hover:text-gray-600'
+                >
+                  <X className='w-6 h-6' />
+                </button>
+              </div>
+              <div className='flex-1 overflow-auto'>
+                <AdminPropertyInspectionForm
+                  applicationData={inspectionFormData}
+                  formId={inspectionFormData.property_owner_forms[0]?.id}
+                  onComplete={handleFormComplete}
+                  isModal={true}
+                />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Resale Certificate Form Modal */}
+        {showResaleFormModal && resaleFormData && (
+          <div className='fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-[60]'>
+            <div className='bg-white rounded-lg max-w-6xl w-full max-h-[95vh] flex flex-col'>
+              <div className='p-4 border-b flex justify-between items-center'>
+                <h2 className='text-xl font-bold text-gray-900'>
+                  Virginia Resale Certificate Form
+                </h2>
+                <button
+                  onClick={() => {
+                    setShowResaleFormModal(false);
+                    setResaleFormData(null);
+                  }}
+                  className='text-gray-400 hover:text-gray-600'
+                >
+                  <X className='w-6 h-6' />
+                </button>
+              </div>
+              <div className='flex-1 overflow-auto'>
+                <AdminResaleCertificateForm
+                  applicationData={resaleFormData}
+                  formId={resaleFormData.property_owner_forms[0]?.id}
+                  onComplete={handleFormComplete}
+                  isModal={true}
+                />
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </AdminLayout>
+  );
+};
+
+export default AdminApplications;

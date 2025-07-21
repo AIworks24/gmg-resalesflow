@@ -19,7 +19,7 @@ const PropertyInspectionForm = ({
     approvedModifications: '',
     covenantViolations: '',
     generalComments: '',
-    status: 'sent'
+    status: 'not_started'
   });
 
   const [isSaving, setIsSaving] = useState(false);
@@ -39,7 +39,6 @@ const PropertyInspectionForm = ({
 
   const loadFormData = async () => {
   try {
-    console.log('Loading form data for:', formId, accessToken);
     
     const { data, error } = await supabase
       .from('property_owner_forms')
@@ -53,12 +52,9 @@ const PropertyInspectionForm = ({
       throw error;
     }
 
-    console.log('Loaded form data:', data);
-
     if (data) {
       // FIXED: Use form_data first, then response_data as fallback
       const savedData = data.form_data || data.response_data || {};
-      console.log('Saved data:', savedData);
       
       setFormData(prev => ({
         ...prev,
@@ -87,13 +83,12 @@ const PropertyInspectionForm = ({
     setError(null);
     
     try {
-      console.log('Saving form data:', formData);
       
       const { data, error } = await supabase
         .from('property_owner_forms')
         .update({
           form_data: formData,
-          status: 'opened',
+          status: 'in_progress',
           updated_at: new Date().toISOString()
         })
         .eq('id', formId)
@@ -104,8 +99,7 @@ const PropertyInspectionForm = ({
         console.error('Save error:', error);
         throw error;
       }
-      
-      console.log('Save successful:', data);
+    
       setSuccess('Form saved successfully!');
       setTimeout(() => setSuccess(null), 3000);
     } catch (err) {
@@ -127,8 +121,6 @@ const PropertyInspectionForm = ({
         completedAt: new Date().toISOString()
       };
 
-      console.log('Submitting form data:', submissionData);
-
       const { data, error } = await supabase
         .from('property_owner_forms')
         .update({
@@ -146,7 +138,6 @@ const PropertyInspectionForm = ({
         throw error;
       }
       
-      console.log('Submit successful:', data);
       setFormData(submissionData);
       setSuccess('Form submitted successfully! Thank you for your response.');
     } catch (err) {

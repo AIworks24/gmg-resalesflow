@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
 import { useRouter } from 'next/router';
+import useAdminAuthStore from '../../stores/adminAuthStore';
 
 export default function AdminLogin() {
   const [email, setEmail] = useState('');
@@ -8,8 +8,8 @@ export default function AdminLogin() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  const supabase = createClientComponentClient();
   const router = useRouter();
+  const { signIn } = useAdminAuthStore();
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -17,16 +17,15 @@ export default function AdminLogin() {
     setError('');
 
     try {
-      const { error } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
-
-      if (error) throw error;
-
-      router.push('/admin/dashboard');
+      const result = await signIn(email, password);
+      
+      if (result.success) {
+        router.push('/admin/dashboard');
+      } else {
+        setError(result.error);
+      }
     } catch (error) {
-      setError(error.message);
+      setError('An unexpected error occurred. Please try again.');
     } finally {
       setLoading(false);
     }

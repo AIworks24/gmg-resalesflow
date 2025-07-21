@@ -45,4 +45,4 @@ Professional resale certificate processing system for Goodman Management Group, 
 Contact: resales@gmgva.com
 
 ## License
-Private - Goodman Management Group
+Private - Goodman Management Group 

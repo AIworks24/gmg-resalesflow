@@ -1,0 +1,404 @@
+{
+  "project": {
+    "name": "GMG ResaleFlow",
+    "description": "Goodman Management Group - Virginia HOA Resale Certificate Processing System",
+    "type": "Next.js React Application",
+    "version": "1.0.0",
+    "architecture": "Full-stack web application with Supabase backend",
+    "total_size": "~400KB source code"
+  },
+  "tech_stack": {
+    "frontend": {
+      "framework": "Next.js 14.0.0",
+      "ui_library": "React 18.2.0",
+      "styling": "Tailwind CSS 3.3.0",
+      "icons": "Lucide React 0.263.1",
+      "forms": "React Hook Form 7.47.0"
+    },
+    "backend": {
+      "database": "Supabase (PostgreSQL)",
+      "authentication": "Supabase Auth",
+      "storage": "Supabase Storage",
+      "api": "Next.js API Routes"
+    },
+    "integrations": {
+      "payments": "Stripe 18.3.0",
+      "email": "Nodemailer 7.0.4 (Gmail SMTP)",
+      "pdf": "PDF-lib 1.17.1"
+    }
+  },
+  "file_structure": {
+    "root": {
+      "config_files": [
+        "package.json",
+        "next.config.js",
+        "tailwind.config.js",
+        "postcss.config.js",
+        ".gitignore"
+      ],
+      "documentation": [
+        "README.md"
+      ]
+    },
+    "pages": {
+      "description": "Next.js pages and API routes",
+      "main_pages": {
+        "index.js": {
+          "size": "96KB, 2663 lines",
+          "description": "Main application - ResaleFlow UI and logic",
+          "key_components": [
+            "GMGResaleFlow (main component)",
+            "HOASelectionStep",
+            "SubmitterInfoStep", 
+            "TransactionDetailsStep",
+            "PackagePaymentStep",
+            "ReviewSubmitStep",
+            "Dashboard",
+            "AuthModal",
+            "Snackbar",
+            "ConfirmationModal"
+          ],
+          "key_functions": [
+            "calculateTotal",
+            "handlePayment",
+            "handleSubmit",
+            "loadApplications",
+            "loadDraftApplication",
+            "saveDraftApplication",
+            "deleteUnpaidApplication",
+            "startNewApplication",
+            "createPropertyOwnerForms"
+          ]
+        },
+        "_app.js": {
+          "size": "320B, 14 lines",
+          "description": "Next.js app wrapper with context providers"
+        }
+      },
+      "admin_pages": {
+        "admin/login.js": {
+          "size": "3.7KB, 116 lines",
+          "description": "Admin authentication page"
+        },
+        "admin/dashboard.js": {
+          "size": "2.0KB, 70 lines",
+          "description": "Admin dashboard redirect"
+        },
+        "admin/inspection/[applicationId].js": {
+          "description": "Dynamic route for admin inspection forms"
+        },
+        "admin/resale/[applicationId].js": {
+          "description": "Dynamic route for admin resale forms"
+        }
+      },
+      "form_pages": {
+        "forms/inspection/[token].js": {
+          "description": "Token-based public inspection form access"
+        }
+      },
+      "api_routes": {
+        "payment_apis": {
+          "create-checkout-session.js": {
+            "size": "3.7KB, 113 lines",
+            "description": "Creates Stripe checkout sessions with line items"
+          },
+          "create-payment-intent.js": {
+            "size": "3.0KB, 94 lines",
+            "description": "Creates Stripe payment intents"
+          },
+          "get-stripe-prices.js": {
+            "size": "2.4KB, 76 lines",
+            "description": "Fetches current Stripe pricing"
+          },
+          "webhooks/stripe.js": {
+            "size": "5.8KB, 171 lines",
+            "description": "Handles Stripe payment webhooks and sends confirmation emails"
+          }
+        },
+        "document_apis": {
+          "regenerate-pdf.js": {
+            "size": "1.4KB, 35 lines",
+            "description": "Regenerates PDF documents"
+          },
+          "send-approval-email.js": {
+            "size": "3.2KB, 102 lines",
+            "description": "Sends approval emails with PDF attachments"
+          },
+          "download-pdf/[...params].js": {
+            "description": "Handles PDF download requests"
+          }
+        },
+        "system_apis": {
+          "init-storage.js": {
+            "size": "1.7KB, 57 lines",
+            "description": "Initializes storage buckets"
+          }
+        }
+      }
+    },
+    "lib": {
+      "description": "Utility libraries and services",
+      "files": {
+        "supabase.js": {
+          "size": "2.4KB, 96 lines",
+          "description": "Supabase client configuration with RLS policies"
+        },
+        "AuthContext.js": {
+          "size": "5.5KB, 220 lines",
+          "description": "Authentication context provider with user management"
+        },
+        "AppContext.js": {
+          "size": "3.5KB, 133 lines",
+          "description": "Global app state for HOA properties and Stripe prices"
+        },
+        "emailService.js": {
+          "size": "11KB, 243 lines",
+          "description": "Email service with Gmail SMTP",
+          "functions": [
+            "sendApprovalEmail",
+            "sendApplicationSubmissionEmail",
+            "sendPaymentConfirmationEmail"
+          ]
+        },
+        "pdfService.js": {
+          "size": "28KB, 586 lines",
+          "description": "PDF generation and form processing service"
+        },
+        "stripe.js": {
+          "size": "1.6KB, 53 lines",
+          "description": "Stripe client configuration"
+        },
+        "fields.js": {
+          "size": "19KB, 1098 lines",
+          "description": "Form field definitions and configurations"
+        }
+      }
+    },
+    "components": {
+      "description": "Reusable React components",
+      "admin_components": {
+        "AdminDashboard.js": {
+          "size": "40KB, 1080 lines",
+          "description": "Comprehensive admin dashboard UI"
+        },
+        "AdminPropertyInspectionForm.js": {
+          "size": "13KB, 362 lines",
+          "description": "Admin property inspection form"
+        },
+        "AdminResaleCertificateForm.js": {
+          "size": "139KB, 2758 lines",
+          "description": "Comprehensive admin resale certificate form"
+        }
+      },
+      "public_components": {
+        "PropertyInspectionForm.js": {
+          "size": "13KB, 390 lines",
+          "description": "Public property inspection form"
+        },
+        "ResaleCertificateForm.js": {
+          "size": "10KB, 266 lines",
+          "description": "Public resale certificate form"
+        }
+      }
+    },
+    "sql_scripts": {
+      "description": "Database migrations and setup scripts",
+      "files": {
+        "db.sql": {
+          "size": "12KB, 296 lines",
+          "description": "Main database schema"
+        },
+        "migration_001_add_payment_columns.sql": {
+          "size": "2.7KB, 58 lines",
+          "description": "Adds payment tracking columns to applications table"
+        },
+        "migration_002_add_delete_policy.sql": {
+          "size": "1.3KB, 34 lines",
+          "description": "Adds RLS delete policies"
+        },
+        "rls_policies.sql": {
+          "size": "3.5KB, 113 lines",
+          "description": "Row Level Security policies"
+        },
+        "update_form_status.sql": {
+          "size": "2.2KB, 73 lines",
+          "description": "Updates form status handling"
+        },
+        "update_rls_policies.sql": {
+          "size": "2.7KB, 81 lines",
+          "description": "Updates RLS policies"
+        },
+        "README.md": {
+          "size": "3.1KB, 91 lines",
+          "description": "Migration documentation"
+        }
+      }
+    },
+    "styles": {
+      "globals.css": {
+        "description": "Global CSS styles with Tailwind imports"
+      }
+    }
+  },
+  "database_schema": {
+    "core_tables": {
+      "applications": {
+        "description": "Main application data with payment tracking",
+        "key_columns": [
+          "id", "user_id", "hoa_property_id", "property_address", "unit_number",
+          "submitter_type", "submitter_name", "submitter_email", "submitter_phone",
+          "buyer_name", "buyer_email", "seller_name", "seller_email",
+          "sale_price", "closing_date", "package_type", "payment_method",
+          "total_amount", "status", "payment_status", "stripe_session_id",
+          "payment_completed_at", "submitted_at", "expected_completion_date"
+        ],
+        "status_values": ["draft", "pending_payment", "submitted", "under_review", "compliance_pending", "approved", "rejected"]
+      },
+      "hoa_properties": {
+        "description": "HOA community data",
+        "key_columns": ["id", "name", "location", "property_owner_email"]
+      },
+      "profiles": {
+        "description": "User profile data",
+        "key_columns": ["id", "user_id", "first_name", "last_name", "email", "role"]
+      },
+      "property_owner_forms": {
+        "description": "Form tracking for property owners",
+        "key_columns": ["id", "application_id", "form_type", "status", "access_token", "recipient_email", "expires_at"]
+      }
+    },
+    "security": {
+      "rls_enabled": true,
+      "policies": [
+        "Users can only access their own applications",
+        "Admins can access all applications",
+        "Form access controlled by tokens"
+      ]
+    }
+  },
+  "key_features": {
+    "application_flow": {
+      "steps": [
+        {
+          "step": 1,
+          "name": "HOA Selection",
+          "description": "Select HOA community and enter property address"
+        },
+        {
+          "step": 2,
+          "name": "Submitter Info",
+          "description": "Enter submitter details (seller, realtor, builder, admin)"
+        },
+        {
+          "step": 3,
+          "name": "Transaction Details",
+          "description": "Enter buyer, seller, and sale information"
+        },
+        {
+          "step": 4,
+          "name": "Package & Payment",
+          "description": "Select processing speed and payment method"
+        },
+        {
+          "step": 5,
+          "name": "Review & Submit",
+          "description": "Review all information and submit application"
+        }
+      ]
+    },
+    "payment_system": {
+      "provider": "Stripe",
+      "packages": {
+        "standard": {
+          "price": "$317.95",
+          "timeline": "10-15 business days"
+        },
+        "rush": {
+          "price": "$388.61 ($317.95 + $70.66)",
+          "timeline": "5 business days"
+        }
+      },
+      "convenience_fee": "$9.95 for credit card payments",
+      "payment_methods": ["credit_card", "ach"]
+    },
+    "draft_system": {
+      "auto_save": "Applications saved as drafts when continuing between steps",
+      "resume": "Users can resume incomplete applications",
+      "delete": "Users can delete draft and pending payment applications"
+    },
+    "email_system": {
+      "provider": "Gmail SMTP",
+      "types": [
+        "Application submission confirmation",
+        "Payment confirmation",
+        "Approval notification with PDF"
+      ]
+    },
+    "admin_features": {
+      "dashboard": "Comprehensive admin dashboard with metrics",
+      "application_management": "View and manage all applications",
+      "form_processing": "Admin forms for inspection and resale certificates",
+      "pdf_generation": "Generate and regenerate PDF documents"
+    }
+  },
+  "user_roles": {
+    "regular_user": {
+      "permissions": ["Create applications", "View own applications", "Resume/delete drafts"]
+    },
+    "admin": {
+      "permissions": ["View all applications", "Process forms", "Generate PDFs", "Send emails", "Access admin dashboard"]
+    }
+  },
+  "external_integrations": {
+    "stripe": {
+      "purpose": "Payment processing",
+      "features": ["Checkout sessions", "Webhooks", "Price management"]
+    },
+    "supabase": {
+      "purpose": "Backend as a service",
+      "features": ["Database", "Authentication", "Storage", "RLS"]
+    },
+    "gmail": {
+      "purpose": "Email delivery",
+      "features": ["SMTP", "HTML templates", "Attachments"]
+    }
+  },
+  "environment_variables": {
+    "required": [
+      "NEXT_PUBLIC_SUPABASE_URL",
+      "NEXT_PUBLIC_SUPABASE_ANON_KEY",
+      "SUPABASE_SERVICE_ROLE_KEY",
+      "NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY",
+      "STRIPE_SECRET_KEY",
+      "STRIPE_WEBHOOK_SECRET",
+      "GMAIL_USER",
+      "GMAIL_APP_PASSWORD"
+    ]
+  },
+  "recent_updates": {
+    "draft_system": "Implemented auto-save draft functionality with resume/delete options",
+    "email_notifications": "Added application submission confirmation emails",
+    "payment_improvements": "Fixed Stripe checkout session creation and convenience fee handling",
+    "form_validation": "Fixed closing date validation and database error handling",
+    "ui_improvements": "Replaced alert dialogs with snackbar notifications"
+  },
+  "code_organization": {
+    "main_component": {
+      "file": "pages/index.js",
+      "size": "96KB",
+      "structure": {
+        "helper_functions": ["calculateTotal"],
+        "form_components": ["HOASelectionStep", "SubmitterInfoStep", "TransactionDetailsStep", "PackagePaymentStep", "ReviewSubmitStep"],
+        "ui_components": ["Snackbar", "ConfirmationModal", "AuthModal"],
+        "main_component": "GMGResaleFlow",
+        "key_hooks": ["useState", "useEffect", "useCallback"],
+        "context_usage": ["useAppContext", "useAuth"]
+      }
+    },
+    "state_management": {
+      "local_state": "React useState for form data, UI state",
+      "global_state": "React Context for authentication and app data",
+      "data_persistence": "Supabase database with real-time subscriptions"
+    }
+  }
+} 
