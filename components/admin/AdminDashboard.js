@@ -1074,18 +1074,6 @@ const AdminDashboard = ({ userRole }) => {
       });
 
       await Promise.all(uploadPromises);
-      
-      // Update the documents_folder field in the database
-      const documentsFolder = `bucket0/property_files/${propertyId}`;
-      const { error: updateError } = await supabase
-        .from('hoa_properties')
-        .update({ 
-          documents_folder: documentsFolder,
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', propertyId);
-
-      if (updateError) throw updateError;
 
       setSelectedFiles([]);
       // Refresh property files in attachment modal

@@ -49,21 +49,6 @@ const AdminApplications = ({ userRole }) => {
   const [showAttachmentModal, setShowAttachmentModal] = useState(false);
   const [temporaryAttachments, setTemporaryAttachments] = useState([]);
   const [uploading, setUploading] = useState(false);
-  const [showPropertyEditModal, setShowPropertyEditModal] = useState(false);
-  const [selectedProperty, setSelectedProperty] = useState(null);
-  const [propertyFormData, setPropertyFormData] = useState({
-    name: '',
-    location: '',
-    property_owner_name: '',
-    property_owner_email: '',
-    property_owner_phone: '',
-    management_contact: '',
-    phone: '',
-    email: '',
-    special_requirements: ''
-  });
-  const [selectedFiles, setSelectedFiles] = useState([]);
-  const [uploadingProperty, setUploadingProperty] = useState(false);
   const [propertyFiles, setPropertyFiles] = useState([]);
   const [loadingPropertyFiles, setLoadingPropertyFiles] = useState(false);
   const [snackbar, setSnackbar] = useState({ show: false, message: '', type: 'success' });
@@ -72,6 +57,8 @@ const AdminApplications = ({ userRole }) => {
   const [assigningApplication, setAssigningApplication] = useState(null);
   const [showInspectionFormModal, setShowInspectionFormModal] = useState(false);
   const [showResaleFormModal, setShowResaleFormModal] = useState(false);
+  const [showPropertyFilesModal, setShowPropertyFilesModal] = useState(false);
+  const [selectedFilesForUpload, setSelectedFilesForUpload] = useState([]);
   const [inspectionFormData, setInspectionFormData] = useState(null);
   const [resaleFormData, setResaleFormData] = useState(null);
   const [loadingFormData, setLoadingFormData] = useState(false);
@@ -864,50 +851,107 @@ const AdminApplications = ({ userRole }) => {
     }
   };
 
-  // Property editing functions
-  const loadPropertyForEdit = async (propertyId, openModal = true) => {
+  // Property files modal functions
+  const openPropertyFilesModal = () => {
+    setShowPropertyFilesModal(true);
+    setSelectedFilesForUpload([]);
+    // Load property files when modal opens
+    if (selectedApplication?.hoa_property_id) {
+      loadPropertyFiles(selectedApplication.hoa_property_id);
+    }
+  };
+
+  const handlePropertyFileSelect = (event) => {
+    const files = Array.from(event.target.files);
+    setSelectedFilesForUpload(files);
+  };
+
+  const uploadPropertyFiles = async () => {
+    if (!selectedApplication?.hoa_property_id || selectedFilesForUpload.length === 0) {
+      console.log('❌ Upload cancelled - missing propertyId or files');
+      return;
+    }
+
+    setUploading(true);
     try {
-      console.log('🔄 Loading property data for ID:', propertyId);
+      // Check authentication
+      const { data: { user }, error: authError } = await supabase.auth.getUser();
+      console.log('👤 Current user:', user);
+      if (authError || !user) {
+        throw new Error('User not authenticated');
+      }
+
+      const propertyId = selectedApplication.hoa_property_id;
+      console.log('🚀 Starting upload for property:', propertyId);
+      console.log('📁 Files to upload:', selectedFilesForUpload.length);
       
-      const { data, error } = await supabase
-        .from('hoa_properties')
-        .select('*')
-        .eq('id', propertyId)
-        .single();
+      const uploadPromises = selectedFilesForUpload.map(async (file, index) => {
+        const fileName = `${Date.now()}_${file.name}`;
+        const filePath = `property_files/${propertyId}/${fileName}`;
+        
+        console.log(`📤 Uploading file ${index + 1}:`, {
+          originalName: file.name,
+          fileName,
+          filePath,
+          fileSize: file.size,
+          fileType: file.type
+        });
+
+        const { data, error } = await supabase.storage
+          .from('bucket0')
+          .upload(filePath, file);
+
+        if (error) {
+          console.error(`❌ Upload failed for ${file.name}:`, error);
+          throw error;
+        }
+        
+        console.log(`✅ Upload successful for ${file.name}:`, data);
+        return filePath;
+      });
+
+      await Promise.all(uploadPromises);
+      console.log('🎉 All uploads completed successfully');
+
+      // Reload property files to show new uploads
+      await loadPropertyFiles(propertyId);
+      
+      setSelectedFilesForUpload([]);
+      setSnackbar({ show: true, message: 'Files uploaded successfully!', type: 'success' });
+    } catch (error) {
+      console.error('💥 Upload error details:', {
+        message: error.message,
+        statusCode: error.statusCode,
+        error: error.error,
+        details: error.details,
+        hint: error.hint,
+        fullError: error
+      });
+      setSnackbar({ show: true, message: 'Error uploading files: ' + error.message, type: 'error' });
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const deletePropertyFile = async (fileName) => {
+    if (!selectedApplication?.hoa_property_id) return;
+
+    try {
+      const propertyId = selectedApplication.hoa_property_id;
+      const filePath = `property_files/${propertyId}/${fileName}`;
+
+      const { error } = await supabase.storage
+        .from('bucket0')
+        .remove([filePath]);
 
       if (error) throw error;
 
-      console.log('📄 Fresh property data from database:', data);
-      console.log('📧 Management email from DB:', data.email);
-
-      setSelectedProperty(data);
-      const formData = {
-        name: data.name || '',
-        location: data.location || '',
-        property_owner_name: data.property_owner_name || '',
-        property_owner_email: data.property_owner_email || '',
-        property_owner_phone: data.property_owner_phone || '',
-        management_contact: data.management_contact || '',
-        phone: data.phone || '',
-        email: data.email || '',
-        special_requirements: data.special_requirements || ''
-      };
-      
-      console.log('📝 Setting form data:', formData);
-      console.log('📧 Management email in form:', formData.email);
-      
-      setPropertyFormData(formData);
-      setSelectedFiles([]);
-      
-      // Load property files for this property
+      // Reload property files
       await loadPropertyFiles(propertyId);
-      
-      if (openModal) {
-        setShowPropertyEditModal(true);
-      }
+      setSnackbar({ show: true, message: 'File deleted successfully!', type: 'success' });
     } catch (error) {
-      console.error('Error loading property:', error);
-      showSnackbar('Failed to load property details', 'error');
+      console.error('Error deleting file:', error);
+      setSnackbar({ show: true, message: 'Error deleting file: ' + error.message, type: 'error' });
     }
   };
 
@@ -998,7 +1042,7 @@ const AdminApplications = ({ userRole }) => {
                 <p className='font-medium'>No property files found</p>
                 <p className='text-sm mb-4'>Upload HOA bylaws, CC&Rs, and other property documents</p>
                 <button
-                  onClick={() => loadPropertyForEdit(selectedApplication.hoa_property_id)}
+                  onClick={openPropertyFilesModal}
                   className='inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 text-sm'
                 >
                   <Upload className='w-4 h-4' />
@@ -1033,11 +1077,11 @@ const AdminApplications = ({ userRole }) => {
                 ))}
                 <div className='pt-2'>
                   <button
-                    onClick={() => loadPropertyForEdit(selectedApplication.hoa_property_id)}
+                    onClick={openPropertyFilesModal}
                     className='inline-flex items-center gap-2 px-3 py-1.5 bg-gray-100 text-gray-700 border border-gray-300 rounded-md hover:bg-gray-200 text-sm'
                   >
                     <Edit className='w-4 h-4' />
-                    Edit Property Files
+                    Manage Property Files
                   </button>
                 </div>
               </div>
@@ -1945,6 +1989,144 @@ const AdminApplications = ({ userRole }) => {
                   onComplete={handleFormComplete}
                   isModal={true}
                 />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Property Files Management Modal */}
+        {showPropertyFilesModal && (
+          <div className='fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-[70]'>
+            <div className='bg-white rounded-lg max-w-2xl w-full max-h-[90vh] flex flex-col'>
+              <div className='p-4 border-b flex justify-between items-center'>
+                <h2 className='text-xl font-bold text-gray-900'>
+                  Property Files - {selectedApplication?.hoa_properties?.name || 'Property'}
+                </h2>
+                <button
+                  onClick={() => setShowPropertyFilesModal(false)}
+                  className='text-gray-400 hover:text-gray-600'
+                >
+                  <X className='w-6 h-6' />
+                </button>
+              </div>
+
+              <div className='flex-1 overflow-y-auto p-4'>
+                {/* Upload Section */}
+                <div className='mb-6'>
+                  <h3 className='text-lg font-medium text-gray-900 mb-3'>Upload New Files</h3>
+                  <div className='space-y-3'>
+                    <input
+                      type='file'
+                      multiple
+                      onChange={handlePropertyFileSelect}
+                      className='block w-full text-sm text-gray-500 
+                               file:mr-4 file:py-2 file:px-4 
+                               file:rounded-md file:border-0 
+                               file:text-sm file:font-medium 
+                               file:bg-blue-50 file:text-blue-700 
+                               hover:file:bg-blue-100'
+                    />
+                    
+                    {selectedFilesForUpload.length > 0 && (
+                      <div>
+                        <p className='text-sm font-medium text-gray-700 mb-2'>
+                          Selected Files ({selectedFilesForUpload.length}):
+                        </p>
+                        <div className='space-y-1 max-h-32 overflow-y-auto'>
+                          {selectedFilesForUpload.map((file, index) => (
+                            <div key={index} className='text-sm text-gray-600 bg-gray-50 p-2 rounded'>
+                              {file.name} ({(file.size / 1024 / 1024).toFixed(2)} MB)
+                            </div>
+                          ))}
+                        </div>
+                        
+                        <button
+                          onClick={uploadPropertyFiles}
+                          disabled={uploading}
+                          className='mt-3 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2'
+                        >
+                          {uploading ? (
+                            <>
+                              <div className='animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent'></div>
+                              Uploading...
+                            </>
+                          ) : (
+                            <>
+                              <Upload className='w-4 h-4' />
+                              Upload Files
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Existing Files Section */}
+                <div>
+                  <h3 className='text-lg font-medium text-gray-900 mb-3'>Existing Files</h3>
+                  {loadingPropertyFiles ? (
+                    <div className='text-center py-4'>
+                      <div className='animate-spin rounded-full h-6 w-6 border-2 border-blue-600 border-t-transparent mx-auto mb-2'></div>
+                      <p className='text-sm text-gray-600'>Loading files...</p>
+                    </div>
+                  ) : propertyFiles.length === 0 ? (
+                    <div className='text-center py-6 text-gray-500 border border-gray-200 rounded-lg bg-gray-50'>
+                      <FileText className='w-8 h-8 mx-auto mb-2 text-gray-300' />
+                      <p className='font-medium'>No files uploaded</p>
+                      <p className='text-sm'>Upload HOA bylaws, CC&Rs, and other property documents above</p>
+                    </div>
+                  ) : (
+                    <div className='space-y-2'>
+                      {propertyFiles.map((file, index) => (
+                        <div key={index} className='flex items-center justify-between p-3 border border-gray-200 rounded-lg hover:bg-gray-50'>
+                          <div className='flex items-center gap-3'>
+                            <FileText className='w-5 h-5 text-blue-600' />
+                            <div>
+                              <p className='text-sm font-medium text-gray-900'>
+                                {file.name.split('_').slice(1).join('_')}
+                              </p>
+                              <p className='text-xs text-gray-500'>
+                                Uploaded {file.created_at ? new Date(file.created_at).toLocaleDateString() : 'Recently'}
+                              </p>
+                            </div>
+                          </div>
+                          <div className='flex items-center gap-2'>
+                            {file.url && (
+                              <button
+                                onClick={() => window.open(file.url, '_blank')}
+                                className='p-1 text-blue-600 hover:text-blue-800'
+                                title='View file'
+                              >
+                                <Eye className='w-4 h-4' />
+                              </button>
+                            )}
+                            <button
+                              onClick={() => {
+                                if (confirm('Are you sure you want to delete this file?')) {
+                                  deletePropertyFile(file.name);
+                                }
+                              }}
+                              className='p-1 text-red-600 hover:text-red-800'
+                              title='Delete file'
+                            >
+                              <Trash2 className='w-4 h-4' />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className='p-4 border-t flex justify-end'>
+                <button
+                  onClick={() => setShowPropertyFilesModal(false)}
+                  className='px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50'
+                >
+                  Close
+                </button>
               </div>
             </div>
           </div>

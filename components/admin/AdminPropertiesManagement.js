@@ -96,7 +96,7 @@ const AdminPropertiesManagement = ({ userRole }) => {
       let query = supabase
         .from('hoa_properties')
         .select('*', { count: 'exact' })
-        .order('created_at', { ascending: false });
+        .order('name', { ascending: true });
 
       // Apply search filter if provided
       if (search.trim()) {
