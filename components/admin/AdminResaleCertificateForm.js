@@ -260,12 +260,21 @@ const AdminResaleCertificateForm = ({
       const existingData = applicationData.property_owner_forms[0].response_data || 
                           applicationData.property_owner_forms[0].form_data || {};
       
+      // Load template data if available
+      const templateData = applicationData.resale_template || {};
+      
       setFormData(prev => ({
         ...prev,
         developmentName: applicationData.hoa_properties?.name || '',
         associationName: applicationData.hoa_properties?.name || '',
         lotAddress: applicationData.property_address || '',
-        ...existingData
+        ...templateData,
+        ...existingData,
+        // Always override with current application-specific data
+        developmentName: applicationData.hoa_properties?.name || '',
+        associationName: applicationData.hoa_properties?.name || '',
+        lotAddress: applicationData.property_address || '',
+        datePrepared: new Date().toISOString().split('T')[0]
       }));
     }
   }, [applicationData]);
@@ -402,6 +411,33 @@ const AdminResaleCertificateForm = ({
         .single();
 
       if (updateError) throw updateError;
+
+      // Save/update template data for this property (only if form is complete)
+      if (isComplete && applicationData.hoa_property_id) {
+        const templateData = { ...patchedFormData };
+        
+        // Remove application-specific data from template
+        delete templateData.developmentName;
+        delete templateData.associationName;
+        delete templateData.lotAddress;
+        delete templateData.datePrepared;
+        delete templateData.status;
+        delete templateData.completedAt;
+        delete templateData.completedBy;
+
+        // Upsert template data
+        const { error: templateError } = await supabase
+          .from('hoa_property_resale_templates')
+          .upsert({
+            hoa_property_id: applicationData.hoa_property_id,
+            template_data: templateData,
+            updated_at: new Date().toISOString()
+          });
+
+        if (templateError) {
+          console.warn('Failed to save template data:', templateError);
+        }
+      }
 
       // Update the applications table to mark this task as completed (only if form is complete)
       if (isComplete) {

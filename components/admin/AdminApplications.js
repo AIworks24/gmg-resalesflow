@@ -618,10 +618,23 @@ const AdminApplications = ({ userRole }) => {
         throw formError;
       }
 
+      // Load template data for resale certificate forms
+      let templateData = null;
+      if (formType === 'resale' && appData.hoa_property_id) {
+        const { data: template } = await supabase
+          .from('hoa_property_resale_templates')
+          .select('template_data')
+          .eq('hoa_property_id', appData.hoa_property_id)
+          .single();
+        
+        templateData = template?.template_data || null;
+      }
+
       // Combine the data
       const combinedData = {
         ...appData,
-        property_owner_forms: [formData]
+        property_owner_forms: [formData],
+        resale_template: templateData
       };
 
       if (formType === 'inspection') {
