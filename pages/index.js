@@ -1656,11 +1656,19 @@ export default function GMGResaleFlow() {
     async (email, password, userData = {}) => {
       try {
         if (authMode === 'signin') {
-          await signIn(email, password);
-          setShowAuthModal(false);
+          const result = await signIn(email, password);
+          if (result.success) {
+            setShowAuthModal(false);
+          } else {
+            alert(result.error || 'Sign in failed');
+          }
         } else {
-          await signUp(email, password, userData);
-          setShowAuthModal(false);
+          const result = await signUp(email, password, userData);
+          if (result.success) {
+            setShowAuthModal(false);
+          } else {
+            alert(result.error || 'Sign up failed');
+          }
         }
       } catch (error) {
         console.error('🔐 Auth error:', error);

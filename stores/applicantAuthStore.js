@@ -25,8 +25,8 @@ const useApplicantAuthStore = create((set, get) => ({
           .eq('id', user.id)
           .single();
         
-        // Only allow regular users (not admin/staff) or users without roles
-        if (!profile?.role || profile.role === 'user') {
+        // Allow applicant roles: external, realtor, user, or no role
+        if (!profile?.role || ['user', 'external', 'realtor'].includes(profile.role)) {
           set({
             user,
             profile,
@@ -128,6 +128,12 @@ const useApplicantAuthStore = create((set, get) => ({
           // Admin/staff users should use admin portal
           await supabase.auth.signOut();
           throw new Error('Please use the admin portal to sign in.');
+        }
+
+        // Allow all applicant types: external, realtor, user, or no role
+        if (profile?.role && !['user', 'external', 'realtor'].includes(profile.role)) {
+          await supabase.auth.signOut();
+          throw new Error('Invalid user role for applicant portal.');
         }
 
         set({
