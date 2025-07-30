@@ -80,40 +80,35 @@ export default async function handler(req, res) {
       throw notifError;
     }
 
-    // Prepare attachments (PDF + property files)
-    let attachments = [];
+    // Prepare download links (PDF + property files)
+    const EXPIRY_30_DAYS = 30 * 24 * 60 * 60; // 30 days in seconds
+    let downloadLinks = [];
     
-    // Add the resale certificate PDF as an attachment
+    // Add the resale certificate PDF as a download link
     if (application.pdf_url) {
       try {
-        console.log('Fetching PDF from URL:', application.pdf_url);
-        const pdfResponse = await fetch(application.pdf_url);
-        console.log('PDF response status:', pdfResponse.status, pdfResponse.statusText);
+        console.log('Creating download link for PDF:', application.pdf_url);
+        const filename = `Resale_Certificate_${application.property_address.replace(/[^a-zA-Z0-9]/g, '_')}.pdf`;
         
-        if (pdfResponse.ok) {
-          const pdfBuffer = await pdfResponse.arrayBuffer();
-          const filename = `Resale_Certificate_${application.property_address.replace(/[^a-zA-Z0-9]/g, '_')}.pdf`;
-          console.log('Adding PDF attachment:', filename, 'Size:', pdfBuffer.byteLength);
-          
-          attachments.push({
-            filename: filename,
-            content: Buffer.from(pdfBuffer),
-            contentType: 'application/pdf'
-          });
-        } else {
-          console.error('PDF fetch failed with status:', pdfResponse.status);
-        }
+        downloadLinks.push({
+          filename: filename,
+          downloadUrl: application.pdf_url, // PDF is already publicly accessible
+          type: 'pdf',
+          description: 'Virginia Resale Certificate'
+        });
+        
+        console.log('Added PDF download link:', filename);
       } catch (error) {
-        console.error('Failed to fetch PDF for attachment:', error);
+        console.error('Failed to create PDF download link:', error);
       }
     } else {
       console.log('No PDF URL found in application');
     }
     
-    // Add ALL property files for this HOA property as attachments
+    // Add ALL property files for this HOA property as download links
     if (application.hoa_property_id) {
       try {
-        console.log('Fetching all property files for HOA property ID:', application.hoa_property_id);
+        console.log('Creating download links for property files, HOA property ID:', application.hoa_property_id);
         
         // Get all files from storage for this property
         const { data: propertyFilesList, error: storageError } = await supabase.storage
@@ -130,50 +125,46 @@ export default async function handler(req, res) {
           
           for (const file of propertyFilesList) {
             try {
-              // Get signed URL for each file
+              // Create 30-day signed URL for each file
               const { data: urlData, error: urlError } = await supabase.storage
                 .from('bucket0')
-                .createSignedUrl(`property_files/${application.hoa_property_id}/${file.name}`, 3600);
+                .createSignedUrl(`property_files/${application.hoa_property_id}/${file.name}`, EXPIRY_30_DAYS, {
+                  download: file.name.split('_').slice(1).join('_') // Clean filename for download
+                });
 
               if (urlError) {
                 console.error(`Error creating signed URL for ${file.name}:`, urlError);
                 continue;
               }
 
-              console.log('Fetching property file:', file.name, 'from signed URL');
-              // Fetch file content
-              const response = await fetch(urlData.signedUrl);
-              if (response.ok) {
-                const buffer = await response.arrayBuffer();
-                const cleanFilename = file.name.split('_').slice(1).join('_'); // Remove timestamp prefix
-                console.log('Adding property file attachment:', cleanFilename, 'Size:', buffer.byteLength);
-                
-                attachments.push({
-                  filename: cleanFilename,
-                  content: Buffer.from(buffer),
-                  contentType: file.metadata?.mimetype || 'application/octet-stream'
-                });
-              } else {
-                console.error(`Property file fetch failed for ${file.name}:`, response.status);
-              }
+              const cleanFilename = file.name.split('_').slice(1).join('_'); // Remove timestamp prefix
+              console.log('Created download link for property file:', cleanFilename);
+              
+              downloadLinks.push({
+                filename: cleanFilename,
+                downloadUrl: urlData.signedUrl,
+                type: 'document',
+                description: 'Property Supporting Document',
+                size: file.metadata?.size || 'Unknown'
+              });
             } catch (error) {
-              console.error(`Failed to fetch property file ${file.name}:`, error);
+              console.error(`Failed to create download link for ${file.name}:`, error);
             }
           }
         } else {
           console.log('No property files found for this HOA property');
         }
       } catch (error) {
-        console.error('Error fetching property files:', error);
+        console.error('Error creating property file download links:', error);
       }
     } else {
       console.log('No HOA property ID found in application');
     }
 
     // Send the actual email
-    console.log('Sending email with', attachments.length, 'attachments');
-    attachments.forEach((att, index) => {
-      console.log(`Attachment ${index + 1}:`, att.filename, 'Size:', att.content?.length || 0);
+    console.log('Sending email with', downloadLinks.length, 'download links');
+    downloadLinks.forEach((link, index) => {
+      console.log(`Download link ${index + 1}:`, link.filename, 'Type:', link.type);
     });
     
     try {
@@ -184,7 +175,7 @@ export default async function handler(req, res) {
         hoaName: application.hoa_properties.name,
         pdfUrl: publicUrl,
         applicationId: applicationId,
-        attachments: attachments
+        downloadLinks: downloadLinks
       });
     } catch (emailError) {
       console.error('Email sending failed:', emailError);

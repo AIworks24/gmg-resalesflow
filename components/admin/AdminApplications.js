@@ -230,7 +230,15 @@ const AdminApplications = ({ userRole }) => {
       }
       
       if (selectedStatus !== 'all' && selectedStatus !== 'urgent') {
-        countQuery = countQuery.eq('status', selectedStatus);
+        if (selectedStatus === 'ongoing') {
+          // Ongoing includes all statuses between payment_confirmed and completed
+          countQuery = countQuery.in('status', ['under_review', 'compliance_pending', 'compliance_completed', 'documents_generated', 'awaiting_property_owner_response']);
+        } else {
+          countQuery = countQuery.eq('status', selectedStatus);
+        }
+      } else {
+        // Only exclude draft status (applications not yet submitted) from "All Steps" view
+        countQuery = countQuery.neq('status', 'draft');
       }
 
       if (searchTerm) {
@@ -270,7 +278,15 @@ const AdminApplications = ({ userRole }) => {
       }
 
       if (selectedStatus !== 'all' && selectedStatus !== 'urgent') {
-        query = query.eq('status', selectedStatus);
+        if (selectedStatus === 'ongoing') {
+          // Ongoing includes all statuses between payment_confirmed and completed
+          query = query.in('status', ['under_review', 'compliance_pending', 'compliance_completed', 'documents_generated', 'awaiting_property_owner_response']);
+        } else {
+          query = query.eq('status', selectedStatus);
+        }
+      } else {
+        // Only exclude draft status (applications not yet submitted) from "All Steps" view
+        query = query.neq('status', 'draft');
       }
 
       if (searchTerm) {
@@ -618,10 +634,23 @@ const AdminApplications = ({ userRole }) => {
         throw formError;
       }
 
+      // Load template data for resale certificate forms
+      let templateData = null;
+      if (formType === 'resale' && appData.hoa_property_id) {
+        const { data: template } = await supabase
+          .from('hoa_property_resale_templates')
+          .select('template_data')
+          .eq('hoa_property_id', appData.hoa_property_id)
+          .single();
+        
+        templateData = template?.template_data || null;
+      }
+
       // Combine the data
       const combinedData = {
         ...appData,
-        property_owner_forms: [formData]
+        property_owner_forms: [formData],
+        resale_template: templateData
       };
 
       if (formType === 'inspection') {
@@ -1261,8 +1290,8 @@ const AdminApplications = ({ userRole }) => {
               >
                 <option value='all'>All Steps</option>
                 <option value='urgent'>Urgent Applications</option>
-                <option value='draft'>Forms Required</option>
-                <option value='pending_review'>Forms In Progress</option>
+                <option value='payment_confirmed'>Not Started</option>
+                <option value='ongoing'>Ongoing</option>
                 <option value='approved'>Completed</option>
               </select>
             </div>
