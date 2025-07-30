@@ -1660,7 +1660,6 @@ export default function GMGResaleFlow() {
           setShowAuthModal(false);
         } else {
           await signUp(email, password, userData);
-          alert('Check your email for verification link!');
           setShowAuthModal(false);
         }
       } catch (error) {
@@ -2435,12 +2434,6 @@ export default function GMGResaleFlow() {
                         </span>
                       )}
                     </span>
-                    <button
-                      onClick={() => setCurrentStep(99)}
-                      className='text-blue-600 hover:text-blue-800 px-3 py-1 text-sm'
-                    >
-                      Test Input
-                    </button>
                     <button
                       onClick={handleSignOut}
                       className='text-gray-600 hover:text-green-700 px-3 py-2 rounded-md text-sm font-medium transition-colors'
