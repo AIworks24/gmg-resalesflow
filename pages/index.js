@@ -4,6 +4,8 @@ import { loadStripe } from '@stripe/stripe-js';
 import { useAppContext } from '../lib/AppContext';
 import { useApplicantAuth } from '../providers/ApplicantAuthProvider';
 import useApplicantAuthStore from '../stores/applicantAuthStore';
+import Image from 'next/image';
+import companyLogo from '../assets/company_logo.png';
 import {
   Building2,
   FileText,
@@ -21,6 +23,7 @@ import {
   UserPlus,
   InfoIcon,
   Trash2,
+  Briefcase,
 } from 'lucide-react';
 
 // Initialize Stripe
@@ -30,17 +33,21 @@ const stripePromise = loadStripe(
 
 // Helper function to calculate total amount
 const calculateTotal = (formData, stripePrices) => {
+  // Settlement agents get special pricing: $200 base instead of $317.95
+  const basePrice = formData.submitterType === 'settlement' ? 200.00 : 317.95;
+  
   if (!stripePrices) {
     // Fallback to hardcoded prices if Stripe prices not loaded yet
-    let total = 317.95;
+    let total = basePrice;
     if (formData.packageType === 'rush') total += 70.66;
     if (formData.paymentMethod === 'credit_card') total += 9.95;
     return total;
   }
 
-  let total = stripePrices.standard.displayAmount;
+  // Use settlement pricing or regular pricing based on submitter type
+  let total = formData.submitterType === 'settlement' ? 200.00 : stripePrices.standard.displayAmount;
   if (formData.packageType === 'rush') {
-    total = stripePrices.standard.displayAmount + stripePrices.rush.rushFeeDisplay;
+    total += stripePrices.rush.rushFeeDisplay;
   }
   if (formData.paymentMethod === 'credit_card') {
     total += stripePrices.convenienceFee.display;
@@ -236,12 +243,13 @@ const SubmitterInfoStep = React.memo(({ formData, handleInputChange }) => (
       <label className='block text-sm font-medium text-gray-700 mb-3'>
         I am the: *
       </label>
-      <div className='grid grid-cols-1 md:grid-cols-4 gap-4'>
+      <div className='grid grid-cols-2 md:grid-cols-5 gap-4'>
         {[
           { value: 'seller', label: 'Property Owner/Seller', icon: User },
           { value: 'realtor', label: 'Licensed Realtor', icon: FileText },
           { value: 'builder', label: 'Builder/Developer', icon: Building2 },
           { value: 'admin', label: 'GMG Staff', icon: CheckCircle },
+          { value: 'settlement', label: 'Settlement Agent / Closing Attorney', icon: Briefcase },
         ].map((type) => {
           const Icon = type.icon;
           return (
@@ -325,6 +333,19 @@ const SubmitterInfoStep = React.memo(({ formData, handleInputChange }) => (
         />
       </div>
     )}
+    {formData.submitterType === 'settlement' && (
+      <div>
+        <label className='block text-sm font-medium text-gray-700 mb-2'>
+          Expected Closing Date *
+        </label>
+        <input
+          type='date'
+          value={formData.closingDate || ''}
+          onChange={(e) => handleInputChange('closingDate', e.target.value)}
+          className='w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500'
+        />
+      </div>
+    )}
   </div>
 ));
 
@@ -377,21 +398,21 @@ const TransactionDetailsStep = ({ formData, handleInputChange }) => (
       <div className='grid grid-cols-1 md:grid-cols-3 gap-4'>
         <input
           type='text'
-          placeholder='Seller Full Name *'
+          placeholder='Seller Full Name'
           value={formData.sellerName || ''}
           onChange={(e) => handleInputChange('sellerName', e.target.value)}
           className='px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500'
         />
         <input
           type='email'
-          placeholder='Seller Email *'
+          placeholder='Seller Email'
           value={formData.sellerEmail || ''}
           onChange={(e) => handleInputChange('sellerEmail', e.target.value)}
           className='px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500'
         />
         <input
           type='tel'
-          placeholder='Seller Phone *'
+          placeholder='Seller Phone'
           value={formData.sellerPhone || ''}
           onChange={(e) => handleInputChange('sellerPhone', e.target.value)}
           className='px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500'
@@ -442,6 +463,7 @@ const PackagePaymentStep = ({
   currentStep,
   setCurrentStep,
   applicationId,
+  setApplicationId,
   user,
   hoaProperties,
   setShowAuthModal,
@@ -685,7 +707,7 @@ const PackagePaymentStep = ({
             </div>
             <div className='text-right'>
               <div className='text-2xl font-bold text-green-600'>
-                ${stripePrices ? stripePrices.standard.displayAmount.toFixed(2) : '317.95'}
+                ${formData.submitterType === 'settlement' ? '200.00' : (stripePrices ? stripePrices.standard.displayAmount.toFixed(2) : '317.95')}
               </div>
             </div>
           </div>
@@ -717,13 +739,13 @@ const PackagePaymentStep = ({
             </div>
             <div className='text-right'>
               <div className='text-lg text-gray-500'>
-                ${stripePrices ? stripePrices.standard.displayAmount.toFixed(2) : '317.95'}
+                ${formData.submitterType === 'settlement' ? '200.00' : (stripePrices ? stripePrices.standard.displayAmount.toFixed(2) : '317.95')}
               </div>
               <div className='text-sm text-gray-500'>
                 + ${stripePrices ? stripePrices.rush.rushFeeDisplay.toFixed(2) : '70.66'}
               </div>
               <div className='text-2xl font-bold text-orange-600'>
-                ${stripePrices ? (stripePrices.standard.displayAmount + stripePrices.rush.rushFeeDisplay).toFixed(2) : '388.61'}
+                ${formData.submitterType === 'settlement' ? '270.66' : (stripePrices ? (stripePrices.standard.displayAmount + stripePrices.rush.rushFeeDisplay).toFixed(2) : '388.61')}
               </div>
             </div>
           </div>
@@ -796,7 +818,7 @@ const PackagePaymentStep = ({
           <div className='space-y-2 text-sm'>
             <div className='flex justify-between'>
               <span>Processing Fee:</span>
-              <span>${stripePrices ? stripePrices.standard.displayAmount.toFixed(2) : '317.95'}</span>
+              <span>${formData.submitterType === 'settlement' ? '200.00' : (stripePrices ? stripePrices.standard.displayAmount.toFixed(2) : '317.95')}</span>
             </div>
             {formData.packageType === 'rush' && (
               <div className='flex justify-between'>
@@ -939,18 +961,21 @@ const ConfirmationModal = ({ isOpen, onClose, onConfirm, title, message, confirm
 };
 
 // Authentication Modal Component
-const AuthModal = ({ authMode, setAuthMode, setShowAuthModal, handleAuth }) => {
+const AuthModal = ({ authMode, setAuthMode, setShowAuthModal, handleAuth, resetPassword }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
+  const [showForgotPassword, setShowForgotPassword] = useState(false);
+  const [resetMessage, setResetMessage] = useState('');
+  const [isResetting, setIsResetting] = useState(false);
 
   return (
     <div className='fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50'>
       <div className='bg-white rounded-lg p-8 max-w-md w-full mx-4'>
         <div className='flex justify-between items-center mb-6'>
           <h2 className='text-2xl font-bold text-green-800'>
-            {authMode === 'signin' ? 'Sign In' : 'Create Account'}
+            {showForgotPassword ? 'Reset Password' : authMode === 'signin' ? 'Sign In' : 'Create Account'}
           </h2>
           <button onClick={() => setShowAuthModal(false)}>
             <X className='h-6 w-6 text-gray-400' />
@@ -958,73 +983,152 @@ const AuthModal = ({ authMode, setAuthMode, setShowAuthModal, handleAuth }) => {
         </div>
 
         <form
-          onSubmit={(e) => {
+          onSubmit={async (e) => {
             e.preventDefault();
-            handleAuth(email, password, {
-              first_name: firstName,
-              last_name: lastName,
-            });
+            if (showForgotPassword) {
+              setIsResetting(true);
+              setResetMessage('');
+              try {
+                const result = await resetPassword(email);
+                if (result.success) {
+                  setResetMessage('Check your email for password reset instructions.');
+                } else {
+                  setResetMessage(result.error || 'Failed to send reset email.');
+                }
+              } catch (error) {
+                setResetMessage('Failed to send reset email.');
+              } finally {
+                setIsResetting(false);
+              }
+            } else {
+              handleAuth(email, password, {
+                first_name: firstName,
+                last_name: lastName,
+              });
+            }
           }}
         >
-          {authMode === 'signup' && (
-            <div className='grid grid-cols-2 gap-4 mb-4'>
+          {showForgotPassword ? (
+            <div className='space-y-4'>
+              <p className='text-gray-600 text-sm'>
+                Enter your email address and we'll send you a link to reset your password.
+              </p>
               <input
-                type='text'
-                placeholder='First Name'
-                value={firstName}
-                onChange={(e) => setFirstName(e.target.value)}
-                className='px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500'
+                type='email'
+                placeholder='Email Address'
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className='w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500'
                 required
               />
-              <input
-                type='text'
-                placeholder='Last Name'
-                value={lastName}
-                onChange={(e) => setLastName(e.target.value)}
-                className='px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500'
-                required
-              />
+              {resetMessage && (
+                <div className={`text-sm p-3 rounded-lg ${resetMessage.includes('Check') ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                  {resetMessage}
+                </div>
+              )}
             </div>
-          )}
+          ) : (
+            <>
+              {authMode === 'signup' && (
+                <div className='grid grid-cols-2 gap-4 mb-4'>
+                  <input
+                    type='text'
+                    placeholder='First Name'
+                    value={firstName}
+                    onChange={(e) => setFirstName(e.target.value)}
+                    className='px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500'
+                    required
+                  />
+                  <input
+                    type='text'
+                    placeholder='Last Name'
+                    value={lastName}
+                    onChange={(e) => setLastName(e.target.value)}
+                    className='px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500'
+                    required
+                  />
+                </div>
+              )}
 
-          <div className='space-y-4'>
-            <input
-              type='email'
-              placeholder='Email Address'
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className='w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500'
-              required
-            />
-            <input
-              type='password'
-              placeholder='Password'
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className='w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500'
-              required
-            />
-          </div>
+              <div className='space-y-4'>
+                <input
+                  type='email'
+                  placeholder='Email Address'
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className='w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500'
+                  required
+                />
+                <input
+                  type='password'
+                  placeholder='Password'
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className='w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500'
+                  required
+                />
+              </div>
+            </>
+          )}
 
           <button
             type='submit'
-            className='w-full mt-6 px-6 py-3 bg-green-700 text-white rounded-lg hover:bg-green-800 transition-colors'
+            disabled={showForgotPassword && isResetting}
+            className={`w-full mt-6 px-6 py-3 rounded-lg transition-colors flex items-center justify-center ${
+              showForgotPassword && isResetting
+                ? 'bg-gray-400 cursor-not-allowed'
+                : 'bg-green-700 hover:bg-green-800'
+            } text-white`}
           >
-            {authMode === 'signin' ? 'Sign In' : 'Create Account'}
+            {showForgotPassword && isResetting ? (
+              <>
+                <svg className='animate-spin -ml-1 mr-3 h-5 w-5 text-white' xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24'>
+                  <circle className='opacity-25' cx='12' cy='12' r='10' stroke='currentColor' strokeWidth='4'></circle>
+                  <path className='opacity-75' fill='currentColor' d='M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z'></path>
+                </svg>
+                Sending...
+              </>
+            ) : (
+              showForgotPassword ? 'Send Reset Email' : authMode === 'signin' ? 'Sign In' : 'Create Account'
+            )}
           </button>
         </form>
 
-        <div className='mt-4 text-center'>
-          <button
-            onClick={() =>
-              setAuthMode(authMode === 'signin' ? 'signup' : 'signin')
-            }
-            className='text-green-600 hover:text-green-800'
-          >
-            {authMode === 'signin'
-              ? 'Need an account? Sign up'
-              : 'Already have an account? Sign in'}
-          </button>
+        <div className='mt-4 text-center space-y-2'>
+          {showForgotPassword ? (
+            <button
+              onClick={() => {
+                setShowForgotPassword(false);
+                setResetMessage('');
+              }}
+              className='text-green-600 hover:text-green-800'
+            >
+              Back to Sign In
+            </button>
+          ) : (
+            <>
+              {authMode === 'signin' && (
+                <button
+                  onClick={() => setShowForgotPassword(true)}
+                  className='text-green-600 hover:text-green-800 text-sm'
+                >
+                  Forgot your password?
+                </button>
+              )}
+              <div>
+                <button
+                  onClick={() =>
+                    setAuthMode(authMode === 'signin' ? 'signup' : 'signin')
+                  }
+                  className='text-green-600 hover:text-green-800'
+                >
+                  {authMode === 'signin'
+                    ? 'Need an account? Sign up'
+                    : 'Already have an account? Sign in'}
+                </button>
+              </div>
+            </>
+          )}
         </div>
       </div>
     </div>
@@ -1122,28 +1226,30 @@ const ReviewSubmitStep = ({ formData, stripePrices, applicationId }) => {
         </div>
       </div>
 
-      <div className='bg-white p-6 rounded-lg border border-gray-200'>
-        <h4 className='font-semibold text-gray-900 mb-4 flex items-center'>
-          <Users className='h-5 w-5 mr-2 text-green-600' />
-          Transaction Parties
-        </h4>
-        <div className='space-y-2 text-sm'>
-          <div>
-            <span className='font-medium'>Buyer:</span> {formData.buyerName}
-          </div>
-          <div>
-            <span className='font-medium'>Buyer Email:</span>{' '}
-            {formData.buyerEmail}
-          </div>
-          <div>
-            <span className='font-medium'>Seller:</span> {formData.sellerName}
-          </div>
-          <div>
-            <span className='font-medium'>Seller Email:</span>{' '}
-            {formData.sellerEmail}
+      {formData.submitterType !== 'settlement' && (
+        <div className='bg-white p-6 rounded-lg border border-gray-200'>
+          <h4 className='font-semibold text-gray-900 mb-4 flex items-center'>
+            <Users className='h-5 w-5 mr-2 text-green-600' />
+            Transaction Parties
+          </h4>
+          <div className='space-y-2 text-sm'>
+            <div>
+              <span className='font-medium'>Buyer:</span> {formData.buyerName}
+            </div>
+            <div>
+              <span className='font-medium'>Buyer Email:</span>{' '}
+              {formData.buyerEmail}
+            </div>
+            <div>
+              <span className='font-medium'>Seller:</span> {formData.sellerName}
+            </div>
+            <div>
+              <span className='font-medium'>Seller Email:</span>{' '}
+              {formData.sellerEmail}
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       <div className='bg-white p-6 rounded-lg border border-gray-200'>
         <h4 className='font-semibold text-gray-900 mb-4 flex items-center'>
@@ -1206,6 +1312,7 @@ export default function GMGResaleFlow() {
     signIn, 
     signUp, 
     signOut, 
+    resetPassword,
     profile 
   } = useApplicantAuthStore();
   
@@ -1440,13 +1547,26 @@ export default function GMGResaleFlow() {
     if (currentStep < 5) {
       // Save draft before moving to next step
       await saveDraftApplication();
-      setCurrentStep(currentStep + 1);
+      
+      // Skip Transaction Details step for settlement agents
+      if (currentStep === 2 && formData.submitterType === 'settlement') {
+        setCurrentStep(4); // Jump to Package & Payment
+      } else {
+        setCurrentStep(currentStep + 1);
+      }
     }
-  }, [currentStep, saveDraftApplication]);
+  }, [currentStep, saveDraftApplication, formData.submitterType]);
 
   const prevStep = React.useCallback(() => {
-    if (currentStep > 1) setCurrentStep(currentStep - 1);
-  }, [currentStep]);
+    if (currentStep > 1) {
+      // Skip Transaction Details step when going back for settlement agents
+      if (currentStep === 4 && formData.submitterType === 'settlement') {
+        setCurrentStep(2); // Jump back to Submitter Info
+      } else {
+        setCurrentStep(currentStep - 1);
+      }
+    }
+  }, [currentStep, formData.submitterType]);
 
   // Delete draft application
   const deleteDraftApplication = React.useCallback(async (appId) => {
@@ -1694,7 +1814,28 @@ export default function GMGResaleFlow() {
 
   const handleSubmit = async () => {
     try {
-      if (applicationId) {
+      // First, try to find existing application by applicationId or by matching pending payment application
+      let existingApplicationId = applicationId;
+      
+      if (!existingApplicationId) {
+        // Try to find a pending payment application for this user with matching details
+        const { data: pendingApps, error: searchError } = await supabase
+          .from('applications')
+          .select('id')
+          .eq('user_id', user.id)
+          .eq('status', 'pending_payment')
+          .eq('submitter_email', formData.submitterEmail)
+          .eq('property_address', formData.propertyAddress)
+          .order('created_at', { ascending: false })
+          .limit(1);
+          
+        if (!searchError && pendingApps && pendingApps.length > 0) {
+          existingApplicationId = pendingApps[0].id;
+          setApplicationId(existingApplicationId); // Update state for future use
+        }
+      }
+
+      if (existingApplicationId) {
         // Update existing application to under_review status
         const { data, error } = await supabase
           .from('applications')
@@ -1702,7 +1843,7 @@ export default function GMGResaleFlow() {
             status: 'under_review',
             submitted_at: new Date().toISOString(),
           })
-          .eq('id', applicationId)
+          .eq('id', existingApplicationId)
           .select()
           .single();
 
@@ -1907,9 +2048,9 @@ export default function GMGResaleFlow() {
       return (
         <div className='space-y-8'>
           {/* Welcome Section */}
-          <div className='text-center py-12'>
-            <div className='w-20 h-20 bg-green-700 rounded-full flex items-center justify-center mx-auto mb-6'>
-              <Building2 className='h-10 w-10 text-white' />
+          <div className='text-center py-6'>
+            <div className='w-32 h-32 mx-auto mb-1'>
+              <Image src={companyLogo} alt='GMG Logo' width={128} height={128} className='object-contain' />
             </div>
             <h2 className='text-3xl font-bold text-gray-900 mb-4'>
               Welcome to GMG ResaleFlow
@@ -1952,90 +2093,6 @@ export default function GMGResaleFlow() {
                 </p>
               </div>
             )}
-          </div>
-
-          {/* Process Steps */}
-          <div className='bg-white rounded-lg shadow-sm border border-gray-200 p-8'>
-            <h3 className='text-2xl font-bold text-gray-900 mb-6 text-center'>
-              How It Works
-            </h3>
-            <div className='grid grid-cols-1 md:grid-cols-3 gap-8'>
-              <div className='text-center'>
-                <div className='w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4'>
-                  <FileText className='h-8 w-8 text-blue-600' />
-                </div>
-                <h4 className='text-lg font-semibold text-gray-900 mb-2'>
-                  1. Submit Application
-                </h4>
-                <p className='text-gray-600'>
-                  Provide property details, transaction information, and select
-                  your processing speed.
-                </p>
-              </div>
-              <div className='text-center'>
-                <div className='w-16 h-16 bg-yellow-100 rounded-full flex items-center justify-center mx-auto mb-4'>
-                  <Clock className='h-8 w-8 text-yellow-600' />
-                </div>
-                <h4 className='text-lg font-semibold text-gray-900 mb-2'>
-                  2. We Process
-                </h4>
-                <p className='text-gray-600'>
-                  Our team handles compliance inspections and gathers all
-                  required HOA documents.
-                </p>
-              </div>
-              <div className='text-center'>
-                <div className='w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4'>
-                  <CheckCircle className='h-8 w-8 text-green-600' />
-                </div>
-                <h4 className='text-lg font-semibold text-gray-900 mb-2'>
-                  3. Receive Documents
-                </h4>
-                <p className='text-gray-600'>
-                  Get your complete resale certificate package delivered
-                  electronically.
-                </p>
-              </div>
-            </div>
-          </div>
-
-          {/* Pricing Cards */}
-          <div className='grid grid-cols-1 md:grid-cols-2 gap-6'>
-            <div className='bg-white p-8 rounded-lg shadow-sm border border-gray-200'>
-              <h4 className='text-xl font-semibold text-gray-900 mb-2'>
-                Standard Processing
-              </h4>
-              <div className='text-3xl font-bold text-green-600 mb-4'>
-                $317.95
-              </div>
-              <p className='text-gray-600 mb-4'>10-15 business days</p>
-              <ul className='space-y-2 text-sm text-gray-600'>
-                <li>✓ Complete Virginia Resale Certificate</li>
-                <li>✓ HOA Documents Package</li>
-                <li>✓ Compliance Inspection Report</li>
-                <li>✓ Digital & Print Delivery</li>
-              </ul>
-            </div>
-            <div className='bg-orange-50 p-8 rounded-lg shadow-sm border border-orange-200'>
-              <div className='flex items-center justify-between mb-2'>
-                <h4 className='text-xl font-semibold text-gray-900'>
-                  Rush Processing
-                </h4>
-                <span className='px-3 py-1 bg-orange-100 text-orange-800 text-sm rounded-full font-medium'>
-                  PRIORITY
-                </span>
-              </div>
-              <div className='text-3xl font-bold text-orange-600 mb-4'>
-                $388.61
-              </div>
-              <p className='text-gray-600 mb-4'>5 business days</p>
-              <ul className='space-y-2 text-sm text-gray-600'>
-                <li>✓ Everything in Standard</li>
-                <li>✓ Priority queue processing</li>
-                <li>✓ Expedited compliance inspection</li>
-                <li>✓ 5-day completion guarantee</li>
-              </ul>
-            </div>
           </div>
 
           {/* Recent Applications - Only show if user has any */}
@@ -2122,6 +2179,90 @@ export default function GMGResaleFlow() {
               </div>
             </div>
           )}
+
+          {/* Process Steps */}
+          <div className='bg-white rounded-lg shadow-sm border border-gray-200 p-8'>
+            <h3 className='text-2xl font-bold text-gray-900 mb-6 text-center'>
+              How It Works
+            </h3>
+            <div className='grid grid-cols-1 md:grid-cols-3 gap-8'>
+              <div className='text-center'>
+                <div className='w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4'>
+                  <FileText className='h-8 w-8 text-blue-600' />
+                </div>
+                <h4 className='text-lg font-semibold text-gray-900 mb-2'>
+                  1. Submit Application
+                </h4>
+                <p className='text-gray-600'>
+                  Provide property details, transaction information, and select
+                  your processing speed.
+                </p>
+              </div>
+              <div className='text-center'>
+                <div className='w-16 h-16 bg-yellow-100 rounded-full flex items-center justify-center mx-auto mb-4'>
+                  <Clock className='h-8 w-8 text-yellow-600' />
+                </div>
+                <h4 className='text-lg font-semibold text-gray-900 mb-2'>
+                  2. We Process
+                </h4>
+                <p className='text-gray-600'>
+                  Our team handles compliance inspections and gathers all
+                  required HOA documents.
+                </p>
+              </div>
+              <div className='text-center'>
+                <div className='w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4'>
+                  <CheckCircle className='h-8 w-8 text-green-600' />
+                </div>
+                <h4 className='text-lg font-semibold text-gray-900 mb-2'>
+                  3. Receive Documents
+                </h4>
+                <p className='text-gray-600'>
+                  Get your complete resale certificate package delivered
+                  electronically.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Pricing Cards */}
+          <div className='grid grid-cols-1 md:grid-cols-2 gap-6'>
+            <div className='bg-white p-8 rounded-lg shadow-sm border border-gray-200'>
+              <h4 className='text-xl font-semibold text-gray-900 mb-2'>
+                Standard Processing
+              </h4>
+              <div className='text-3xl font-bold text-green-600 mb-4'>
+                $317.95
+              </div>
+              <p className='text-gray-600 mb-4'>10-15 business days</p>
+              <ul className='space-y-2 text-sm text-gray-600'>
+                <li>✓ Complete Virginia Resale Certificate</li>
+                <li>✓ HOA Documents Package</li>
+                <li>✓ Compliance Inspection Report</li>
+                <li>✓ Digital & Print Delivery</li>
+              </ul>
+            </div>
+            <div className='bg-orange-50 p-8 rounded-lg shadow-sm border border-orange-200'>
+              <div className='flex items-center justify-between mb-2'>
+                <h4 className='text-xl font-semibold text-gray-900'>
+                  Rush Processing
+                </h4>
+                <span className='px-3 py-1 bg-orange-100 text-orange-800 text-sm rounded-full font-medium'>
+                  PRIORITY
+                </span>
+              </div>
+              <div className='text-3xl font-bold text-orange-600 mb-4'>
+                $388.61
+              </div>
+              <p className='text-gray-600 mb-4'>5 business days</p>
+              <ul className='space-y-2 text-sm text-gray-600'>
+                <li>✓ Everything in Standard</li>
+                <li>✓ Priority queue processing</li>
+                <li>✓ Expedited compliance inspection</li>
+                <li>✓ 5-day completion guarantee</li>
+              </ul>
+            </div>
+          </div>
         </div>
       );
     }
@@ -2370,6 +2511,7 @@ export default function GMGResaleFlow() {
             currentStep={currentStep}
             setCurrentStep={setCurrentStep}
             applicationId={applicationId}
+            setApplicationId={setApplicationId}
             user={user}
             hoaProperties={hoaProperties}
             setShowAuthModal={setShowAuthModal}
@@ -2418,14 +2560,9 @@ export default function GMGResaleFlow() {
             <div className='flex justify-between items-center py-4'>
               <div className='flex items-center space-x-4'>
                 <div className='flex items-center space-x-3'>
-                  <div className='w-10 h-10 bg-green-700 rounded-lg flex items-center justify-center'>
-                    <Building2 className='h-6 w-6 text-white' />
-                  </div>
+                  <Image src={companyLogo} alt='GMG Logo' width={50} height={50} className='object-contain' />
                   <div>
-                    <h1 className='text-xl font-bold text-green-900'>
-                      Goodman Management Group
-                    </h1>
-                    <p className='text-sm text-gray-600'>
+                    <p className='text-lg font-semibold text-gray-700'>
                       Resale Certificate System
                     </p>
                   </div>
@@ -2493,6 +2630,7 @@ export default function GMGResaleFlow() {
             setAuthMode={setAuthMode}
             setShowAuthModal={setShowAuthModal}
             handleAuth={handleAuth}
+            resetPassword={resetPassword}
           />
         )}
 
@@ -2527,14 +2665,9 @@ export default function GMGResaleFlow() {
           <div className='flex justify-between items-center py-4'>
             <div className='flex items-center space-x-4'>
               <div className='flex items-center space-x-3'>
-                <div className='w-10 h-10 bg-green-700 rounded-lg flex items-center justify-center'>
-                  <Building2 className='h-6 w-6 text-white' />
-                </div>
+                <Image src={companyLogo} alt='GMG Logo' width={50} height={50} className='object-contain' />
                 <div>
-                  <h1 className='text-xl font-bold text-green-900'>
-                    Goodman Management Group
-                  </h1>
-                  <p className='text-sm text-gray-600'>
+                  <p className='text-lg font-semibold text-gray-700'>
                     Resale Certificate System
                   </p>
                 </div>
@@ -2634,10 +2767,11 @@ export default function GMGResaleFlow() {
                 (currentStep === 2 &&
                   (!formData.submitterType ||
                     !formData.submitterName ||
-                    !formData.submitterEmail)) ||
+                    !formData.submitterEmail ||
+                    (formData.submitterType === 'settlement' && !formData.closingDate))) ||
                 (currentStep === 3 &&
+                  formData.submitterType !== 'settlement' &&
                   (!formData.buyerName ||
-                    !formData.sellerName ||
                     !formData.salePrice))
               }
               className='px-6 py-3 bg-green-700 text-white rounded-lg hover:bg-green-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2'
@@ -2664,6 +2798,7 @@ export default function GMGResaleFlow() {
           setAuthMode={setAuthMode}
           setShowAuthModal={setShowAuthModal}
           handleAuth={handleAuth}
+          resetPassword={resetPassword}
         />
       )}
 

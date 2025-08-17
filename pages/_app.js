@@ -32,9 +32,9 @@ export default function App({ Component, pageProps }) {
         {process.env.NODE_ENV === 'development' && (
           <div className="fixed top-0 left-0 right-0 z-[9999] bg-orange-500 text-white text-center py-2 px-4 font-medium shadow-lg">
             <div className="flex items-center justify-center gap-2">
-              <span className="animate-pulse">⚠️</span>
+              <span className="animate-pulse">[DEV]</span>
               <span>DEVELOPMENT ENVIRONMENT</span>
-              <span className="animate-pulse">⚠️</span>
+              <span className="animate-pulse">[DEV]</span>
             </div>
           </div>
         )}

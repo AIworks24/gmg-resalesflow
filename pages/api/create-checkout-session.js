@@ -13,8 +13,8 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Missing required fields' });
     }
 
-    // Calculate individual components
-    const basePrice = 31795; // $317.95 in cents
+    // Calculate individual components - settlement agents get $200 base price
+    const basePrice = formData.submitterType === 'settlement' ? 20000 : 31795; // Settlement: $200, Regular: $317.95 in cents
     const rushFee = packageType === 'rush' ? 7066 : 0; // $70.66 in cents
     const paymentFee = paymentMethod === 'credit_card' ? 995 : 0; // $9.95 in cents
 
@@ -24,8 +24,8 @@ export default async function handler(req, res) {
         price_data: {
           currency: 'usd',
           product_data: {
-            name: 'Virginia Resale Certificate - Standard Processing',
-            description: `Complete HOA resale certificate package for ${formData.propertyAddress || 'your property'} (10-15 business days)`,
+            name: `Virginia Resale Certificate - Standard Processing${formData.submitterType === 'settlement' ? ' (Settlement Agent)' : ''}`,
+            description: `Complete HOA resale certificate package for ${formData.propertyAddress || 'your property'} (10-15 business days)${formData.submitterType === 'settlement' ? ' - Settlement Agent Pricing' : ''}`,
           },
           unit_amount: basePrice,
         },

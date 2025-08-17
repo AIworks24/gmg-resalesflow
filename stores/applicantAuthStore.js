@@ -178,6 +178,23 @@ const useApplicantAuthStore = create((set, get) => ({
     }
   },
 
+  resetPassword: async (email) => {
+    const supabase = createClientComponentClient();
+    
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: `${window.location.origin}/reset-password`,
+        captchaToken: undefined
+      });
+      
+      if (error) throw error;
+      
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  },
+
   loadApplications: async () => {
     const { user } = get();
     if (!user) return;
