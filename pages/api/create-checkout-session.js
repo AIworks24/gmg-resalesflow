@@ -1,4 +1,11 @@
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+const { createClient } = require('@supabase/supabase-js');
+const { 
+  determineApplicationType,
+  getApplicationTypePricing,
+  calculateTotalAmount,
+  getApplicationTypeMessaging
+} = require('../../lib/applicationTypes');
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -13,43 +20,111 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Missing required fields' });
     }
 
-    // Calculate individual components - settlement agents get $200 base price
-    const basePrice = formData.submitterType === 'settlement' ? 20000 : 31795; // Settlement: $200, Regular: $317.95 in cents
-    const rushFee = packageType === 'rush' ? 7066 : 0; // $70.66 in cents
-    const paymentFee = paymentMethod === 'credit_card' ? 995 : 0; // $9.95 in cents
+    // Initialize Supabase client
+    const supabase = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL,
+      process.env.SUPABASE_SERVICE_ROLE_KEY
+    );
+
+    // Determine application type using database-driven approach
+    let applicationType;
+    try {
+      // Fetch property information to determine application type
+      const { data: hoaProperty, error: hoaError } = await supabase
+        .from('hoa_properties')
+        .select('*')
+        .eq('name', formData.hoaProperty)
+        .single();
+
+      if (hoaError) {
+        console.error('Error fetching HOA property:', hoaError);
+        throw new Error('Could not determine property location');
+      }
+
+      applicationType = determineApplicationType(formData.submitterType, hoaProperty);
+    } catch (error) {
+      console.error('Error determining application type:', error);
+      applicationType = 'standard'; // Fallback to standard
+    }
+
+    // Get pricing and messaging using database-driven approach
+    let basePrice, totalAmount, messaging;
+    try {
+      // Get base price without credit card fee
+      basePrice = await getApplicationTypePricing(applicationType, packageType);
+      
+      // Get total amount including credit card fee
+      totalAmount = await calculateTotalAmount(applicationType, packageType, paymentMethod);
+      
+      // Get messaging for the application type
+      messaging = getApplicationTypeMessaging(applicationType);
+      
+      console.log(`Database pricing: Type=${applicationType}, Package=${packageType}, Base=${basePrice}, Total=${totalAmount}`);
+    } catch (error) {
+      console.error('Database pricing error:', error);
+      // Fallback pricing
+      if (formData.submitterType === 'settlement') {
+        basePrice = 200.00;
+        totalAmount = basePrice + (paymentMethod === 'credit_card' ? 9.95 : 0);
+      } else {
+        basePrice = 317.95;
+        if (packageType === 'rush') basePrice += 70.66;
+        totalAmount = basePrice + (paymentMethod === 'credit_card' ? 9.95 : 0);
+      }
+      messaging = {
+        title: 'Application Processing',
+        formType: 'Standard Form'
+      };
+    }
+
+    // Convert to cents for Stripe
+    const basePriceCents = Math.round(basePrice * 100);
+    const totalAmountCents = Math.round(totalAmount * 100);
+    const creditCardFeeCents = paymentMethod === 'credit_card' ? 995 : 0;
+
+    // Handle free transactions (e.g., Virginia settlement agents with standard processing)
+    if (totalAmount === 0) {
+      // Update application as completed without payment
+      const { error: updateError } = await supabase
+        .from('applications')
+        .update({ 
+          payment_status: 'not_required',
+          status: 'under_review' 
+        })
+        .eq('id', applicationId);
+
+      if (updateError) {
+        console.error('Error updating free application:', updateError);
+        return res.status(500).json({ error: 'Failed to process free application' });
+      }
+
+      return res.status(200).json({ 
+        sessionId: null, 
+        isFree: true,
+        message: 'Application processed successfully - no payment required' 
+      });
+    }
 
     // Create line items for the checkout session
-    const lineItems = [
-      {
-        price_data: {
-          currency: 'usd',
-          product_data: {
-            name: `Virginia Resale Certificate - Standard Processing${formData.submitterType === 'settlement' ? ' (Settlement Agent)' : ''}`,
-            description: `Complete HOA resale certificate package for ${formData.propertyAddress || 'your property'} (10-15 business days)${formData.submitterType === 'settlement' ? ' - Settlement Agent Pricing' : ''}`,
-          },
-          unit_amount: basePrice,
-        },
-        quantity: 1,
-      },
-    ];
-
-    // Add rush processing fee as separate line item if rush package
-    if (packageType === 'rush') {
+    const lineItems = [];
+    
+    // Add base price item
+    if (basePriceCents > 0) {
       lineItems.push({
         price_data: {
           currency: 'usd',
           product_data: {
-            name: 'Rush Processing Fee',
-            description: 'Expedited processing - 5 business days instead of 10-15 days',
+            name: `${messaging.formType} - ${packageType === 'rush' ? 'Rush' : 'Standard'} Processing`,
+            description: `${messaging.formType} for ${formData.propertyAddress || 'your property'} (${packageType === 'rush' ? '5 business days' : '10-15 business days'})`,
           },
-          unit_amount: rushFee,
+          unit_amount: basePriceCents,
         },
         quantity: 1,
       });
     }
 
     // Add payment processing fee if credit card
-    if (paymentMethod === 'credit_card') {
+    if (creditCardFeeCents > 0) {
       lineItems.push({
         price_data: {
           currency: 'usd',
@@ -57,7 +132,7 @@ export default async function handler(req, res) {
             name: 'Credit Card Processing Fee',
             description: 'Processing fee for credit card payments',
           },
-          unit_amount: paymentFee,
+          unit_amount: creditCardFeeCents,
         },
         quantity: 1,
       });
@@ -68,6 +143,7 @@ export default async function handler(req, res) {
       payment_method_types: ['card'],
       line_items: lineItems,
       mode: 'payment',
+      allow_promotion_codes: true, // Enable promo code input on Stripe checkout page
       success_url: `${req.headers.origin}/?payment_success=true&session_id={CHECKOUT_SESSION_ID}&app_id=${applicationId}`,
       cancel_url: `${req.headers.origin}/?payment_cancelled=true&app_id=${applicationId}`,
       metadata: {
@@ -86,11 +162,6 @@ export default async function handler(req, res) {
     });
 
     // Update the application with the session ID
-    const { createClient } = require('@supabase/supabase-js');
-    const supabase = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL,
-      process.env.SUPABASE_SERVICE_ROLE_KEY
-    );
     
     const { error: updateError } = await supabase
       .from('applications')

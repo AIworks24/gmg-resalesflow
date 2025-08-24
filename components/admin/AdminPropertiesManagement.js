@@ -449,8 +449,16 @@ const AdminPropertiesManagement = ({ userRole }) => {
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-2">
                     <button
+                      onClick={() => router.push(`/admin/property-files/${property.id}`)}
+                      className="text-green-600 hover:text-green-900"
+                      title="Manage Documents"
+                    >
+                      <FileText className="w-4 h-4" />
+                    </button>
+                    <button
                       onClick={() => openEditModal(property)}
                       className="text-blue-600 hover:text-blue-900"
+                      title="Edit Property"
                     >
                       <Edit className="w-4 h-4" />
                     </button>
@@ -460,6 +468,7 @@ const AdminPropertiesManagement = ({ userRole }) => {
                         setShowDeleteConfirm(true);
                       }}
                       className="text-red-600 hover:text-red-900"
+                      title="Delete Property"
                     >
                       <Trash2 className="w-4 h-4" />
                     </button>

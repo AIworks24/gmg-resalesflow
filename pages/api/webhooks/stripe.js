@@ -128,38 +128,54 @@ export default async function handler(req, res) {
   }
 }
 
-// Helper function to create property owner forms
+// Helper function to create property owner forms using data-driven approach
 async function createPropertyOwnerForms(applicationId, metadata) {
   const { createClient } = require('@supabase/supabase-js');
+  const { getApplicationTypeData } = require('../../../lib/applicationTypes');
+  
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL,
     process.env.SUPABASE_SERVICE_ROLE_KEY
   );
 
   try {
-    // Create resale certificate form
-    await supabase
-      .from('property_owner_forms')
-      .insert({
-        application_id: applicationId,
-        form_type: 'resale_certificate',
-        status: 'not_started',
-        access_token: generateAccessToken(),
-        expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() // 30 days
-      });
+    // Get application details including application_type
+    const { data: application, error: appError } = await supabase
+      .from('applications')
+      .select('application_type, submitter_type')
+      .eq('id', applicationId)
+      .single();
 
-    // Create property inspection form
-    await supabase
-      .from('property_owner_forms')
-      .insert({
-        application_id: applicationId,
-        form_type: 'inspection_form',
-        status: 'not_started',
-        access_token: generateAccessToken(),
-        expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() // 30 days
-      });
+    if (appError) {
+      console.error('Error fetching application:', appError);
+      return;
+    }
 
-    console.log('Property owner forms created for application:', applicationId);
+    // Get application type data to determine required forms
+    const appTypeData = await getApplicationTypeData(application.application_type);
+    const requiredForms = appTypeData.required_forms || [];
+
+    console.log(`Creating forms for application type: ${application.application_type}, Required forms: ${JSON.stringify(requiredForms)}`);
+
+    // Create each required form
+    for (const formType of requiredForms) {
+      await supabase
+        .from('property_owner_forms')
+        .insert({
+          application_id: applicationId,
+          form_type: formType,
+          status: 'not_started',
+          access_token: generateAccessToken(),
+          expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(), // 30 days
+          notes: application.application_type.startsWith('settlement_agent') 
+            ? 'Settlement agent request - requires accounting review'
+            : null
+        });
+
+      console.log(`Created ${formType} for application ${applicationId}`);
+    }
+
+    console.log(`Successfully created ${requiredForms.length} forms for application: ${applicationId}`);
   } catch (error) {
     console.error('Error creating property owner forms:', error);
   }

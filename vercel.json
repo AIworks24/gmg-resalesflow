@@ -1,0 +1,13 @@
+{
+  "crons": [
+    {
+      "path": "/api/check-expiring-documents",
+      "schedule": "0 9 * * *"
+    }
+  ],
+  "functions": {
+    "pages/api/check-expiring-documents.js": {
+      "maxDuration": 30
+    }
+  }
+}

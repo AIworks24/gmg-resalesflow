@@ -4,6 +4,16 @@ import { loadStripe } from '@stripe/stripe-js';
 import { useAppContext } from '../lib/AppContext';
 import { useApplicantAuth } from '../providers/ApplicantAuthProvider';
 import useApplicantAuthStore from '../stores/applicantAuthStore';
+import { getPropertyState, calculateSettlementPriceDisplay, isSupportedSettlementState } from '../lib/pricingUtils';
+import { 
+  determineApplicationType, 
+  getApplicationTypePricing, 
+  getFormSteps, 
+  getFieldRequirements, 
+  getApplicationTypeMessaging,
+  calculateTotalAmount,
+  isPaymentRequired 
+} from '../lib/applicationTypes';
 import Image from 'next/image';
 import companyLogo from '../assets/company_logo.png';
 import {
@@ -32,9 +42,32 @@ const stripePromise = loadStripe(
 );
 
 // Helper function to calculate total amount
-const calculateTotal = (formData, stripePrices) => {
-  // Settlement agents get special pricing: $200 base instead of $317.95
-  const basePrice = formData.submitterType === 'settlement' ? 200.00 : 317.95;
+// Synchronous calculateTotal function for display purposes (keeps current behavior)
+const calculateTotal = (formData, stripePrices, hoaProperties) => {
+  if (formData.submitterType === 'settlement') {
+    // Settlement agents get location-based pricing
+    const selectedProperty = hoaProperties?.find(prop => prop.name === formData.hoaProperty);
+    if (selectedProperty) {
+      const propertyState = getPropertyState(selectedProperty.location);
+      if (isSupportedSettlementState(propertyState)) {
+        const isRush = formData.packageType === 'rush';
+        let total = calculateSettlementPriceDisplay(propertyState, isRush);
+        
+        // Add credit card fee if applicable
+        if (formData.paymentMethod === 'credit_card') {
+          total += stripePrices ? stripePrices.convenienceFee.display : 9.95;
+        }
+        return total;
+      }
+    }
+    
+    // Fallback to old pricing if property state cannot be determined
+    console.warn('Could not determine property state for settlement pricing, using fallback');
+    return 200.00;
+  }
+  
+  // Regular pricing for non-settlement submitters
+  const basePrice = 317.95;
   
   if (!stripePrices) {
     // Fallback to hardcoded prices if Stripe prices not loaded yet
@@ -44,8 +77,8 @@ const calculateTotal = (formData, stripePrices) => {
     return total;
   }
 
-  // Use settlement pricing or regular pricing based on submitter type
-  let total = formData.submitterType === 'settlement' ? 200.00 : stripePrices.standard.displayAmount;
+  // Use regular pricing
+  let total = stripePrices.standard.displayAmount;
   if (formData.packageType === 'rush') {
     total += stripePrices.rush.rushFeeDisplay;
   }
@@ -53,6 +86,28 @@ const calculateTotal = (formData, stripePrices) => {
     total += stripePrices.convenienceFee.display;
   }
   return total;
+};
+
+// Async calculateTotalDatabase function using database-driven pricing for payment logic
+const calculateTotalDatabase = async (formData, hoaProperties, applicationType) => {
+  try {
+    // Import calculateTotalAmount function
+    const { calculateTotalAmount } = await import('../lib/applicationTypes');
+    
+    // Calculate total using database-driven pricing
+    const total = await calculateTotalAmount(
+      applicationType,
+      formData.packageType,
+      formData.paymentMethod
+    );
+    
+    return total;
+  } catch (error) {
+    console.error('Error calculating total with database pricing:', error);
+    
+    // Fallback to synchronous calculation for safety
+    return calculateTotal(formData, null, hoaProperties);
+  }
 };
 
 // Move form step components outside the main component to prevent recreation
@@ -513,6 +568,189 @@ const PackagePaymentStep = ({
     setPaymentError(null);
 
     try {
+      // Calculate total amount for payment bypass check using database pricing
+      const totalAmount = await calculateTotalDatabase(formData, hoaProperties, applicationType);
+      
+      // Check if payment is required (bypass for $0 transactions)
+      if (totalAmount === 0) {
+        // Skip payment for free transactions (e.g., Virginia settlement standard processing)
+        let createdApplicationId;
+
+        // Create or update application
+        if (applicationId) {
+          // Update existing application
+          const hoaProperty = (hoaProperties || []).find(
+            (h) => h.name === formData.hoaProperty
+          );
+
+          const applicationData = {
+            hoa_property_id: hoaProperty?.id,
+            property_address: formData.propertyAddress,
+            unit_number: formData.unitNumber,
+            submitter_type: formData.submitterType,
+            application_type: applicationType,
+            submitter_name: formData.submitterName,
+            submitter_email: formData.submitterEmail,
+            submitter_phone: formData.submitterPhone,
+            realtor_license: formData.realtorLicense,
+            buyer_name: formData.buyerName,
+            buyer_email: formData.buyerEmail,
+            buyer_phone: formData.buyerPhone,
+            seller_name: formData.sellerName,
+            seller_email: formData.sellerEmail,
+            seller_phone: formData.sellerPhone,
+            sale_price: parseFloat(formData.salePrice),
+            closing_date: formData.closingDate || null,
+            package_type: formData.packageType,
+            payment_method: formData.paymentMethod,
+            total_amount: totalAmount,
+            status: 'under_review',
+            payment_status: 'not_required',
+            submitted_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+            expected_completion_date: new Date(
+              Date.now() +
+                (formData.packageType === 'rush' ? 5 : 15) * 24 * 60 * 60 * 1000
+            )
+              .toISOString()
+              .split('T')[0],
+          };
+
+          const { data: applicationResult, error: applicationError } = await supabase
+            .from('applications')
+            .update(applicationData)
+            .eq('id', applicationId)
+            .select();
+
+          if (applicationError) throw applicationError;
+          createdApplicationId = applicationResult[0].id;
+        } else {
+          // Create new application
+          const hoaProperty = (hoaProperties || []).find(
+            (h) => h.name === formData.hoaProperty
+          );
+
+          const applicationData = {
+            user_id: user.id,
+            hoa_property_id: hoaProperty?.id,
+            property_address: formData.propertyAddress,
+            unit_number: formData.unitNumber,
+            submitter_type: formData.submitterType,
+            application_type: applicationType,
+            submitter_name: formData.submitterName,
+            submitter_email: formData.submitterEmail,
+            submitter_phone: formData.submitterPhone,
+            realtor_license: formData.realtorLicense,
+            buyer_name: formData.buyerName,
+            buyer_email: formData.buyerEmail,
+            buyer_phone: formData.buyerPhone,
+            seller_name: formData.sellerName,
+            seller_email: formData.sellerEmail,
+            seller_phone: formData.sellerPhone,
+            sale_price: parseFloat(formData.salePrice),
+            closing_date: formData.closingDate || null,
+            package_type: formData.packageType,
+            payment_method: formData.paymentMethod,
+            total_amount: totalAmount,
+            status: 'under_review',
+            payment_status: 'not_required',
+            submitted_at: new Date().toISOString(),
+            expected_completion_date: new Date(
+              Date.now() +
+                (formData.packageType === 'rush' ? 5 : 15) * 24 * 60 * 60 * 1000
+            )
+              .toISOString()
+              .split('T')[0],
+          };
+
+          const { data: applicationResult, error: applicationError } = await supabase
+            .from('applications')
+            .insert([applicationData])
+            .select();
+
+          if (applicationError) throw applicationError;
+          createdApplicationId = applicationResult[0].id;
+          
+          // Set the application ID for future updates
+          setApplicationId(createdApplicationId);
+        }
+
+        // CREATE THE PROPERTY OWNER FORMS for free transactions
+        await createPropertyOwnerForms(createdApplicationId, {
+          id: createdApplicationId,
+          submitter_type: formData.submitterType,
+          application_type: applicationType
+        });
+
+        // Send confirmation email
+        try {
+          const hoaProperty = (hoaProperties || []).find(
+            (h) => h.name === formData.hoaProperty
+          );
+          
+          const emailResponse = await fetch('/api/send-email', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              emailType: 'application_submission',
+              applicationId: createdApplicationId,
+              customerName: formData.submitterName,
+              customerEmail: formData.submitterEmail,
+              propertyAddress: formData.propertyAddress,
+              packageType: formData.packageType,
+              totalAmount: totalAmount,
+              hoaName: hoaProperty?.name || 'Unknown HOA',
+              submitterType: formData.submitterType,
+            }),
+          });
+
+          if (!emailResponse.ok) {
+            throw new Error('Failed to send confirmation email');
+          }
+        } catch (emailError) {
+          console.error('Error sending confirmation email:', emailError);
+          // Don't fail the submission if email fails
+        }
+
+        // Show success message and redirect
+        setSnackbarData({
+          message: 'Application submitted successfully! You will receive a confirmation email shortly.',
+          type: 'success'
+        });
+        setShowSnackbar(true);
+
+        // Reset form and redirect to applications
+        setCurrentStep(0);
+        await loadApplications();
+        setApplicationId(null);
+        
+        // Reset form data
+        setFormData({
+          hoaProperty: '',
+          propertyAddress: '',
+          unitNumber: '',
+          submitterType: '',
+          submitterName: '',
+          submitterEmail: '',
+          submitterPhone: '',
+          realtorLicense: '',
+          buyerName: '',
+          buyerEmail: '',
+          buyerPhone: '',
+          sellerName: '',
+          sellerEmail: '',
+          sellerPhone: '',
+          salePrice: '',
+          closingDate: new Date().toISOString().split('T')[0],
+          packageType: 'standard',
+          paymentMethod: '',
+        });
+
+        return; // Exit early for free transactions
+      }
+
       if (formData.paymentMethod === 'credit_card') {
         let createdApplicationId;
 
@@ -528,6 +766,7 @@ const PackagePaymentStep = ({
             property_address: formData.propertyAddress,
             unit_number: formData.unitNumber,
             submitter_type: formData.submitterType,
+            application_type: applicationType,
             submitter_name: formData.submitterName,
             submitter_email: formData.submitterEmail,
             submitter_phone: formData.submitterPhone,
@@ -542,7 +781,7 @@ const PackagePaymentStep = ({
             closing_date: formData.closingDate || null,
             package_type: formData.packageType,
             payment_method: formData.paymentMethod,
-            total_amount: calculateTotal(formData, stripePrices),
+            total_amount: totalAmount,
             status: 'pending_payment',
             updated_at: new Date().toISOString(),
             expected_completion_date: new Date(
@@ -573,6 +812,7 @@ const PackagePaymentStep = ({
             property_address: formData.propertyAddress,
             unit_number: formData.unitNumber,
             submitter_type: formData.submitterType,
+            application_type: applicationType,
             submitter_name: formData.submitterName,
             submitter_email: formData.submitterEmail,
             submitter_phone: formData.submitterPhone,
@@ -587,7 +827,7 @@ const PackagePaymentStep = ({
             closing_date: formData.closingDate || null,
             package_type: formData.packageType,
             payment_method: formData.paymentMethod,
-            total_amount: calculateTotal(formData, stripePrices),
+            total_amount: totalAmount,
             status: 'pending_payment',
             submitted_at: new Date().toISOString(),
             expected_completion_date: new Date(
@@ -628,7 +868,7 @@ const PackagePaymentStep = ({
             paymentMethod: formData.paymentMethod,
             applicationId: createdApplicationId,
             formData: formData,
-            amount: Math.round(calculateTotal(formData, stripePrices) * 100), // Convert to cents
+            amount: Math.round(totalAmount * 100), // Convert to cents
           }),
         });
 
@@ -834,7 +1074,7 @@ const PackagePaymentStep = ({
             )}
             <div className='border-t border-green-200 pt-2 flex justify-between font-semibold text-green-900'>
               <span>Total:</span>
-              <span>${calculateTotal(formData, stripePrices)}</span>
+              <span>${calculateTotal(formData, stripePrices, hoaProperties)}</span>
             </div>
           </div>
         </div>
@@ -870,7 +1110,7 @@ const PackagePaymentStep = ({
               Processing...
             </>
           ) : (
-            formData.paymentMethod === 'credit_card' ? 'Continue to Checkout' : `Pay $${calculateTotal(formData, stripePrices)}`
+            formData.paymentMethod === 'credit_card' ? 'Continue to Checkout' : `Pay $${calculateTotal(formData, stripePrices, hoaProperties)}`
           )}
         </button>
       </div>
@@ -1270,7 +1510,7 @@ const ReviewSubmitStep = ({ formData, stripePrices, applicationId }) => {
               : 'Bank Transfer'}
           </div>
           <div>
-            <span className='font-medium'>Total:</span> ${calculateTotal(formData, stripePrices)}
+            <span className='font-medium'>Total:</span> ${calculateTotal(formData, stripePrices, hoaProperties)}
           </div>
         </div>
       </div>
@@ -1359,6 +1599,12 @@ export default function GMGResaleFlow() {
     paymentMethod: '',
     totalAmount: 317.95,
   });
+
+  // Application type state
+  const [applicationType, setApplicationType] = useState('standard');
+  const [fieldRequirements, setFieldRequirements] = useState(null);
+  const [customMessaging, setCustomMessaging] = useState(null);
+  const [formSteps, setFormSteps] = useState([]);
 
   // Load applications for the current user
   const loadApplications = React.useCallback(async () => {
@@ -1507,7 +1753,7 @@ export default function GMGResaleFlow() {
         closing_date: formData.closingDate || null,
         package_type: formData.packageType,
         payment_method: formData.paymentMethod,
-        total_amount: calculateTotal(formData, stripePrices),
+        total_amount: calculateTotal(formData, stripePrices, hoaProperties),
         status: 'draft',
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
@@ -1541,6 +1787,38 @@ export default function GMGResaleFlow() {
       return null;
     }
   }, [user, currentStep, hoaProperties, formData, stripePrices, applicationId]);
+
+  // Update application type when submitter type or property changes
+  React.useEffect(() => {
+    if (formData.submitterType && formData.hoaProperty && hoaProperties) {
+      const selectedProperty = hoaProperties.find(prop => prop.name === formData.hoaProperty);
+      if (selectedProperty) {
+        const newApplicationType = determineApplicationType(formData.submitterType, selectedProperty);
+        if (newApplicationType !== applicationType) {
+          setApplicationType(newApplicationType);
+          setFieldRequirements(getFieldRequirements(newApplicationType));
+          setCustomMessaging(getApplicationTypeMessaging(newApplicationType));
+          setFormSteps(getFormSteps(newApplicationType));
+          
+          // Update pricing when application type changes
+          updatePricingForApplicationType(newApplicationType);
+        }
+      }
+    }
+  }, [formData.submitterType, formData.hoaProperty, hoaProperties, applicationType]);
+
+  // Update pricing based on application type
+  const updatePricingForApplicationType = React.useCallback(async (appType) => {
+    try {
+      const newTotal = await calculateTotalAmount(appType, formData.packageType, formData.paymentMethod);
+      setFormData(prev => ({
+        ...prev,
+        totalAmount: newTotal
+      }));
+    } catch (error) {
+      console.error('Error updating pricing:', error);
+    }
+  }, [formData.packageType, formData.paymentMethod]);
 
   // Memoize other handlers
   const nextStep = React.useCallback(async () => {
@@ -1719,9 +1997,17 @@ export default function GMGResaleFlow() {
         applicationId
       );
 
-      // Generate unique access tokens
-      const inspectionToken = crypto.randomUUID();
-      const resaleToken = crypto.randomUUID();
+      // Get application type to determine required forms
+      const applicationTypeToUse = applicationData.application_type || applicationType || 'standard';
+      
+      // Import the getApplicationTypeData function
+      const { getApplicationTypeData } = await import('../lib/applicationTypes');
+      
+      // Get application type data to determine required forms
+      const appTypeData = await getApplicationTypeData(applicationTypeToUse);
+      const requiredForms = appTypeData.required_forms || [];
+
+      console.log(`Creating forms for application type: ${applicationTypeToUse}, Required forms: ${JSON.stringify(requiredForms)}`);
 
       // Determine recipient email (property owner email, or fallback to submitter)
       const recipientEmail =
@@ -1729,31 +2015,26 @@ export default function GMGResaleFlow() {
         applicationData.submitter_email ||
         'admin@gmgva.com';
 
-      // Create both forms at once
-      const formsToCreate = [
-        {
-          application_id: applicationId,
-          form_type: 'inspection_form',
-          status: 'not_started',
-          access_token: inspectionToken,
-          recipient_email: recipientEmail,
-          expires_at: new Date(
-            Date.now() + 30 * 24 * 60 * 60 * 1000
-          ).toISOString(), // 30 days from now
-          created_at: new Date().toISOString(),
-        },
-        {
-          application_id: applicationId,
-          form_type: 'resale_certificate',
-          status: 'not_started',
-          access_token: resaleToken,
-          recipient_email: recipientEmail,
-          expires_at: new Date(
-            Date.now() + 30 * 24 * 60 * 60 * 1000
-          ).toISOString(), // 30 days from now
-          created_at: new Date().toISOString(),
-        },
-      ];
+      // Create forms based on application type requirements
+      const formsToCreate = requiredForms.map(formType => ({
+        application_id: applicationId,
+        form_type: formType,
+        status: 'not_started',
+        access_token: crypto.randomUUID(),
+        recipient_email: recipientEmail,
+        expires_at: new Date(
+          Date.now() + 30 * 24 * 60 * 60 * 1000
+        ).toISOString(), // 30 days from now
+        created_at: new Date().toISOString(),
+        notes: applicationTypeToUse.startsWith('settlement_agent') 
+          ? 'Settlement agent request - requires accounting review'
+          : null
+      }));
+
+      if (formsToCreate.length === 0) {
+        console.log('No forms required for this application type');
+        return [];
+      }
 
       const { data, error } = await supabase
         .from('property_owner_forms')
@@ -1765,10 +2046,13 @@ export default function GMGResaleFlow() {
         throw error;
       }
 
+      console.log(`✅ Successfully created ${data.length} forms for application: ${applicationId}`);
       return data;
     } catch (error) {
       console.error('❌ Failed to create property owner forms:', error);
-      throw error;
+      // Don't throw error to prevent breaking the application flow
+      console.warn('Continuing without creating forms due to error');
+      return [];
     }
   };
 
@@ -1916,7 +2200,7 @@ export default function GMGResaleFlow() {
           closing_date: formData.closingDate || null,
           package_type: formData.packageType,
           payment_method: formData.paymentMethod,
-          total_amount: calculateTotal(formData, stripePrices),
+          total_amount: calculateTotal(formData, stripePrices, hoaProperties),
           status: 'submitted',
           submitted_at: new Date().toISOString(),
         };
@@ -2785,7 +3069,7 @@ export default function GMGResaleFlow() {
               className='px-8 py-3 bg-green-700 text-white rounded-lg hover:bg-green-800 transition-colors flex items-center gap-2'
             >
               <CheckCircle className='h-5 w-5' />
-              {applicationId ? 'Submit Application' : `Submit Application & Pay $${calculateTotal(formData, stripePrices)}`}
+              {applicationId ? 'Submit Application' : `Submit Application & Pay $${calculateTotal(formData, stripePrices, hoaProperties)}`}
             </button>
           ) : null}
         </div>
