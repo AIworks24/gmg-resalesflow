@@ -1,6 +1,19 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../../lib/supabase';
-import { getPropertyState, getSettlementDocumentType } from '../../lib/pricingUtils';
+// Utility functions (moved from pricingUtils to avoid module issues)
+const getPropertyState = (location) => {
+  if (!location) return null;
+  const locationUpper = location.toUpperCase();
+  if (locationUpper.includes('VA') || locationUpper.includes('VIRGINIA')) return 'VA';
+  if (locationUpper.includes('NC') || locationUpper.includes('NORTH CAROLINA')) return 'NC';
+  return null;
+};
+
+const getSettlementDocumentType = (propertyState) => {
+  if (propertyState === 'VA') return 'Dues Request - Escrow Instructions';
+  if (propertyState === 'NC') return 'Statement of Unpaid Assessments';
+  throw new Error(`Unknown property state: ${propertyState}`);
+};
 import { prepareSettlementFormData, generateSettlementPDF } from '../../lib/settlementPdfService';
 import {
   Building2,

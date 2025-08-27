@@ -4,7 +4,7 @@ import { loadStripe } from '@stripe/stripe-js';
 import { useAppContext } from '../lib/AppContext';
 import { useApplicantAuth } from '../providers/ApplicantAuthProvider';
 import useApplicantAuthStore from '../stores/applicantAuthStore';
-import { getPropertyState, calculateSettlementPriceDisplay, isSupportedSettlementState } from '../lib/pricingUtils';
+// Removed pricingUtils import - using database-driven pricing instead
 import { 
   determineApplicationType, 
   getApplicationTypePricing, 
@@ -42,26 +42,44 @@ const stripePromise = loadStripe(
 );
 
 // Helper function to calculate total amount
-// Synchronous calculateTotal function for display purposes (keeps current behavior)
+// Synchronous calculateTotal function for display purposes (approximation only)
 const calculateTotal = (formData, stripePrices, hoaProperties) => {
   if (formData.submitterType === 'settlement') {
-    // Settlement agents get location-based pricing
+    // Settlement agents - approximate pricing for display
+    // Note: Actual pricing comes from database via calculateTotalDatabase()
     const selectedProperty = hoaProperties?.find(prop => prop.name === formData.hoaProperty);
+    
+    // Debug logging
     if (selectedProperty) {
-      const propertyState = getPropertyState(selectedProperty.location);
-      if (isSupportedSettlementState(propertyState)) {
-        const isRush = formData.packageType === 'rush';
-        let total = calculateSettlementPriceDisplay(propertyState, isRush);
-        
-        // Add credit card fee if applicable
+      console.log('Selected property for settlement pricing:', {
+        name: selectedProperty.name,
+        location: selectedProperty.location,
+        formData: formData
+      });
+    }
+    
+    if (selectedProperty && selectedProperty.location) {
+      const location = selectedProperty.location.toUpperCase();
+      const isRush = formData.packageType === 'rush';
+      
+      if (location.includes('VA') || location.includes('VIRGINIA')) {
+        // Virginia: FREE standard, $70.66 rush
+        let total = isRush ? 70.66 : 0;
+        if (formData.paymentMethod === 'credit_card' && total > 0) {
+          total += 9.95; // Credit card fee
+        }
+        return total;
+      } else if (location.includes('NC') || location.includes('NORTH CAROLINA')) {
+        // North Carolina: $450 standard, $550 rush
+        let total = isRush ? 550.00 : 450.00;
         if (formData.paymentMethod === 'credit_card') {
-          total += stripePrices ? stripePrices.convenienceFee.display : 9.95;
+          total += 9.95; // Credit card fee
         }
         return total;
       }
     }
     
-    // Fallback to old pricing if property state cannot be determined
+    // Fallback pricing for settlement agents
     console.warn('Could not determine property state for settlement pricing, using fallback');
     return 200.00;
   }
@@ -523,6 +541,7 @@ const PackagePaymentStep = ({
   hoaProperties,
   setShowAuthModal,
   stripePrices,
+  applicationType,
 }) => {
   const [isProcessing, setIsProcessing] = useState(false);
   const [paymentError, setPaymentError] = useState(null);
@@ -947,15 +966,57 @@ const PackagePaymentStep = ({
             </div>
             <div className='text-right'>
               <div className='text-2xl font-bold text-green-600'>
-                ${formData.submitterType === 'settlement' ? '200.00' : (stripePrices ? stripePrices.standard.displayAmount.toFixed(2) : '317.95')}
+                ${(() => {
+                  const total = calculateTotal(formData, stripePrices, hoaProperties);
+                  return total.toFixed(2);
+                })()}
               </div>
             </div>
           </div>
           <ul className='text-sm text-gray-600 space-y-1'>
-            <li>• Complete Virginia Resale Certificate</li>
-            <li>• HOA Documents Package</li>
-            <li>• Compliance Inspection Report</li>
-            <li>• Digital & Print Delivery</li>
+            {formData.submitterType === 'settlement' ? (
+              <>
+                {(() => {
+                  const selectedProperty = hoaProperties?.find(prop => prop.name === formData.hoaProperty);
+                  const location = selectedProperty?.location?.toUpperCase() || '';
+                  if (location.includes('VA') || location.includes('VIRGINIA')) {
+                    return (
+                      <>
+                        <li>• Dues Request - Escrow Instructions</li>
+                        <li>• Current HOA dues verification</li>
+                        <li>• Settlement statement preparation</li>
+                        <li>✓ Direct submission to accounting</li>
+                      </>
+                    );
+                  } else if (location.includes('NC') || location.includes('NORTH CAROLINA')) {
+                    return (
+                      <>
+                        <li>• Statement of Unpaid Assessments</li>
+                        <li>• Current assessment verification</li>
+                        <li>• Settlement documentation</li>
+                        <li>✓ Direct submission to accounting</li>
+                      </>
+                    );
+                  } else {
+                    return (
+                      <>
+                        <li>• Settlement documentation</li>
+                        <li>• HOA dues verification</li>
+                        <li>• Escrow instructions</li>
+                        <li>✓ Direct submission to accounting</li>
+                      </>
+                    );
+                  }
+                })()}
+              </>
+            ) : (
+              <>
+                <li>• Complete Virginia Resale Certificate</li>
+                <li>• HOA Documents Package</li>
+                <li>• Compliance Inspection Report</li>
+                <li>• Digital & Print Delivery</li>
+              </>
+            )}
           </ul>
         </div>
 
@@ -979,21 +1040,40 @@ const PackagePaymentStep = ({
             </div>
             <div className='text-right'>
               <div className='text-lg text-gray-500'>
-                ${formData.submitterType === 'settlement' ? '200.00' : (stripePrices ? stripePrices.standard.displayAmount.toFixed(2) : '317.95')}
+                ${(() => {
+                  const tempFormData = { ...formData, packageType: 'standard' };
+                  const baseTotal = calculateTotal(tempFormData, stripePrices, hoaProperties);
+                  return baseTotal.toFixed(2);
+                })()}
               </div>
               <div className='text-sm text-gray-500'>
                 + ${stripePrices ? stripePrices.rush.rushFeeDisplay.toFixed(2) : '70.66'}
               </div>
               <div className='text-2xl font-bold text-orange-600'>
-                ${formData.submitterType === 'settlement' ? '270.66' : (stripePrices ? (stripePrices.standard.displayAmount + stripePrices.rush.rushFeeDisplay).toFixed(2) : '388.61')}
+                ${(() => {
+                  const tempFormData = { ...formData, packageType: 'rush' };
+                  const rushTotal = calculateTotal(tempFormData, stripePrices, hoaProperties);
+                  return rushTotal.toFixed(2);
+                })()}
               </div>
             </div>
           </div>
           <ul className='text-sm text-gray-600 space-y-1'>
-            <li>• Everything in Standard</li>
-            <li>• Priority queue processing</li>
-            <li>• Expedited compliance inspection</li>
-            <li>✓ 5-day completion guarantee</li>
+            {formData.submitterType === 'settlement' ? (
+              <>
+                <li>• Everything in Standard</li>
+                <li>• Priority queue processing</li>
+                <li>• Expedited accounting review</li>
+                <li>✓ 3-day completion guarantee</li>
+              </>
+            ) : (
+              <>
+                <li>• Everything in Standard</li>
+                <li>• Priority queue processing</li>
+                <li>• Expedited compliance inspection</li>
+                <li>✓ 5-day completion guarantee</li>
+              </>
+            )}
           </ul>
         </div>
       </div>
@@ -1058,7 +1138,11 @@ const PackagePaymentStep = ({
           <div className='space-y-2 text-sm'>
             <div className='flex justify-between'>
               <span>Processing Fee:</span>
-              <span>${formData.submitterType === 'settlement' ? '200.00' : (stripePrices ? stripePrices.standard.displayAmount.toFixed(2) : '317.95')}</span>
+              <span>${(() => {
+                const tempFormData = { ...formData, paymentMethod: '' };
+                const baseAmount = calculateTotal(tempFormData, stripePrices, hoaProperties);
+                return baseAmount.toFixed(2);
+              })()}</span>
             </div>
             {formData.packageType === 'rush' && (
               <div className='flex justify-between'>
@@ -1611,6 +1695,7 @@ export default function GMGResaleFlow() {
     if (!user) return;
 
     try {
+      console.log('Loading applications for user:', user.id);
       let query = supabase
         .from('applications')
         .select('*, hoa_properties(name)')
@@ -1627,6 +1712,7 @@ export default function GMGResaleFlow() {
         return;
       }
 
+      console.log('Loaded applications:', data?.length || 0, 'applications');
       setApplications(data || []);
     } catch (error) {
       console.error('Error in loadApplications:', error);
@@ -1914,6 +2000,12 @@ export default function GMGResaleFlow() {
           
           // Reload applications to refresh the list
           await loadApplications();
+          console.log('Applications reloaded successfully');
+          
+          // Force a small delay to ensure UI updates
+          setTimeout(() => {
+            console.log('UI should be updated now');
+          }, 100);
           
           // Show success snackbar
           setSnackbarData({
@@ -2800,6 +2892,7 @@ export default function GMGResaleFlow() {
             hoaProperties={hoaProperties}
             setShowAuthModal={setShowAuthModal}
             stripePrices={stripePrices}
+            applicationType={applicationType}
           />
         );
       case 5:
