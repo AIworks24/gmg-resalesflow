@@ -7,16 +7,7 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
-// Create email transporter
-const transporter = nodemailer.createTransport({
-  host: 'smtp-mail.outlook.com',
-  port: 587,
-  secure: false,
-  auth: {
-    user: 'resales@gmgva.com',
-    pass: process.env.EMAIL_APP_PASSWORD || 'xzdkthdvhvrblcxd'
-  }
-});
+// Note: Transporter is initialized inside the handler to ensure required env vars are present
 
 export default async function handler(req, res) {
   // This endpoint should be called by a cron job daily
@@ -33,6 +24,27 @@ export default async function handler(req, res) {
   }
 
   try {
+    // Validate required SMTP environment variables
+    const requiredEnv = ['SMTP_HOST', 'SMTP_PORT', 'EMAIL_USERNAME', 'EMAIL_APP_PASSWORD'];
+    const missingEnv = requiredEnv.filter((key) => !process.env[key]);
+    if (missingEnv.length > 0) {
+      return res.status(500).json({
+        error: 'Server misconfigured: missing required environment variables',
+        missing: missingEnv
+      });
+    }
+
+    // Create email transporter using environment variables
+    const transporter = nodemailer.createTransport({
+      host: process.env.SMTP_HOST,
+      port: Number(process.env.SMTP_PORT),
+      secure: process.env.SMTP_SECURE === 'true', // optional, defaults to false
+      auth: {
+        user: process.env.EMAIL_USERNAME,
+        pass: process.env.EMAIL_APP_PASSWORD
+      }
+    });
+
     // Get all documents expiring within 30 days
     const thirtyDaysFromNow = new Date();
     thirtyDaysFromNow.setDate(thirtyDaysFromNow.getDate() + 30);
