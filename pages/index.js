@@ -44,6 +44,12 @@ const stripePromise = loadStripe(
 // Helper function to calculate total amount
 // Synchronous calculateTotal function for display purposes (approximation only)
 const calculateTotal = (formData, stripePrices, hoaProperties) => {
+  // Public Offering Statement flat pricing
+  if (formData.submitterType === 'builder' && formData.publicOffering) {
+    let total = 200.0;
+    if (formData.paymentMethod === 'credit_card') total += 9.95;
+    return total;
+  }
   if (formData.submitterType === 'settlement') {
     // Settlement agents - approximate pricing for display
     // Note: Actual pricing comes from database via calculateTotalDatabase()
@@ -341,6 +347,27 @@ const SubmitterInfoStep = React.memo(({ formData, handleInputChange }) => (
           );
         })}
       </div>
+      {formData.submitterType === 'builder' && (
+        <div className='mt-6 p-4 border border-amber-300 rounded-md bg-amber-50'>
+          <label className='flex items-start gap-3 cursor-pointer'>
+            <input
+              type='checkbox'
+              checked={!!formData.publicOffering}
+              onChange={(e) => handleInputChange('publicOffering', e.target.checked)}
+              className='mt-1 h-4 w-4 text-green-600 border-gray-300 rounded'
+            />
+            <div>
+              <div className='font-medium text-amber-900'>Request Public Offering Statement</div>
+              <div className='text-sm text-amber-800'>This special request skips other forms and goes straight to payment. Fixed fee: $200.</div>
+            </div>
+          </label>
+        </div>
+      )}
+      {formData.submitterType === 'builder' && formData.publicOffering && (
+        <div className='mt-2 text-sm text-green-800 bg-green-50 border border-green-200 rounded p-3'>
+          Public Offering Statement selected — transaction details will be skipped. You will proceed directly to payment.
+        </div>
+      )}
     </div>
 
     <div className='grid grid-cols-1 md:grid-cols-3 gap-6'>
@@ -466,7 +493,7 @@ const TransactionDetailsStep = ({ formData, handleInputChange }) => (
     <div className='bg-green-50 p-6 rounded-lg border border-green-200'>
       <h4 className='font-semibold text-green-900 mb-4 flex items-center'>
         <User className='h-5 w-5 mr-2' />
-        Seller Information
+        Seller Information (Optional)
       </h4>
       <div className='grid grid-cols-1 md:grid-cols-3 gap-4'>
         <input
@@ -751,6 +778,7 @@ const PackagePaymentStep = ({
           propertyAddress: '',
           unitNumber: '',
           submitterType: '',
+          publicOffering: false,
           submitterName: '',
           submitterEmail: '',
           submitterPhone: '',
@@ -1667,6 +1695,7 @@ export default function GMGResaleFlow() {
     propertyAddress: '',
     unitNumber: '',
     submitterType: '',
+    publicOffering: false,
     submitterName: '',
     submitterEmail: '',
     submitterPhone: '',
@@ -1879,7 +1908,10 @@ export default function GMGResaleFlow() {
     if (formData.submitterType && formData.hoaProperty && hoaProperties) {
       const selectedProperty = hoaProperties.find(prop => prop.name === formData.hoaProperty);
       if (selectedProperty) {
-        const newApplicationType = determineApplicationType(formData.submitterType, selectedProperty);
+        let newApplicationType = determineApplicationType(formData.submitterType, selectedProperty);
+        if (formData.submitterType === 'builder' && formData.publicOffering) {
+          newApplicationType = 'public_offering_statement';
+        }
         if (newApplicationType !== applicationType) {
           setApplicationType(newApplicationType);
           setFieldRequirements(getFieldRequirements(newApplicationType));
@@ -1891,7 +1923,7 @@ export default function GMGResaleFlow() {
         }
       }
     }
-  }, [formData.submitterType, formData.hoaProperty, hoaProperties, applicationType]);
+  }, [formData.submitterType, formData.hoaProperty, formData.publicOffering, hoaProperties, applicationType]);
 
   // Update pricing based on application type
   const updatePricingForApplicationType = React.useCallback(async (appType) => {
@@ -1915,22 +1947,27 @@ export default function GMGResaleFlow() {
       // Skip Transaction Details step for settlement agents
       if (currentStep === 2 && formData.submitterType === 'settlement') {
         setCurrentStep(4); // Jump to Package & Payment
+      } else if (currentStep === 2 && formData.submitterType === 'builder' && formData.publicOffering) {
+        // Skip Transaction Details for Public Offering Statement flow
+        setCurrentStep(4);
       } else {
         setCurrentStep(currentStep + 1);
       }
     }
-  }, [currentStep, saveDraftApplication, formData.submitterType]);
+  }, [currentStep, saveDraftApplication, formData.submitterType, formData.publicOffering]);
 
   const prevStep = React.useCallback(() => {
     if (currentStep > 1) {
       // Skip Transaction Details step when going back for settlement agents
       if (currentStep === 4 && formData.submitterType === 'settlement') {
         setCurrentStep(2); // Jump back to Submitter Info
+      } else if (currentStep === 4 && formData.submitterType === 'builder' && formData.publicOffering) {
+        setCurrentStep(2);
       } else {
         setCurrentStep(currentStep - 1);
       }
     }
-  }, [currentStep, formData.submitterType]);
+  }, [currentStep, formData.submitterType, formData.publicOffering]);
 
   // Delete draft application
   const deleteDraftApplication = React.useCallback(async (appId) => {

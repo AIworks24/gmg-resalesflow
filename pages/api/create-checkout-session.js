@@ -47,6 +47,68 @@ export default async function handler(req, res) {
       applicationType = 'standard'; // Fallback to standard
     }
 
+    // Public Offering Statement special handling
+    if (formData?.submitterType === 'builder' && formData?.publicOffering) {
+      const basePrice = 200.0;
+      const totalAmount = basePrice + (paymentMethod === 'credit_card' ? 9.95 : 0);
+      const basePriceCents = Math.round(basePrice * 100);
+      const creditCardFeeCents = paymentMethod === 'credit_card' ? 995 : 0;
+
+      const lineItems = [];
+      lineItems.push({
+        price_data: {
+          currency: 'usd',
+          product_data: {
+            name: 'Public Offering Statement',
+            description: 'Document request only',
+          },
+          unit_amount: basePriceCents,
+        },
+        quantity: 1,
+      });
+      if (creditCardFeeCents > 0) {
+        lineItems.push({
+          price_data: {
+            currency: 'usd',
+            product_data: { name: 'Credit Card Processing Fee' },
+            unit_amount: creditCardFeeCents,
+          },
+          quantity: 1,
+        });
+      }
+
+      const session = await stripe.checkout.sessions.create({
+        payment_method_types: ['card'],
+        line_items: lineItems,
+        mode: 'payment',
+        allow_promotion_codes: true,
+        success_url: `${req.headers.origin}/?payment_success=true&session_id={CHECKOUT_SESSION_ID}&app_id=${applicationId}`,
+        cancel_url: `${req.headers.origin}/?payment_cancelled=true&app_id=${applicationId}`,
+        metadata: {
+          applicationId: applicationId,
+          packageType: 'standard',
+          paymentMethod: paymentMethod,
+          specialRequest: 'public_offering_statement',
+        },
+        customer_email: formData.submitterEmail,
+        billing_address_collection: 'required',
+        shipping_address_collection: { allowed_countries: ['US'] },
+      });
+
+      // Update the application with the session ID
+      const { createClient } = await import('@supabase/supabase-js');
+      const supabase = createClient(
+        process.env.NEXT_PUBLIC_SUPABASE_URL,
+        process.env.SUPABASE_SERVICE_ROLE_KEY
+      );
+      await supabase
+        .from('applications')
+        .update({ stripe_session_id: session.id, payment_status: 'pending' })
+        .eq('id', applicationId);
+
+      return res.status(200).json({ sessionId: session.id });
+    }
+
     // Get pricing and messaging using database-driven approach
     let basePrice, totalAmount, messaging;
     try {

@@ -58,12 +58,21 @@ const AdminPropertiesManagement = ({ userRole }) => {
   const router = useRouter();
 
   useEffect(() => {
-    loadProperties();
-  }, []);
-
-  useEffect(() => {
     loadProperties(currentPage, searchTerm);
   }, [currentPage, pageSize]);
+
+  // Debounced search effect
+  useEffect(() => {
+    const timeoutId = setTimeout(() => {
+      if (searchTerm !== '') {
+        loadProperties(1, searchTerm); // Always search from page 1
+      } else {
+        loadProperties(currentPage, searchTerm);
+      }
+    }, 300);
+
+    return () => clearTimeout(timeoutId);
+  }, [searchTerm]);
 
   useEffect(() => {
     if (properties.length > 0) {
@@ -99,7 +108,7 @@ const AdminPropertiesManagement = ({ userRole }) => {
         .order('name', { ascending: true });
 
       // Apply search filter if provided
-      if (search.trim()) {
+      if (search && search.trim()) {
         query = query.or(`name.ilike.%${search}%,location.ilike.%${search}%,property_owner_name.ilike.%${search}%,property_owner_email.ilike.%${search}%`);
       }
 
@@ -114,6 +123,9 @@ const AdminPropertiesManagement = ({ userRole }) => {
       setTotalCount(count || 0);
     } catch (error) {
       console.error('Error loading properties:', error);
+      // Show error state instead of freezing
+      setProperties([]);
+      setTotalCount(0);
     } finally {
       setLoading(false);
     }
@@ -308,9 +320,8 @@ const AdminPropertiesManagement = ({ userRole }) => {
   const handleSearch = (value) => {
     setSearchTerm(value);
     setCurrentPage(1); // Reset to first page when searching
-    setTimeout(() => {
-      loadProperties(1, value);
-    }, 300); // Debounce search
+    // Remove the setTimeout and let the useEffect handle the loading
+    // This prevents race conditions with pagination
   };
 
   const totalPages = Math.ceil(totalCount / pageSize);
@@ -341,7 +352,11 @@ const AdminPropertiesManagement = ({ userRole }) => {
               </p>
             </div>
             <button
-              onClick={() => loadProperties(currentPage, searchTerm)}
+              onClick={() => {
+                setCurrentPage(1);
+                setSearchTerm('');
+                loadProperties(1, '');
+              }}
               disabled={loading}
               className='flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50'
             >
@@ -397,7 +412,23 @@ const AdminPropertiesManagement = ({ userRole }) => {
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
-              {properties.map((property) => (
+              {loading ? (
+                <tr>
+                  <td colSpan="5" className="px-6 py-12 text-center">
+                    <div className="flex items-center justify-center">
+                      <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600 mr-3"></div>
+                      <span className="text-gray-600">Loading properties...</span>
+                    </div>
+                  </td>
+                </tr>
+              ) : properties.length === 0 ? (
+                <tr>
+                  <td colSpan="5" className="px-6 py-12 text-center text-gray-500">
+                    No properties found
+                  </td>
+                </tr>
+              ) : (
+                properties.map((property) => (
                 <tr key={property.id} className="hover:bg-gray-50">
                   <td className="px-6 py-4 whitespace-nowrap">
                     <div className="text-sm font-medium text-gray-900">
@@ -474,7 +505,8 @@ const AdminPropertiesManagement = ({ userRole }) => {
                     </button>
                   </td>
                 </tr>
-              ))}
+                ))
+              )}
             </tbody>
           </table>
         </div>
