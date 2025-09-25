@@ -1890,7 +1890,7 @@ const AdminApplications = ({ userRole }) => {
                                   onClick={() => handleGeneratePDF(selectedApplication.forms.resaleCertificate.form_data, selectedApplication.id)}
                                   disabled={generatingPDF}
                                   className='px-4 py-2 bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed'
-                                  title="Generate or regenerate PDF"
+                                  title="Generate or regenerate PDF."
                                 >
                                   {generatingPDF ? 'Generating...' : 
                                     (taskStatuses.pdf === 'completed' || taskStatuses.pdf === 'update_needed' ? 'Regenerate' : 'Generate')
