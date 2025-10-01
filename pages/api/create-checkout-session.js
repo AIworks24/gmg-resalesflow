@@ -6,6 +6,10 @@ const {
   calculateTotalAmount,
   getApplicationTypeMessaging
 } = require('../../lib/applicationTypes');
+const { 
+  getAllPropertiesForTransaction,
+  calculateMultiCommunityPricing 
+} = require('../../lib/multiCommunityUtils');
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -28,6 +32,10 @@ export default async function handler(req, res) {
 
     // Determine application type using database-driven approach
     let applicationType;
+    let isMultiCommunity = false;
+    let allProperties = [];
+    let multiCommunityPricing = null;
+    
     try {
       // Fetch property information to determine application type
       const { data: hoaProperty, error: hoaError } = await supabase
@@ -42,16 +50,50 @@ export default async function handler(req, res) {
       }
 
       applicationType = determineApplicationType(formData.submitterType, hoaProperty);
+      
+      // Check if this is a multi-community property
+      if (hoaProperty.is_multi_community) {
+        isMultiCommunity = true;
+        console.log('Multi-community property detected:', hoaProperty.name);
+        
+        // Get all properties for this transaction (primary + linked)
+        allProperties = await getAllPropertiesForTransaction(hoaProperty.id);
+        console.log('All properties for transaction:', allProperties.map(p => p.name || p.property_name));
+        
+        // Calculate multi-community pricing
+        multiCommunityPricing = await calculateMultiCommunityPricing(
+          hoaProperty.id, 
+          packageType, 
+          applicationType
+        );
+        console.log('Multi-community pricing:', multiCommunityPricing);
+      } else {
+        allProperties = [hoaProperty];
+      }
     } catch (error) {
       console.error('Error determining application type:', error);
       applicationType = 'standard'; // Fallback to standard
+      // Try to get the property for fallback
+      try {
+        const { data: hoaProperty } = await supabase
+          .from('hoa_properties')
+          .select('*')
+          .eq('name', formData.hoaProperty)
+          .single();
+        allProperties = hoaProperty ? [hoaProperty] : [];
+      } catch (fallbackError) {
+        console.error('Error fetching property for fallback:', fallbackError);
+        allProperties = [];
+      }
     }
 
     // Public Offering Statement special handling
     if (formData?.submitterType === 'builder' && formData?.publicOffering) {
       const basePrice = 200.0;
-      const totalAmount = basePrice + (paymentMethod === 'credit_card' ? 9.95 : 0);
+      const rushFee = packageType === 'rush' ? 70.66 : 0;
+      const totalAmount = basePrice + rushFee + (paymentMethod === 'credit_card' ? 9.95 : 0);
       const basePriceCents = Math.round(basePrice * 100);
+      const rushFeeCents = Math.round(rushFee * 100);
       const creditCardFeeCents = paymentMethod === 'credit_card' ? 995 : 0;
 
       const lineItems = [];
@@ -66,6 +108,19 @@ export default async function handler(req, res) {
         },
         quantity: 1,
       });
+      if (rushFeeCents > 0) {
+        lineItems.push({
+          price_data: {
+            currency: 'usd',
+            product_data: {
+              name: 'Rush Processing',
+              description: '5 business days',
+            },
+            unit_amount: rushFeeCents,
+          },
+          quantity: 1,
+        });
+      }
       if (creditCardFeeCents > 0) {
         lineItems.push({
           price_data: {
@@ -111,32 +166,43 @@ export default async function handler(req, res) {
 
     // Get pricing and messaging using database-driven approach
     let basePrice, totalAmount, messaging;
-    try {
-      // Get base price without credit card fee
-      basePrice = await getApplicationTypePricing(applicationType, packageType);
-      
-      // Get total amount including credit card fee
-      totalAmount = await calculateTotalAmount(applicationType, packageType, paymentMethod);
-      
-      // Get messaging for the application type
+    
+    if (isMultiCommunity && multiCommunityPricing) {
+      // Use multi-community pricing
+      basePrice = multiCommunityPricing.subtotal;
+      totalAmount = multiCommunityPricing.total + (paymentMethod === 'credit_card' ? 9.95 : 0);
       messaging = getApplicationTypeMessaging(applicationType);
       
-      console.log(`Database pricing: Type=${applicationType}, Package=${packageType}, Base=${basePrice}, Total=${totalAmount}`);
-    } catch (error) {
-      console.error('Database pricing error:', error);
-      // Fallback pricing
-      if (formData.submitterType === 'settlement') {
-        basePrice = 200.00;
-        totalAmount = basePrice + (paymentMethod === 'credit_card' ? 9.95 : 0);
-      } else {
-        basePrice = 317.95;
-        if (packageType === 'rush') basePrice += 70.66;
-        totalAmount = basePrice + (paymentMethod === 'credit_card' ? 9.95 : 0);
+      console.log(`Multi-community pricing: Base=${basePrice}, Total=${totalAmount}, Properties=${allProperties.length}`);
+    } else {
+      // Single property pricing
+      try {
+        // Get base price without credit card fee
+        basePrice = await getApplicationTypePricing(applicationType, packageType);
+        
+        // Get total amount including credit card fee
+        totalAmount = await calculateTotalAmount(applicationType, packageType, paymentMethod);
+        
+        // Get messaging for the application type
+        messaging = getApplicationTypeMessaging(applicationType);
+        
+        console.log(`Database pricing: Type=${applicationType}, Package=${packageType}, Base=${basePrice}, Total=${totalAmount}`);
+      } catch (error) {
+        console.error('Database pricing error:', error);
+        // Fallback pricing
+        if (formData.submitterType === 'settlement') {
+          basePrice = 200.00;
+          totalAmount = basePrice + (paymentMethod === 'credit_card' ? 9.95 : 0);
+        } else {
+          basePrice = 317.95;
+          if (packageType === 'rush') basePrice += 70.66;
+          totalAmount = basePrice + (paymentMethod === 'credit_card' ? 9.95 : 0);
+        }
+        messaging = {
+          title: 'Application Processing',
+          formType: 'Standard Form'
+        };
       }
-      messaging = {
-        title: 'Application Processing',
-        formType: 'Standard Form'
-      };
     }
 
     // Convert to cents for Stripe
@@ -170,19 +236,60 @@ export default async function handler(req, res) {
     // Create line items for the checkout session
     const lineItems = [];
     
-    // Add base price item
-    if (basePriceCents > 0) {
-      lineItems.push({
-        price_data: {
-          currency: 'usd',
-          product_data: {
-            name: `${messaging.formType} - ${packageType === 'rush' ? 'Rush' : 'Standard'} Processing`,
-            description: `${messaging.formType} for ${formData.propertyAddress || 'your property'} (${packageType === 'rush' ? '5 business days' : '10-15 business days'})`,
-          },
-          unit_amount: basePriceCents,
-        },
-        quantity: 1,
+    if (isMultiCommunity && multiCommunityPricing) {
+      // Multi-community: Create separate line items for each association
+      const pricePerAssociation = multiCommunityPricing.basePricePerProperty;
+      const pricePerAssociationCents = Math.round(pricePerAssociation * 100);
+      
+      allProperties.forEach((property, index) => {
+        const propertyName = property.name || property.property_name;
+        const isPrimary = index === 0;
+        
+        if (pricePerAssociationCents > 0) {
+          lineItems.push({
+            price_data: {
+              currency: 'usd',
+              product_data: {
+                name: `${messaging.formType} - ${propertyName}${isPrimary ? ' (Primary)' : ''}`,
+                description: `${messaging.formType} for ${propertyName} (${packageType === 'rush' ? '5 business days' : '10-15 business days'})`,
+              },
+              unit_amount: pricePerAssociationCents,
+            },
+            quantity: 1,
+          });
+        }
       });
+      
+      // Add transaction fees as separate line items
+      if (multiCommunityPricing.transactionFees > 0) {
+        const transactionFeeCents = Math.round(multiCommunityPricing.transactionFees * 100);
+        lineItems.push({
+          price_data: {
+            currency: 'usd',
+            product_data: {
+              name: 'Transaction Fees',
+              description: `Processing fees for ${allProperties.length} associations`,
+            },
+            unit_amount: transactionFeeCents,
+          },
+          quantity: 1,
+        });
+      }
+    } else {
+      // Single property: Add base price item
+      if (basePriceCents > 0) {
+        lineItems.push({
+          price_data: {
+            currency: 'usd',
+            product_data: {
+              name: `${messaging.formType} - ${packageType === 'rush' ? 'Rush' : 'Standard'} Processing`,
+              description: `${messaging.formType} for ${formData.propertyAddress || 'your property'} (${packageType === 'rush' ? '5 business days' : '10-15 business days'})`,
+            },
+            unit_amount: basePriceCents,
+          },
+          quantity: 1,
+        });
+      }
     }
 
     // Add payment processing fee if credit card
@@ -215,6 +322,10 @@ export default async function handler(req, res) {
         propertyAddress: formData.propertyAddress || '',
         customerName: formData.submitterName || '',
         customerEmail: formData.submitterEmail || '',
+        isMultiCommunity: isMultiCommunity.toString(),
+        propertyCount: allProperties.length.toString(),
+        primaryProperty: allProperties[0]?.name || formData.hoaProperty,
+        linkedProperties: isMultiCommunity ? allProperties.slice(1).map(p => p.name || p.property_name).join(',') : '',
       },
       customer_email: formData.submitterEmail,
       billing_address_collection: 'required',

@@ -44,11 +44,12 @@ const stripePromise = loadStripe(
 // Helper function to calculate total amount
 // Synchronous calculateTotal function for display purposes (approximation only)
 const calculateTotal = (formData, stripePrices, hoaProperties) => {
-  // Public Offering Statement flat pricing
+  // Public Offering Statement pricing
   if (formData.submitterType === 'builder' && formData.publicOffering) {
     let total = 200.0;
+    if (formData.packageType === 'rush') total += 70.66;
     if (formData.paymentMethod === 'credit_card') total += 9.95;
-    return total;
+    return Math.round(total * 100) / 100; // Round to 2 decimal places
   }
   if (formData.submitterType === 'settlement') {
     // Settlement agents - approximate pricing for display
@@ -74,14 +75,14 @@ const calculateTotal = (formData, stripePrices, hoaProperties) => {
         if (formData.paymentMethod === 'credit_card' && total > 0) {
           total += 9.95; // Credit card fee
         }
-        return total;
+        return Math.round(total * 100) / 100; // Round to 2 decimal places
       } else if (location.includes('NC') || location.includes('NORTH CAROLINA')) {
         // North Carolina: $450 standard, $550 rush
         let total = isRush ? 550.00 : 450.00;
         if (formData.paymentMethod === 'credit_card') {
           total += 9.95; // Credit card fee
         }
-        return total;
+        return Math.round(total * 100) / 100; // Round to 2 decimal places
       }
     }
     
@@ -98,7 +99,7 @@ const calculateTotal = (formData, stripePrices, hoaProperties) => {
     let total = basePrice;
     if (formData.packageType === 'rush') total += 70.66;
     if (formData.paymentMethod === 'credit_card') total += 9.95;
-    return total;
+    return Math.round(total * 100) / 100; // Round to 2 decimal places
   }
 
   // Use regular pricing
@@ -109,7 +110,7 @@ const calculateTotal = (formData, stripePrices, hoaProperties) => {
   if (formData.paymentMethod === 'credit_card') {
     total += stripePrices.convenienceFee.display;
   }
-  return total;
+  return Math.round(total * 100) / 100; // Round to 2 decimal places
 };
 
 // Async calculateTotalDatabase function using database-driven pricing for payment logic
@@ -139,6 +140,8 @@ const HOASelectionStep = React.memo(
   ({ formData, handleInputChange, hoaProperties }) => {
     const [query, setQuery] = React.useState('');
     const [showDropdown, setShowDropdown] = React.useState(false);
+    const [multiCommunityNotification, setMultiCommunityNotification] = React.useState(null);
+    const [linkedProperties, setLinkedProperties] = React.useState([]);
     const inputRef = React.useRef(null);
 
     // Filter HOA options based on query
@@ -169,16 +172,50 @@ const HOASelectionStep = React.memo(
     };
 
     // When a HOA is selected
-    const selectHOA = (hoa) => {
+    const selectHOA = async (hoa) => {
       handleInputChange('hoaProperty', hoa.name);
       setQuery(hoa.name + (hoa.location ? ` - ${hoa.location}` : ''));
       setShowDropdown(false);
+      
+      // Check if this is a multi-community property
+      if (hoa.is_multi_community) {
+        try {
+          // Import the multi-community utilities
+          const { getLinkedProperties, generateMultiCommunityNotification, calculateMultiCommunityPricing } = await import('../lib/multiCommunityUtils');
+          
+          // Get linked properties
+          const linked = await getLinkedProperties(hoa.id);
+          setLinkedProperties(linked);
+          
+          // Calculate pricing for multi-community
+          const pricing = await calculateMultiCommunityPricing(hoa.id, formData.packageType || 'standard', 'standard');
+          
+          // Generate notification
+          const notification = generateMultiCommunityNotification(hoa.id, linked, pricing);
+          setMultiCommunityNotification(notification);
+        } catch (error) {
+          console.error('Error loading multi-community data:', error);
+          // Show a basic notification if we can't load detailed data
+          setMultiCommunityNotification({
+            type: 'multi_community',
+            title: 'Multi-Community Association Detected',
+            message: 'This property is part of a Master Association. Additional documents and fees will be included.',
+            showWarning: true
+          });
+        }
+      } else {
+        // Clear multi-community notification if property is not multi-community
+        setMultiCommunityNotification(null);
+        setLinkedProperties([]);
+      }
     };
 
     // Keep input in sync with formData
     React.useEffect(() => {
       if (!formData.hoaProperty) {
         setQuery('');
+        setMultiCommunityNotification(null);
+        setLinkedProperties([]);
       } else {
         // Find the HOA object to get the full display text with location
         const selectedHOA = (hoaProperties || []).find(hoa => hoa.name === formData.hoaProperty);
@@ -286,7 +323,62 @@ const HOASelectionStep = React.memo(
           </div>
         </div>
 
-        {formData.hoaProperty && (
+        {/* Multi-Community Notification (no pricing on this step) */}
+        {multiCommunityNotification && (
+          <div className={`p-4 rounded-lg border ${
+            multiCommunityNotification.showWarning 
+              ? 'bg-blue-50 border-blue-200' 
+              : 'bg-yellow-50 border-yellow-200'
+          }`}>
+            <div className='flex items-start'>
+              <AlertCircle className={`h-5 w-5 mt-0.5 mr-2 ${
+                multiCommunityNotification.showWarning 
+                  ? 'text-blue-600' 
+                  : 'text-yellow-600'
+              }`} />
+              <div className='flex-1'>
+                <h4 className={`font-medium ${
+                  multiCommunityNotification.showWarning 
+                    ? 'text-blue-900' 
+                    : 'text-yellow-900'
+                }`}>
+                  Multi-Community Association Detected
+                </h4>
+                <p className={`text-sm mt-1 ${
+                  multiCommunityNotification.showWarning 
+                    ? 'text-blue-700' 
+                    : 'text-yellow-700'
+                }`}>
+                  Your property is part of a Master Association. Additional documents and fees will be included.
+                </p>
+
+                {multiCommunityNotification.details && multiCommunityNotification.details.associations && (
+                  <div className='mt-3'>
+                    <div className='text-sm font-medium text-gray-900 mb-2'>
+                      Included Associations:
+                    </div>
+                    <div className='space-y-1'>
+                      {multiCommunityNotification.details.associations.map((association, index) => (
+                        <div key={index} className='flex items-center text-sm text-gray-600'>
+                          <div className={`w-2 h-2 rounded-full mr-2 ${
+                            association.isPrimary ? 'bg-green-500' : 'bg-blue-500'
+                          }`}></div>
+                          <span className={association.isPrimary ? 'font-medium' : ''}>
+                            {association.name}
+                            {association.isPrimary && ' (Primary)'}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Standard HOA Documents Ready notification */}
+        {formData.hoaProperty && !multiCommunityNotification && (
           <div className='bg-green-50 p-4 rounded-lg border border-green-200'>
             <div className='flex items-start'>
               <CheckCircle className='h-5 w-5 text-green-600 mt-0.5 mr-2' />
@@ -1069,9 +1161,24 @@ const PackagePaymentStep = ({
             <div className='text-right'>
               <div className='text-lg text-gray-500'>
                 ${(() => {
-                  const tempFormData = { ...formData, packageType: 'standard' };
-                  const baseTotal = calculateTotal(tempFormData, stripePrices, hoaProperties);
-                  return baseTotal.toFixed(2);
+                  // Show base processing fee only (no rush, no credit card fees)
+                  if (formData.submitterType === 'builder' && formData.publicOffering) {
+                    return '200.00';
+                  }
+                  if (formData.submitterType === 'settlement') {
+                    const selectedProperty = hoaProperties?.find(prop => prop.name === formData.hoaProperty);
+                    if (selectedProperty?.location) {
+                      const location = selectedProperty.location.toUpperCase();
+                      if (location.includes('VA') || location.includes('VIRGINIA')) {
+                        return '0.00';
+                      } else if (location.includes('NC') || location.includes('NORTH CAROLINA')) {
+                        return '450.00';
+                      }
+                    }
+                    return '200.00'; // Fallback
+                  }
+                  // Regular pricing
+                  return stripePrices ? stripePrices.standard.displayAmount.toFixed(2) : '317.95';
                 })()}
               </div>
               <div className='text-sm text-gray-500'>
@@ -1167,9 +1274,27 @@ const PackagePaymentStep = ({
             <div className='flex justify-between'>
               <span>Processing Fee:</span>
               <span>${(() => {
-                const tempFormData = { ...formData, paymentMethod: '' };
-                const baseAmount = calculateTotal(tempFormData, stripePrices, hoaProperties);
-                return baseAmount.toFixed(2);
+                // Calculate base processing fee only (no rush, no credit card fees)
+                if (formData.submitterType === 'builder' && formData.publicOffering) {
+                  return '200.00';
+                }
+                if (formData.submitterType === 'settlement') {
+                  const selectedProperty = hoaProperties?.find(prop => prop.name === formData.hoaProperty);
+                  if (selectedProperty?.location) {
+                    const location = selectedProperty.location.toUpperCase();
+                    if (location.includes('VA') || location.includes('VIRGINIA')) {
+                      return '0.00';
+                    } else if (location.includes('NC') || location.includes('NORTH CAROLINA')) {
+                      return '450.00';
+                    }
+                  }
+                  return '200.00'; // Fallback for settlement
+                }
+                // Regular pricing for all other submitter types (seller, realtor, admin)
+                if (stripePrices && stripePrices.standard && stripePrices.standard.displayAmount) {
+                  return stripePrices.standard.displayAmount.toFixed(2);
+                }
+                return '317.95'; // Fallback for regular pricing
               })()}</span>
             </div>
             {formData.packageType === 'rush' && (
@@ -1186,7 +1311,7 @@ const PackagePaymentStep = ({
             )}
             <div className='border-t border-green-200 pt-2 flex justify-between font-semibold text-green-900'>
               <span>Total:</span>
-              <span>${calculateTotal(formData, stripePrices, hoaProperties)}</span>
+              <span>${calculateTotal(formData, stripePrices, hoaProperties).toFixed(2)}</span>
             </div>
           </div>
         </div>
@@ -1222,7 +1347,7 @@ const PackagePaymentStep = ({
               Processing...
             </>
           ) : (
-            formData.paymentMethod === 'credit_card' ? 'Continue to Checkout' : `Pay $${calculateTotal(formData, stripePrices, hoaProperties)}`
+            formData.paymentMethod === 'credit_card' ? 'Continue to Checkout' : `Pay $${calculateTotal(formData, stripePrices, hoaProperties).toFixed(2)}`
           )}
         </button>
       </div>
@@ -1487,7 +1612,7 @@ const AuthModal = ({ authMode, setAuthMode, setShowAuthModal, handleAuth, resetP
   );
 };
 
-const ReviewSubmitStep = ({ formData, stripePrices, applicationId }) => {
+const ReviewSubmitStep = ({ formData, stripePrices, applicationId, hoaProperties }) => {
   // Check if user just returned from payment
   const [showPaymentSuccess, setShowPaymentSuccess] = React.useState(false);
   
@@ -1622,7 +1747,7 @@ const ReviewSubmitStep = ({ formData, stripePrices, applicationId }) => {
               : 'Bank Transfer'}
           </div>
           <div>
-            <span className='font-medium'>Total:</span> ${calculateTotal(formData, stripePrices, hoaProperties)}
+            <span className='font-medium'>Total:</span> ${calculateTotal(formData, stripePrices, hoaProperties).toFixed(2)}
           </div>
         </div>
       </div>
@@ -1773,6 +1898,7 @@ export default function GMGResaleFlow() {
         propertyAddress: data.property_address || '',
         unitNumber: data.unit_number || '',
         submitterType: data.submitter_type || '',
+        publicOffering: data.application_type === 'public_offering_statement',
         submitterName: data.submitter_name || '',
         submitterEmail: data.submitter_email || '',
         submitterPhone: data.submitter_phone || '',
@@ -2088,6 +2214,7 @@ export default function GMGResaleFlow() {
       propertyAddress: '',
       unitNumber: '',
       submitterType: '',
+      publicOffering: false,
       submitterName: autoFillData.submitterName,
       submitterEmail: autoFillData.submitterEmail,
       submitterPhone: '',
@@ -2394,6 +2521,7 @@ export default function GMGResaleFlow() {
         propertyAddress: '',
         unitNumber: '',
         submitterType: '',
+        publicOffering: false,
         submitterName: '',
         submitterEmail: '',
         submitterPhone: '',
@@ -2938,6 +3066,7 @@ export default function GMGResaleFlow() {
             formData={formData}
             stripePrices={stripePrices}
             applicationId={applicationId}
+            hoaProperties={hoaProperties}
           />
         );
       default:
@@ -3199,7 +3328,7 @@ export default function GMGResaleFlow() {
               className='px-8 py-3 bg-green-700 text-white rounded-lg hover:bg-green-800 transition-colors flex items-center gap-2'
             >
               <CheckCircle className='h-5 w-5' />
-              {applicationId ? 'Submit Application' : `Submit Application & Pay $${calculateTotal(formData, stripePrices, hoaProperties)}`}
+              {applicationId ? 'Submit Application' : `Submit Application & Pay $${calculateTotal(formData, stripePrices, hoaProperties).toFixed(2)}`}
             </button>
           ) : null}
         </div>
