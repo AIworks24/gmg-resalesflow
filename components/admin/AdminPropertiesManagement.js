@@ -376,10 +376,20 @@ const AdminPropertiesManagement = ({ userRole }) => {
     }
   };
 
-  const openLinkModal = (property) => {
+  const openLinkModal = async (property) => {
     setLinkingProperty(property);
     setSelectedLinkedProperties([]);
     loadAvailableProperties();
+    
+    // Load existing linked properties for this property
+    try {
+      const linked = await getLinkedProperties(property.id);
+      setLinkedProperties(linked);
+    } catch (error) {
+      console.error('Error loading linked properties:', error);
+      setLinkedProperties([]);
+    }
+    
     setShowLinkModal(true);
   };
 
@@ -422,11 +432,36 @@ const AdminPropertiesManagement = ({ userRole }) => {
     }
   };
 
-  const handleMultiCommunityToggle = (checked) => {
+  const handleMultiCommunityToggle = async (checked) => {
     setIsMultiCommunity(checked);
     setFormData({...formData, is_multi_community: checked});
     
-    if (!checked) {
+    if (!checked && linkedProperties.length > 0) {
+      // Warn user about existing links
+      const confirmUnlink = confirm(
+        `This property has ${linkedProperties.length} linked properties. Unchecking this will remove all property links. Do you want to continue?`
+      );
+      
+      if (confirmUnlink) {
+        try {
+          // Unlink all properties
+          const linkedIds = linkedProperties.map(prop => prop.linked_property_id);
+          await unlinkProperties(selectedProperty.id, linkedIds);
+          setLinkedProperties([]);
+          alert('All property links have been removed.');
+        } catch (error) {
+          console.error('Error unlinking properties:', error);
+          alert('Error removing property links: ' + error.message);
+          // Revert the checkbox
+          setIsMultiCommunity(true);
+          setFormData({...formData, is_multi_community: true});
+        }
+      } else {
+        // User cancelled, revert the checkbox
+        setIsMultiCommunity(true);
+        setFormData({...formData, is_multi_community: true});
+      }
+    } else if (!checked) {
       setLinkedProperties([]);
     }
   };
