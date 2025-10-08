@@ -44,6 +44,21 @@ const stripePromise = loadStripe(
 // Helper function to calculate total amount
 // Synchronous calculateTotal function for display purposes (approximation only)
 const calculateTotal = (formData, stripePrices, hoaProperties) => {
+  // Check for multi-community pricing first
+  if (formData.hoaProperty && hoaProperties) {
+    const selectedProperty = hoaProperties.find(prop => prop.name === formData.hoaProperty);
+    if (selectedProperty && selectedProperty.is_multi_community) {
+      // Multi-community pricing: 3 properties × base price + rush fees + convenience fee
+      const basePricePerProperty = 317.95;
+      const propertyCount = 3; // Primary + 2 linked properties
+      const rushFeePerProperty = formData.packageType === 'rush' ? 70.66 : 0;
+      const convenienceFee = formData.paymentMethod === 'credit_card' ? 9.95 : 0;
+      
+      const total = (basePricePerProperty + rushFeePerProperty) * propertyCount + convenienceFee;
+      return Math.round(total * 100) / 100;
+    }
+  }
+
   // Public Offering Statement pricing
   if (formData.submitterType === 'builder' && formData.publicOffering) {
     let total = 200.0;
@@ -116,7 +131,27 @@ const calculateTotal = (formData, stripePrices, hoaProperties) => {
 // Async calculateTotalDatabase function using database-driven pricing for payment logic
 const calculateTotalDatabase = async (formData, hoaProperties, applicationType) => {
   try {
-    // Import calculateTotalAmount function
+    // Check for multi-community pricing first
+    if (formData.hoaProperty && hoaProperties) {
+      const selectedProperty = hoaProperties.find(prop => prop.name === formData.hoaProperty);
+      if (selectedProperty && selectedProperty.is_multi_community) {
+        // Import multi-community utilities
+        const { calculateMultiCommunityPricing } = await import('../lib/multiCommunityUtils');
+        
+        // Calculate multi-community pricing
+        const pricing = await calculateMultiCommunityPricing(
+          selectedProperty.id,
+          formData.packageType,
+          applicationType
+        );
+        
+        // Add convenience fee if credit card
+        const convenienceFee = formData.paymentMethod === 'credit_card' ? 9.95 : 0;
+        return pricing.total + convenienceFee;
+      }
+    }
+    
+    // Single property pricing
     const { calculateTotalAmount } = await import('../lib/applicationTypes');
     
     // Calculate total using database-driven pricing
@@ -1816,6 +1851,7 @@ const AuthModal = ({ authMode, setAuthMode, setShowAuthModal, handleAuth, resetP
 const ReviewSubmitStep = ({ formData, stripePrices, applicationId, hoaProperties }) => {
   // Check if user just returned from payment
   const [showPaymentSuccess, setShowPaymentSuccess] = React.useState(false);
+  const [multiCommunityInfo, setMultiCommunityInfo] = React.useState(null);
   
   React.useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -1826,6 +1862,29 @@ const ReviewSubmitStep = ({ formData, stripePrices, applicationId, hoaProperties
       }
     }
   }, []);
+
+  // Load multi-community information
+  React.useEffect(() => {
+    const loadMultiCommunityInfo = async () => {
+      if (formData.hoaProperty && hoaProperties) {
+        const selectedProperty = hoaProperties.find(prop => prop.name === formData.hoaProperty);
+        if (selectedProperty && selectedProperty.is_multi_community) {
+          try {
+            const { getLinkedProperties } = await import('../lib/multiCommunityUtils');
+            const linkedProperties = await getLinkedProperties(selectedProperty.id);
+            setMultiCommunityInfo({
+              primaryProperty: selectedProperty,
+              linkedProperties: linkedProperties
+            });
+          } catch (error) {
+            console.error('Error loading multi-community info:', error);
+          }
+        }
+      }
+    };
+    
+    loadMultiCommunityInfo();
+  }, [formData.hoaProperty, hoaProperties]);
 
   return (
     <div className='space-y-6'>
@@ -1840,6 +1899,36 @@ const ReviewSubmitStep = ({ formData, stripePrices, applicationId, hoaProperties
               <p className='text-sm text-green-700'>
                 Your payment has been processed successfully. Please review your information below and submit your application.
               </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Multi-Community Information */}
+      {multiCommunityInfo && (
+        <div className='bg-blue-50 border border-blue-200 rounded-lg p-6 mb-6'>
+          <div className='flex items-start'>
+            <Building2 className='h-6 w-6 text-blue-600 mr-3 mt-0.5' />
+            <div className='flex-1'>
+              <h4 className='text-lg font-semibold text-blue-900 mb-2'>
+                Multi-Community Association Detected
+              </h4>
+              <p className='text-sm text-blue-700 mb-3'>
+                Your property is part of multiple community associations. Additional documents and fees have been included for the following associations:
+              </p>
+              <div className='space-y-2'>
+                <div className='flex items-center text-sm'>
+                  <span className='w-2 h-2 bg-blue-600 rounded-full mr-2'></span>
+                  <span className='font-medium text-blue-900'>{multiCommunityInfo.primaryProperty.name}</span>
+                  <span className='ml-2 px-2 py-1 bg-blue-100 text-blue-700 rounded text-xs'>Primary</span>
+                </div>
+                {multiCommunityInfo.linkedProperties.map((property, index) => (
+                  <div key={index} className='flex items-center text-sm'>
+                    <span className='w-2 h-2 bg-blue-400 rounded-full mr-2'></span>
+                    <span className='text-blue-800'>{property.property_name}</span>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         </div>
@@ -1866,7 +1955,7 @@ const ReviewSubmitStep = ({ formData, stripePrices, applicationId, hoaProperties
           </div>
           <div>
             <span className='font-medium'>Address:</span>{' '}
-            {formData.propertyAddress} {formData.unitNumber}
+            {formData.propertyAddress}{formData.unitNumber ? ` ${formData.unitNumber}` : ''}
           </div>
           <div>
             <span className='font-medium'>Sale Price:</span> $
