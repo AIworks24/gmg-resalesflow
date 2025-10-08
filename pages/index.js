@@ -6,15 +6,6 @@ import { useAppContext } from '../lib/AppContext';
 import { useApplicantAuth } from '../providers/ApplicantAuthProvider';
 import useApplicantAuthStore from '../stores/applicantAuthStore';
 // Removed pricingUtils import - using database-driven pricing instead
-import { 
-  determineApplicationType, 
-  getApplicationTypePricing, 
-  getFormSteps, 
-  getFieldRequirements, 
-  getApplicationTypeMessaging,
-  calculateTotalAmount,
-  isPaymentRequired 
-} from '../lib/applicationTypes';
 import Image from 'next/image';
 import companyLogo from '../assets/company_logo.png';
 import {
@@ -137,7 +128,7 @@ const calculateTotal = (formData, stripePrices, hoaProperties) => {
 };
 
 // Async calculateTotalDatabase function using database-driven pricing for payment logic
-const calculateTotalDatabase = async (formData, hoaProperties, applicationType) => {
+const calculateTotalDatabase = async (formData, hoaProperties) => {
   try {
     // Check for multi-community pricing first
     if (formData.hoaProperty && hoaProperties) {
@@ -150,7 +141,7 @@ const calculateTotalDatabase = async (formData, hoaProperties, applicationType) 
         const pricing = await calculateMultiCommunityPricing(
           selectedProperty.id,
           formData.packageType,
-          applicationType
+          'standard'
         );
         
         // Add convenience fee if credit card
@@ -159,15 +150,8 @@ const calculateTotalDatabase = async (formData, hoaProperties, applicationType) 
       }
     }
     
-    // Single property pricing
-    const { calculateTotalAmount } = await import('../lib/applicationTypes');
-    
-    // Calculate total using database-driven pricing
-    const total = await calculateTotalAmount(
-      applicationType,
-      formData.packageType,
-      formData.paymentMethod
-    );
+    // Calculate total using standard pricing
+    const total = calculateTotal(formData, null, hoaProperties);
     
     return total;
   } catch (error) {
@@ -829,7 +813,7 @@ const PackagePaymentStep = ({
 
     try {
       // Calculate total amount for payment bypass check using database pricing
-      const totalAmount = await calculateTotalDatabase(formData, hoaProperties, applicationType);
+      const totalAmount = await calculateTotalDatabase(formData, hoaProperties);
       
       // Check if payment is required (bypass for $0 transactions)
       if (totalAmount === 0) {
@@ -848,7 +832,6 @@ const PackagePaymentStep = ({
             property_address: formData.propertyAddress,
             unit_number: formData.unitNumber,
             submitter_type: formData.submitterType,
-            application_type: applicationType,
             submitter_name: formData.submitterName,
             submitter_email: formData.submitterEmail,
             submitter_phone: formData.submitterPhone,
@@ -896,7 +879,6 @@ const PackagePaymentStep = ({
             property_address: formData.propertyAddress,
             unit_number: formData.unitNumber,
             submitter_type: formData.submitterType,
-            application_type: applicationType,
             submitter_name: formData.submitterName,
             submitter_email: formData.submitterEmail,
             submitter_phone: formData.submitterPhone,
@@ -1027,7 +1009,6 @@ const PackagePaymentStep = ({
             property_address: formData.propertyAddress,
             unit_number: formData.unitNumber,
             submitter_type: formData.submitterType,
-            application_type: applicationType,
             submitter_name: formData.submitterName,
             submitter_email: formData.submitterEmail,
             submitter_phone: formData.submitterPhone,
@@ -1073,7 +1054,6 @@ const PackagePaymentStep = ({
             property_address: formData.propertyAddress,
             unit_number: formData.unitNumber,
             submitter_type: formData.submitterType,
-            application_type: applicationType,
             submitter_name: formData.submitterName,
             submitter_email: formData.submitterEmail,
             submitter_phone: formData.submitterPhone,
@@ -2213,7 +2193,6 @@ export default function GMGResaleFlow() {
   });
 
   // Application type state
-  const [applicationType, setApplicationType] = useState('standard');
   const [fieldRequirements, setFieldRequirements] = useState(null);
   const [customMessaging, setCustomMessaging] = useState(null);
   const [formSteps, setFormSteps] = useState([]);
@@ -2272,7 +2251,7 @@ export default function GMGResaleFlow() {
         propertyAddress: data.property_address || '',
         unitNumber: data.unit_number || '',
         submitterType: data.submitter_type || '',
-        publicOffering: data.application_type === 'public_offering_statement',
+        publicOffering: false,
         submitterName: data.submitter_name || '',
         submitterEmail: data.submitter_email || '',
         submitterPhone: data.submitter_phone || '',
@@ -2404,39 +2383,7 @@ export default function GMGResaleFlow() {
   }, [user, currentStep, hoaProperties, formData, stripePrices, applicationId]);
 
   // Update application type when submitter type or property changes
-  React.useEffect(() => {
-    if (formData.submitterType && formData.hoaProperty && hoaProperties) {
-      const selectedProperty = hoaProperties.find(prop => prop.name === formData.hoaProperty);
-      if (selectedProperty) {
-        let newApplicationType = determineApplicationType(formData.submitterType, selectedProperty);
-        if (formData.submitterType === 'builder' && formData.publicOffering) {
-          newApplicationType = 'public_offering_statement';
-        }
-        if (newApplicationType !== applicationType) {
-          setApplicationType(newApplicationType);
-          setFieldRequirements(getFieldRequirements(newApplicationType));
-          setCustomMessaging(getApplicationTypeMessaging(newApplicationType));
-          setFormSteps(getFormSteps(newApplicationType));
-          
-          // Update pricing when application type changes
-          updatePricingForApplicationType(newApplicationType);
-        }
-      }
-    }
-  }, [formData.submitterType, formData.hoaProperty, formData.publicOffering, hoaProperties, applicationType]);
 
-  // Update pricing based on application type
-  const updatePricingForApplicationType = React.useCallback(async (appType) => {
-    try {
-      const newTotal = await calculateTotalAmount(appType, formData.packageType, formData.paymentMethod);
-      setFormData(prev => ({
-        ...prev,
-        totalAmount: newTotal
-      }));
-    } catch (error) {
-      console.error('Error updating pricing:', error);
-    }
-  }, [formData.packageType, formData.paymentMethod]);
 
   // Memoize other handlers
   const nextStep = React.useCallback(async () => {
@@ -2627,17 +2574,10 @@ export default function GMGResaleFlow() {
         applicationId
       );
 
-      // Get application type to determine required forms
-      const applicationTypeToUse = applicationData.application_type || applicationType || 'standard';
-      
-      // Import the getApplicationTypeData function
-      const { getApplicationTypeData } = await import('../lib/applicationTypes');
-      
-      // Get application type data to determine required forms
-      const appTypeData = await getApplicationTypeData(applicationTypeToUse);
-      const requiredForms = appTypeData.required_forms || [];
+      // Create standard forms
+      const requiredForms = ['resale_certificate', 'inspection_form'];
 
-      console.log(`Creating forms for application type: ${applicationTypeToUse}, Required forms: ${JSON.stringify(requiredForms)}`);
+      console.log(`Creating standard forms: ${JSON.stringify(requiredForms)}`);
 
       // Determine recipient email (property owner email, or fallback to submitter)
       const recipientEmail =
@@ -2656,9 +2596,7 @@ export default function GMGResaleFlow() {
           Date.now() + 30 * 24 * 60 * 60 * 1000
         ).toISOString(), // 30 days from now
         created_at: new Date().toISOString(),
-        notes: applicationTypeToUse.startsWith('settlement_agent') 
-          ? 'Settlement agent request - requires accounting review'
-          : null
+        notes: null
       }));
 
       if (formsToCreate.length === 0) {
@@ -3431,7 +3369,6 @@ export default function GMGResaleFlow() {
             hoaProperties={hoaProperties}
             setShowAuthModal={setShowAuthModal}
             stripePrices={stripePrices}
-            applicationType={applicationType}
           />
         );
       case 5:
