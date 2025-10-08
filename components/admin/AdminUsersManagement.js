@@ -18,6 +18,7 @@ import {
   AlertTriangle,
   ChevronLeft,
   ChevronRight,
+  CheckCircle,
 } from 'lucide-react';
 import useAdminAuthStore from '../../stores/adminAuthStore';
 import {
@@ -44,6 +45,24 @@ const AdminUsersManagement = () => {
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
+
+  // Snackbar state
+  const [snackbar, setSnackbar] = useState({
+    show: false,
+    message: '',
+    type: 'success' // 'success' or 'error'
+  });
+
+  // Auto-dismiss snackbar after 4 seconds
+  React.useEffect(() => {
+    if (snackbar.show) {
+      const timer = setTimeout(() => {
+        setSnackbar({ show: false, message: '', type: 'success' });
+      }, 4000);
+      
+      return () => clearTimeout(timer);
+    }
+  }, [snackbar.show]);
 
   const [formData, setFormData] = useState({
     email: '',
@@ -163,6 +182,11 @@ const AdminUsersManagement = () => {
         console.log('User creation successful:', result);
         setShowModal(false);
         resetForm();
+        setSnackbar({
+          show: true,
+          message: `User created successfully! ${formData.first_name} ${formData.last_name} has been added as ${formData.role}.`,
+          type: 'success'
+        });
       } else {
         const updates = {
           email: formData.email,
@@ -183,10 +207,20 @@ const AdminUsersManagement = () => {
 
         setShowModal(false);
         resetForm();
+        setSnackbar({
+          show: true,
+          message: `User updated successfully! ${formData.first_name} ${formData.last_name} is now ${formData.role}.`,
+          type: 'success'
+        });
       }
     } catch (error) {
       console.error('Save user error:', error);
       setFormError(error?.message || 'Failed to save user. Please try again.');
+      setSnackbar({
+        show: true,
+        message: error?.message || 'Failed to save user. Please try again.',
+        type: 'error'
+      });
     }
   };
 
@@ -197,8 +231,18 @@ const AdminUsersManagement = () => {
       await deleteUserMutation.mutateAsync(userToDelete.id);
       setShowDeleteConfirm(false);
       setUserToDelete(null);
+      setSnackbar({
+        show: true,
+        message: `User deleted successfully! ${userToDelete.email} has been removed.`,
+        type: 'success'
+      });
     } catch (error) {
       console.error('Delete user error:', error);
+      setSnackbar({
+        show: true,
+        message: error?.message || 'Failed to delete user. Please try again.',
+        type: 'error'
+      });
     }
   };
 
@@ -209,6 +253,8 @@ const AdminUsersManagement = () => {
         return 'bg-red-100 text-red-800';
       case 'staff':
         return 'bg-blue-100 text-blue-800';
+      case 'accounting':
+        return 'bg-purple-100 text-purple-800';
       case 'user':
         return 'bg-green-100 text-green-800';
       default:
@@ -313,6 +359,15 @@ const AdminUsersManagement = () => {
                 <div>
                   <p className="text-sm text-gray-600">Staff</p>
                   <p className="text-2xl font-bold text-gray-900">{userStats.staff}</p>
+                </div>
+              </div>
+            </div>
+            <div className="bg-white p-6 rounded-lg shadow-md border">
+              <div className="flex items-center gap-3">
+                <User className="w-8 h-8 text-purple-600" />
+                <div>
+                  <p className="text-sm text-gray-600">Accounting</p>
+                  <p className="text-2xl font-bold text-gray-900">{userStats.accounting || 0}</p>
                 </div>
               </div>
             </div>
@@ -601,6 +656,7 @@ const AdminUsersManagement = () => {
                   >
                     <option value="staff">Staff</option>
                     <option value="admin">Admin</option>
+                    <option value="accounting">Accounting</option>
                   </select>
                 </div>
 
@@ -667,6 +723,32 @@ const AdminUsersManagement = () => {
                   <span>Delete User</span>
                 </button>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* Snackbar Notification */}
+        {snackbar.show && (
+          <div className='fixed bottom-4 right-4 z-[90]'>
+            <div className={`
+              px-6 py-4 rounded-lg shadow-lg border flex items-center gap-3 max-w-md
+              ${snackbar.type === 'success' 
+                ? 'bg-green-50 border-green-200 text-green-800' 
+                : 'bg-red-50 border-red-200 text-red-800'
+              }
+            `}>
+              {snackbar.type === 'success' ? (
+                <CheckCircle className='w-5 h-5' />
+              ) : (
+                <AlertTriangle className='w-5 h-5' />
+              )}
+              <span className='text-sm font-medium'>{snackbar.message}</span>
+              <button
+                onClick={() => setSnackbar({ show: false, message: '', type: 'success' })}
+                className='text-current opacity-70 hover:opacity-100'
+              >
+                <X className='w-4 h-4' />
+              </button>
             </div>
           </div>
         )}
