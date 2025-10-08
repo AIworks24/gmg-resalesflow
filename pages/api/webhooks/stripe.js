@@ -1,6 +1,6 @@
 import { getServerStripe } from '../../../lib/stripe';
 
-// Helper function to get raw body
+// Helper function to get raw body for webhook signature verification
 function getRawBody(req) {
   return new Promise((resolve, reject) => {
     let body = '';
@@ -39,6 +39,7 @@ export default async function handler(req, res) {
     
     // Verify webhook signature
     event = stripe.webhooks.constructEvent(rawBody, sig, endpointSecret);
+    console.log('Webhook signature verified successfully:', event.type);
   } catch (err) {
     console.error('Webhook signature verification failed:', err.message);
     return res.status(400).json({ error: 'Webhook signature verification failed' });

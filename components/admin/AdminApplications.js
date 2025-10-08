@@ -227,6 +227,64 @@ const AdminApplications = ({ userRole }) => {
     }
   }, [selectedApplication?.id]);
 
+  // Auto-create property groups for multi-community applications
+  useEffect(() => {
+    const checkAndCreateGroups = async () => {
+      // Only run if we have a multi-community application and no groups loaded yet
+      if (selectedApplication?.hoa_properties?.is_multi_community && 
+          selectedApplication?.id && 
+          !loadingGroups && 
+          propertyGroups.length === 0) {
+        
+        console.log('Multi-community application detected, checking for property groups...');
+        
+        try {
+          // First, try to load existing groups
+          const { data: existingGroups, error } = await supabase
+            .from('application_property_groups')
+            .select('*')
+            .eq('application_id', selectedApplication.id);
+
+          if (error) {
+            console.error('Error checking existing groups:', error);
+            return;
+          }
+
+          if (existingGroups && existingGroups.length > 0) {
+            // Groups already exist, just load them
+            console.log('Property groups already exist, loading them...');
+            setPropertyGroups(existingGroups);
+          } else {
+            // No groups exist, create them
+            console.log('No property groups found, creating them...');
+            
+            const response = await fetch('/api/admin/create-property-groups', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ applicationId: selectedApplication.id })
+            });
+            
+            if (response.ok) {
+              console.log('Property groups created successfully');
+              // Reload the groups
+              loadPropertyGroups(selectedApplication.id);
+            } else {
+              const error = await response.json();
+              console.error('Failed to create property groups:', error);
+            }
+          }
+        } catch (error) {
+          console.error('Error in checkAndCreateGroups:', error);
+        }
+      }
+    };
+
+    // Run the check after a short delay to ensure the component is fully loaded
+    const timeoutId = setTimeout(checkAndCreateGroups, 500);
+    
+    return () => clearTimeout(timeoutId);
+  }, [selectedApplication?.hoa_properties?.is_multi_community, selectedApplication?.id, loadingGroups, propertyGroups.length]);
+
   const loadApplications = async () => {
     setRefreshing(true);
     try {

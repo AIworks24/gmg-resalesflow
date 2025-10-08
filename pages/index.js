@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import { loadStripe } from '@stripe/stripe-js';
+import { getStripeWithFallback } from '../lib/stripe';
 import { useAppContext } from '../lib/AppContext';
 import { useApplicantAuth } from '../providers/ApplicantAuthProvider';
 import useApplicantAuthStore from '../stores/applicantAuthStore';
@@ -36,10 +37,17 @@ import {
   Briefcase,
 } from 'lucide-react';
 
-// Initialize Stripe
-const stripePromise = loadStripe(
-  process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY || 'pk_test_placeholder'
-);
+// Initialize Stripe with error handling
+const stripePromise = (() => {
+  try {
+    return loadStripe(
+      process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY || 'pk_test_placeholder'
+    );
+  } catch (error) {
+    console.warn('Failed to initialize Stripe:', error);
+    return Promise.reject(error);
+  }
+})();
 
 // Helper function to calculate total amount
 // Synchronous calculateTotal function for display purposes (approximation only)
@@ -1103,12 +1111,8 @@ const PackagePaymentStep = ({
           setApplicationId(createdApplicationId);
         }
 
-        // Get Stripe instance
-        const stripe = await stripePromise;
-
-        if (!stripe) {
-          throw new Error('Stripe failed to load. Please check your publishable key.');
-        }
+        // Get Stripe instance with enhanced error handling
+        const stripe = await getStripeWithFallback();
 
         // Create checkout session
         const response = await fetch('/api/create-checkout-session', {
@@ -1149,7 +1153,18 @@ const PackagePaymentStep = ({
       }
     } catch (error) {
       console.error('Payment error:', error);
-      setPaymentError(error.message || 'Payment failed. Please try again.');
+      
+      // Check if it's an ad blocker related error
+      if (error.message && (
+        error.message.includes('ad blockers') ||
+        error.message.includes('browser security settings') ||
+        error.message.includes('ERR_BLOCKED_BY_CLIENT')
+      )) {
+        setShowAdBlockerWarning(true);
+        setPaymentError('Payment system blocked. Please check your browser settings.');
+      } else {
+        setPaymentError(error.message || 'Payment failed. Please try again.');
+      }
     } finally {
       setIsProcessing(false);
     }
@@ -1673,6 +1688,54 @@ const ConfirmationModal = ({ isOpen, onClose, onConfirm, title, message, confirm
   );
 };
 
+// Ad Blocker Warning Modal Component
+const AdBlockerWarningModal = ({ isOpen, onClose }) => {
+  if (!isOpen) return null;
+
+  return (
+    <div className='fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50'>
+      <div className='bg-white rounded-lg p-6 max-w-md w-full mx-4'>
+        <div className='flex items-center mb-4'>
+          <div className='w-12 h-12 rounded-full flex items-center justify-center mr-4 bg-yellow-100'>
+            <AlertCircle className='h-6 w-6 text-yellow-600' />
+          </div>
+          <div>
+            <h3 className='text-lg font-semibold text-gray-900'>Payment System Blocked</h3>
+          </div>
+        </div>
+        
+        <div className='text-gray-600 mb-6 space-y-3'>
+          <p>It appears that your browser's security settings or an ad blocker is preventing the payment system from loading properly.</p>
+          <p className='font-medium'>To fix this issue:</p>
+          <ul className='list-disc list-inside space-y-1 text-sm'>
+            <li>Disable ad blockers for this site</li>
+            <li>Check your browser's security settings</li>
+            <li>Try refreshing the page</li>
+            <li>Use a different browser if the issue persists</li>
+          </ul>
+        </div>
+        
+        <div className='flex justify-end space-x-3'>
+          <button
+            onClick={onClose}
+            className='px-4 py-2 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors'
+          >
+            Close
+          </button>
+          <button
+            onClick={() => {
+              window.location.reload();
+            }}
+            className='px-4 py-2 text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors'
+          >
+            Refresh Page
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 // Authentication Modal Component
 const AuthModal = ({ authMode, setAuthMode, setShowAuthModal, handleAuth, resetPassword }) => {
   const [email, setEmail] = useState('');
@@ -2067,6 +2130,26 @@ export default function GMGResaleFlow() {
   // Get static data from context
   const { hoaProperties, stripePrices, isDataLoaded } = useAppContext();
   
+  // Handle Stripe analytics errors (commonly blocked by ad blockers)
+  useEffect(() => {
+    const handleStripeErrors = (event) => {
+      if (event.message && event.message.includes('r.stripe.com')) {
+        // Suppress Stripe analytics errors that are commonly blocked by ad blockers
+        event.preventDefault();
+        console.warn('Stripe analytics request blocked (likely by ad blocker) - this is normal and does not affect payment functionality');
+        return false;
+      }
+    };
+
+    // Add error listener for unhandled promise rejections
+    window.addEventListener('unhandledrejection', handleStripeErrors);
+    
+    // Cleanup
+    return () => {
+      window.removeEventListener('unhandledrejection', handleStripeErrors);
+    };
+  }, []);
+  
   // Get auth data from context
   const { 
     user, 
@@ -2104,6 +2187,7 @@ export default function GMGResaleFlow() {
     message: '',
     type: 'success'
   });
+  const [showAdBlockerWarning, setShowAdBlockerWarning] = useState(false);
 
   const [formData, setFormData] = useState({
     hoaProperty: '',
@@ -3476,6 +3560,12 @@ export default function GMGResaleFlow() {
           message={confirmModalData.message}
           confirmText={confirmModalData.confirmText}
           isDestructive={true}
+        />
+
+        {/* Ad Blocker Warning Modal */}
+        <AdBlockerWarningModal
+          isOpen={showAdBlockerWarning}
+          onClose={() => setShowAdBlockerWarning(false)}
         />
 
         {/* Snackbar */}
