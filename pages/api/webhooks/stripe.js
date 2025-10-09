@@ -1,5 +1,27 @@
 import { getServerStripe } from '../../../lib/stripe';
 
+// Helper function to get raw body for webhook signature verification
+function getRawBody(req) {
+  return new Promise((resolve, reject) => {
+    let body = '';
+    req.on('data', chunk => {
+      body += chunk.toString();
+    });
+    req.on('end', () => {
+      resolve(Buffer.from(body, 'utf8'));
+    });
+    req.on('error', err => {
+      reject(err);
+    });
+  });
+}
+
+export const config = {
+  api: {
+    bodyParser: false,
+  },
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
@@ -12,8 +34,12 @@ export default async function handler(req, res) {
   let event;
 
   try {
+    // Get raw body
+    const rawBody = await getRawBody(req);
+    
     // Verify webhook signature
-    event = stripe.webhooks.constructEvent(req.body, sig, endpointSecret);
+    event = stripe.webhooks.constructEvent(rawBody, sig, endpointSecret);
+    console.log('Webhook signature verified successfully:', event.type);
   } catch (err) {
     console.error('Webhook signature verification failed:', err.message);
     return res.status(400).json({ error: 'Webhook signature verification failed' });
@@ -71,20 +97,33 @@ export default async function handler(req, res) {
         const paymentIntent = event.data.object;
         console.log('Payment succeeded:', paymentIntent.id);
         
-        // Update application status
+        // Update application status and correct total amount
+        const updateData = {
+          status: 'payment_completed',
+          payment_completed_at: new Date().toISOString(),
+          stripe_payment_intent_id: paymentIntent.id
+        };
+        
+        // Correct the total amount based on actual payment
+        if (paymentIntent.amount_total) {
+          updateData.total_amount = paymentIntent.amount_total / 100; // Convert from cents
+        }
+        
         await supabase
           .from('applications')
-          .update({
-            status: 'payment_completed',
-            payment_completed_at: new Date().toISOString(),
-            stripe_payment_intent_id: paymentIntent.id
-          })
+          .update(updateData)
           .eq('stripe_payment_intent_id', paymentIntent.id);
 
-        // Create property owner forms for the application
+        // Handle multi-community applications
         const applicationId = paymentIntent.metadata.applicationId;
+        const isMultiCommunity = paymentIntent.metadata.isMultiCommunity === 'true';
+        
         if (applicationId) {
-          await createPropertyOwnerForms(applicationId, paymentIntent.metadata);
+          if (isMultiCommunity) {
+            await handleMultiCommunityApplication(applicationId, paymentIntent.metadata);
+          } else {
+            await createPropertyOwnerForms(applicationId, paymentIntent.metadata);
+          }
         }
         break;
 
@@ -128,38 +167,54 @@ export default async function handler(req, res) {
   }
 }
 
-// Helper function to create property owner forms
+// Helper function to create property owner forms using data-driven approach
 async function createPropertyOwnerForms(applicationId, metadata) {
   const { createClient } = require('@supabase/supabase-js');
+  const { getApplicationTypeData } = require('../../../lib/applicationTypes');
+  
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL,
     process.env.SUPABASE_SERVICE_ROLE_KEY
   );
 
   try {
-    // Create resale certificate form
-    await supabase
-      .from('property_owner_forms')
-      .insert({
-        application_id: applicationId,
-        form_type: 'resale_certificate',
-        status: 'not_started',
-        access_token: generateAccessToken(),
-        expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() // 30 days
-      });
+    // Get application details including application_type
+    const { data: application, error: appError } = await supabase
+      .from('applications')
+      .select('application_type, submitter_type')
+      .eq('id', applicationId)
+      .single();
 
-    // Create property inspection form
-    await supabase
-      .from('property_owner_forms')
-      .insert({
-        application_id: applicationId,
-        form_type: 'inspection_form',
-        status: 'not_started',
-        access_token: generateAccessToken(),
-        expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() // 30 days
-      });
+    if (appError) {
+      console.error('Error fetching application:', appError);
+      return;
+    }
 
-    console.log('Property owner forms created for application:', applicationId);
+    // Get application type data to determine required forms
+    const appTypeData = await getApplicationTypeData(application.application_type);
+    const requiredForms = appTypeData.required_forms || [];
+
+    console.log(`Creating forms for application type: ${application.application_type}, Required forms: ${JSON.stringify(requiredForms)}`);
+
+    // Create each required form
+    for (const formType of requiredForms) {
+      await supabase
+        .from('property_owner_forms')
+        .insert({
+          application_id: applicationId,
+          form_type: formType,
+          status: 'not_started',
+          access_token: generateAccessToken(),
+          expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(), // 30 days
+          notes: application.application_type.startsWith('settlement_agent') 
+            ? 'Settlement agent request - requires accounting review'
+            : null
+        });
+
+      console.log(`Created ${formType} for application ${applicationId}`);
+    }
+
+    console.log(`Successfully created ${requiredForms.length} forms for application: ${applicationId}`);
   } catch (error) {
     console.error('Error creating property owner forms:', error);
   }
@@ -168,4 +223,131 @@ async function createPropertyOwnerForms(applicationId, metadata) {
 // Helper function to generate access token
 function generateAccessToken() {
   return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+}
+
+// Helper function to handle multi-community applications
+async function handleMultiCommunityApplication(applicationId, metadata) {
+  const { createClient } = require('@supabase/supabase-js');
+  const { createPropertyGroups, generateDocumentsForAllGroups } = require('../../../lib/groupingService');
+  
+  const supabase = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL,
+    process.env.SUPABASE_SERVICE_ROLE_KEY
+  );
+
+  try {
+    console.log(`Handling multi-community application: ${applicationId}`);
+    
+    // Get application details with property information
+    const { data: application, error: appError } = await supabase
+      .from('applications')
+      .select(`
+        *,
+        hoa_properties (
+          id,
+          name,
+          location,
+          property_owner_email,
+          is_multi_community
+        )
+      `)
+      .eq('id', applicationId)
+      .single();
+
+    if (appError || !application) {
+      throw new Error(`Application not found: ${appError?.message}`);
+    }
+
+    // Get linked properties for the primary property
+    const { getLinkedProperties } = require('../../../lib/multiCommunityUtils');
+    const linkedProperties = await getLinkedProperties(application.hoa_property_id);
+
+    if (!linkedProperties || linkedProperties.length === 0) {
+      console.log('No linked properties found, falling back to single property flow');
+      await createPropertyOwnerForms(applicationId, metadata);
+      return;
+    }
+
+    // Create property groups
+    const groups = await createPropertyGroups(
+      applicationId,
+      application.hoa_properties,
+      linkedProperties
+    );
+
+    console.log(`Created ${groups.length} property groups`);
+
+    // Generate documents for all groups
+    const docResults = await generateDocumentsForAllGroups(applicationId, application);
+    
+    console.log(`Document generation completed for application ${applicationId}:`, {
+      success: docResults.success,
+      groupsProcessed: docResults.groups.length,
+      errors: docResults.errors.length
+    });
+
+    // Create property owner forms for each group (for admin workflow)
+    await createPropertyOwnerFormsForGroups(applicationId, groups);
+
+  } catch (error) {
+    console.error('Error handling multi-community application:', error);
+    // Fallback to single property flow
+    try {
+      await createPropertyOwnerForms(applicationId, metadata);
+    } catch (fallbackError) {
+      console.error('Fallback to single property flow also failed:', fallbackError);
+    }
+  }
+}
+
+// Helper function to create property owner forms for each group
+async function createPropertyOwnerFormsForGroups(applicationId, groups) {
+  const { createClient } = require('@supabase/supabase-js');
+  const { getApplicationTypeData } = require('../../../lib/applicationTypes');
+  
+  const supabase = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL,
+    process.env.SUPABASE_SERVICE_ROLE_KEY
+  );
+
+  try {
+    // Get application details
+    const { data: application, error: appError } = await supabase
+      .from('applications')
+      .select('application_type')
+      .eq('id', applicationId)
+      .single();
+
+    if (appError) {
+      console.error('Error fetching application for group forms:', appError);
+      return;
+    }
+
+    // Get application type data to determine required forms
+    const appTypeData = await getApplicationTypeData(application.application_type);
+    const requiredForms = appTypeData.required_forms || [];
+
+    // Create forms for each group
+    for (const group of groups) {
+      for (const formType of requiredForms) {
+        await supabase
+          .from('property_owner_forms')
+          .insert({
+            application_id: applicationId,
+            form_type: formType,
+            status: 'not_started',
+            access_token: generateAccessToken(),
+            expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+            notes: `Multi-community form for ${group.property_name} - ${application.application_type.startsWith('settlement_agent') 
+              ? 'Settlement agent request - requires accounting review'
+              : 'Standard processing'}`
+          });
+      }
+      console.log(`Created ${requiredForms.length} forms for group: ${group.property_name}`);
+    }
+
+    console.log(`Successfully created forms for ${groups.length} property groups`);
+  } catch (error) {
+    console.error('Error creating property owner forms for groups:', error);
+  }
 } 

@@ -24,6 +24,11 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Missing required fields' });
     }
 
+    // Validate that first_name and last_name are provided (can be empty strings)
+    if (first_name === undefined || last_name === undefined) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+
     // Update profile
     const { error: profileError } = await supabaseAdmin
       .from('profiles')

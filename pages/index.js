@@ -1,9 +1,22 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import { loadStripe } from '@stripe/stripe-js';
+import { getStripeWithFallback } from '../lib/stripe';
 import { useAppContext } from '../lib/AppContext';
 import { useApplicantAuth } from '../providers/ApplicantAuthProvider';
 import useApplicantAuthStore from '../stores/applicantAuthStore';
+// Removed pricingUtils import - using database-driven pricing instead
+import { 
+  determineApplicationType, 
+  getApplicationTypePricing, 
+  getFormSteps, 
+  getFieldRequirements, 
+  getApplicationTypeMessaging,
+  calculateTotalAmount,
+  isPaymentRequired 
+} from '../lib/applicationTypes';
+import Image from 'next/image';
+import companyLogo from '../assets/company_logo.png';
 import {
   Building2,
   FileText,
@@ -21,31 +34,148 @@ import {
   UserPlus,
   InfoIcon,
   Trash2,
+  Briefcase,
 } from 'lucide-react';
 
-// Initialize Stripe
-const stripePromise = loadStripe(
-  process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY || 'pk_test_placeholder'
-);
+// Initialize Stripe with error handling
+const stripePromise = (() => {
+  try {
+    return loadStripe(
+      process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY || 'pk_test_placeholder'
+    );
+  } catch (error) {
+    console.warn('Failed to initialize Stripe:', error);
+    return Promise.reject(error);
+  }
+})();
 
 // Helper function to calculate total amount
-const calculateTotal = (formData, stripePrices) => {
-  if (!stripePrices) {
-    // Fallback to hardcoded prices if Stripe prices not loaded yet
-    let total = 317.95;
-    if (formData.packageType === 'rush') total += 70.66;
-    if (formData.paymentMethod === 'credit_card') total += 9.95;
-    return total;
+// Synchronous calculateTotal function for display purposes (approximation only)
+const calculateTotal = (formData, stripePrices, hoaProperties) => {
+  // Check for multi-community pricing first
+  if (formData.hoaProperty && hoaProperties) {
+    const selectedProperty = hoaProperties.find(prop => prop.name === formData.hoaProperty);
+    if (selectedProperty && selectedProperty.is_multi_community) {
+      // Multi-community pricing: 3 properties × base price + rush fees + convenience fee
+      const basePricePerProperty = 317.95;
+      const propertyCount = 3; // Primary + 2 linked properties
+      const rushFeePerProperty = formData.packageType === 'rush' ? 70.66 : 0;
+      const convenienceFee = formData.paymentMethod === 'credit_card' ? 9.95 : 0;
+      
+      const total = (basePricePerProperty + rushFeePerProperty) * propertyCount + convenienceFee;
+      return Math.round(total * 100) / 100;
+    }
   }
 
+  // Public Offering Statement pricing
+  if (formData.submitterType === 'builder' && formData.publicOffering) {
+    let total = 200.0;
+    if (formData.packageType === 'rush') total += 70.66;
+    if (formData.paymentMethod === 'credit_card') total += 9.95;
+    return Math.round(total * 100) / 100; // Round to 2 decimal places
+  }
+  if (formData.submitterType === 'settlement') {
+    // Settlement agents - approximate pricing for display
+    // Note: Actual pricing comes from database via calculateTotalDatabase()
+    const selectedProperty = hoaProperties?.find(prop => prop.name === formData.hoaProperty);
+    
+    // Debug logging
+    if (selectedProperty) {
+      console.log('Selected property for settlement pricing:', {
+        name: selectedProperty.name,
+        location: selectedProperty.location,
+        formData: formData
+      });
+    }
+    
+    if (selectedProperty && selectedProperty.location) {
+      const location = selectedProperty.location.toUpperCase();
+      const isRush = formData.packageType === 'rush';
+      
+      if (location.includes('VA') || location.includes('VIRGINIA')) {
+        // Virginia: FREE standard, $70.66 rush
+        let total = isRush ? 70.66 : 0;
+        if (formData.paymentMethod === 'credit_card' && total > 0) {
+          total += 9.95; // Credit card fee
+        }
+        return Math.round(total * 100) / 100; // Round to 2 decimal places
+      } else if (location.includes('NC') || location.includes('NORTH CAROLINA')) {
+        // North Carolina: $450 standard, $550 rush
+        let total = isRush ? 550.00 : 450.00;
+        if (formData.paymentMethod === 'credit_card') {
+          total += 9.95; // Credit card fee
+        }
+        return Math.round(total * 100) / 100; // Round to 2 decimal places
+      }
+    }
+    
+    // Fallback pricing for settlement agents
+    console.warn('Could not determine property state for settlement pricing, using fallback');
+    return 200.00;
+  }
+  
+  // Regular pricing for non-settlement submitters
+  const basePrice = 317.95;
+  
+  if (!stripePrices) {
+    // Fallback to hardcoded prices if Stripe prices not loaded yet
+    let total = basePrice;
+    if (formData.packageType === 'rush') total += 70.66;
+    if (formData.paymentMethod === 'credit_card') total += 9.95;
+    return Math.round(total * 100) / 100; // Round to 2 decimal places
+  }
+
+  // Use regular pricing
   let total = stripePrices.standard.displayAmount;
   if (formData.packageType === 'rush') {
-    total = stripePrices.standard.displayAmount + stripePrices.rush.rushFeeDisplay;
+    total += stripePrices.rush.rushFeeDisplay;
   }
   if (formData.paymentMethod === 'credit_card') {
     total += stripePrices.convenienceFee.display;
   }
-  return total;
+  return Math.round(total * 100) / 100; // Round to 2 decimal places
+};
+
+// Async calculateTotalDatabase function using database-driven pricing for payment logic
+const calculateTotalDatabase = async (formData, hoaProperties, applicationType) => {
+  try {
+    // Check for multi-community pricing first
+    if (formData.hoaProperty && hoaProperties) {
+      const selectedProperty = hoaProperties.find(prop => prop.name === formData.hoaProperty);
+      if (selectedProperty && selectedProperty.is_multi_community) {
+        // Import multi-community utilities
+        const { calculateMultiCommunityPricing } = await import('../lib/multiCommunityUtils');
+        
+        // Calculate multi-community pricing
+        const pricing = await calculateMultiCommunityPricing(
+          selectedProperty.id,
+          formData.packageType,
+          applicationType
+        );
+        
+        // Add convenience fee if credit card
+        const convenienceFee = formData.paymentMethod === 'credit_card' ? 9.95 : 0;
+        return pricing.total + convenienceFee;
+      }
+    }
+    
+    // Single property pricing
+    const { calculateTotalAmount } = await import('../lib/applicationTypes');
+    
+    // Calculate total using database-driven pricing
+    const total = await calculateTotalAmount(
+      applicationType,
+      formData.packageType,
+      formData.paymentMethod
+    );
+    
+    return total;
+  } catch (error) {
+    console.error('Error calculating total with database pricing:', error);
+    
+    // Fallback to synchronous calculation for safety
+    return calculateTotal(formData, null, hoaProperties);
+  }
 };
 
 // Move form step components outside the main component to prevent recreation
@@ -53,6 +183,8 @@ const HOASelectionStep = React.memo(
   ({ formData, handleInputChange, hoaProperties }) => {
     const [query, setQuery] = React.useState('');
     const [showDropdown, setShowDropdown] = React.useState(false);
+    const [multiCommunityNotification, setMultiCommunityNotification] = React.useState(null);
+    const [linkedProperties, setLinkedProperties] = React.useState([]);
     const inputRef = React.useRef(null);
 
     // Filter HOA options based on query
@@ -83,16 +215,50 @@ const HOASelectionStep = React.memo(
     };
 
     // When a HOA is selected
-    const selectHOA = (hoa) => {
+    const selectHOA = async (hoa) => {
       handleInputChange('hoaProperty', hoa.name);
       setQuery(hoa.name + (hoa.location ? ` - ${hoa.location}` : ''));
       setShowDropdown(false);
+      
+      // Check if this is a multi-community property
+      if (hoa.is_multi_community) {
+        try {
+          // Import the multi-community utilities
+          const { getLinkedProperties, generateMultiCommunityNotification, calculateMultiCommunityPricing } = await import('../lib/multiCommunityUtils');
+          
+          // Get linked properties
+          const linked = await getLinkedProperties(hoa.id);
+          setLinkedProperties(linked);
+          
+          // Calculate pricing for multi-community
+          const pricing = await calculateMultiCommunityPricing(hoa.id, formData.packageType || 'standard', 'standard');
+          
+          // Generate notification
+          const notification = generateMultiCommunityNotification(hoa.id, linked, pricing);
+          setMultiCommunityNotification(notification);
+        } catch (error) {
+          console.error('Error loading multi-community data:', error);
+          // Show a basic notification if we can't load detailed data
+          setMultiCommunityNotification({
+            type: 'multi_community',
+            title: 'Multi-Community Association Detected',
+            message: 'This property is part of a Master Association. Additional documents and fees will be included.',
+            showWarning: true
+          });
+        }
+      } else {
+        // Clear multi-community notification if property is not multi-community
+        setMultiCommunityNotification(null);
+        setLinkedProperties([]);
+      }
     };
 
     // Keep input in sync with formData
     React.useEffect(() => {
       if (!formData.hoaProperty) {
         setQuery('');
+        setMultiCommunityNotification(null);
+        setLinkedProperties([]);
       } else {
         // Find the HOA object to get the full display text with location
         const selectedHOA = (hoaProperties || []).find(hoa => hoa.name === formData.hoaProperty);
@@ -104,6 +270,38 @@ const HOASelectionStep = React.memo(
         }
       }
     }, [formData.hoaProperty, hoaProperties]);
+
+    // Restore multi-community notification when formData.hoaProperty changes
+    React.useEffect(() => {
+      if (formData.hoaProperty && hoaProperties.length > 0) {
+        const selectedHOA = hoaProperties.find(hoa => hoa.name === formData.hoaProperty);
+        if (selectedHOA && selectedHOA.is_multi_community && !multiCommunityNotification) {
+          // Restore multi-community state
+          const restoreMultiCommunity = async () => {
+            try {
+              const { getLinkedProperties, generateMultiCommunityNotification, calculateMultiCommunityPricing } = await import('../lib/multiCommunityUtils');
+              
+              const linked = await getLinkedProperties(selectedHOA.id);
+              setLinkedProperties(linked);
+              
+              const pricing = await calculateMultiCommunityPricing(selectedHOA.id, formData.packageType || 'standard', 'standard');
+              const notification = generateMultiCommunityNotification(selectedHOA.id, linked, pricing);
+              setMultiCommunityNotification(notification);
+            } catch (error) {
+              console.error('Error restoring multi-community data:', error);
+              setMultiCommunityNotification({
+                type: 'multi_community',
+                title: 'Multi-Community Association Detected',
+                message: 'This property is part of a Master Association. Additional documents and fees will be included.',
+                showWarning: true
+              });
+            }
+          };
+          
+          restoreMultiCommunity();
+        }
+      }
+    }, [formData.hoaProperty, hoaProperties, multiCommunityNotification]);
 
     // Hide dropdown on outside click
     React.useEffect(() => {
@@ -200,7 +398,62 @@ const HOASelectionStep = React.memo(
           </div>
         </div>
 
-        {formData.hoaProperty && (
+        {/* Multi-Community Notification (no pricing on this step) */}
+        {multiCommunityNotification && (
+          <div className={`p-4 rounded-lg border ${
+            multiCommunityNotification.showWarning 
+              ? 'bg-blue-50 border-blue-200' 
+              : 'bg-yellow-50 border-yellow-200'
+          }`}>
+            <div className='flex items-start'>
+              <AlertCircle className={`h-5 w-5 mt-0.5 mr-2 ${
+                multiCommunityNotification.showWarning 
+                  ? 'text-blue-600' 
+                  : 'text-yellow-600'
+              }`} />
+              <div className='flex-1'>
+                <h4 className={`font-medium ${
+                  multiCommunityNotification.showWarning 
+                    ? 'text-blue-900' 
+                    : 'text-yellow-900'
+                }`}>
+                  Multi-Community Association Detected
+                </h4>
+                <p className={`text-sm mt-1 ${
+                  multiCommunityNotification.showWarning 
+                    ? 'text-blue-700' 
+                    : 'text-yellow-700'
+                }`}>
+                  Your property is part of a Master Association. Additional documents and fees will be included.
+                </p>
+
+                {multiCommunityNotification.details && multiCommunityNotification.details.associations && (
+                  <div className='mt-3'>
+                    <div className='text-sm font-medium text-gray-900 mb-2'>
+                      Included Associations:
+                    </div>
+                    <div className='space-y-1'>
+                      {multiCommunityNotification.details.associations.map((association, index) => (
+                        <div key={index} className='flex items-center text-sm text-gray-600'>
+                          <div className={`w-2 h-2 rounded-full mr-2 ${
+                            association.isPrimary ? 'bg-green-500' : 'bg-blue-500'
+                          }`}></div>
+                          <span className={association.isPrimary ? 'font-medium' : ''}>
+                            {association.name}
+                            {association.isPrimary && ' (Primary)'}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Standard HOA Documents Ready notification */}
+        {formData.hoaProperty && !multiCommunityNotification && (
           <div className='bg-green-50 p-4 rounded-lg border border-green-200'>
             <div className='flex items-start'>
               <CheckCircle className='h-5 w-5 text-green-600 mt-0.5 mr-2' />
@@ -236,12 +489,13 @@ const SubmitterInfoStep = React.memo(({ formData, handleInputChange }) => (
       <label className='block text-sm font-medium text-gray-700 mb-3'>
         I am the: *
       </label>
-      <div className='grid grid-cols-1 md:grid-cols-4 gap-4'>
+      <div className='grid grid-cols-2 md:grid-cols-5 gap-4'>
         {[
           { value: 'seller', label: 'Property Owner/Seller', icon: User },
           { value: 'realtor', label: 'Licensed Realtor', icon: FileText },
           { value: 'builder', label: 'Builder/Developer', icon: Building2 },
           { value: 'admin', label: 'GMG Staff', icon: CheckCircle },
+          { value: 'settlement', label: 'Settlement Agent / Closing Attorney', icon: Briefcase },
         ].map((type) => {
           const Icon = type.icon;
           return (
@@ -260,6 +514,27 @@ const SubmitterInfoStep = React.memo(({ formData, handleInputChange }) => (
           );
         })}
       </div>
+      {formData.submitterType === 'builder' && (
+        <div className='mt-6 p-4 border border-amber-300 rounded-md bg-amber-50'>
+          <label className='flex items-start gap-3 cursor-pointer'>
+            <input
+              type='checkbox'
+              checked={!!formData.publicOffering}
+              onChange={(e) => handleInputChange('publicOffering', e.target.checked)}
+              className='mt-1 h-4 w-4 text-green-600 border-gray-300 rounded'
+            />
+            <div>
+              <div className='font-medium text-amber-900'>Request Public Offering Statement</div>
+              <div className='text-sm text-amber-800'>This special request skips other forms and goes straight to payment. Fixed fee: $200.</div>
+            </div>
+          </label>
+        </div>
+      )}
+      {formData.submitterType === 'builder' && formData.publicOffering && (
+        <div className='mt-2 text-sm text-green-800 bg-green-50 border border-green-200 rounded p-3'>
+          Public Offering Statement selected — transaction details will be skipped. You will proceed directly to payment.
+        </div>
+      )}
     </div>
 
     <div className='grid grid-cols-1 md:grid-cols-3 gap-6'>
@@ -325,6 +600,19 @@ const SubmitterInfoStep = React.memo(({ formData, handleInputChange }) => (
         />
       </div>
     )}
+    {formData.submitterType === 'settlement' && (
+      <div>
+        <label className='block text-sm font-medium text-gray-700 mb-2'>
+          Expected Closing Date *
+        </label>
+        <input
+          type='date'
+          value={formData.closingDate || ''}
+          onChange={(e) => handleInputChange('closingDate', e.target.value)}
+          className='w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500'
+        />
+      </div>
+    )}
   </div>
 ));
 
@@ -372,26 +660,26 @@ const TransactionDetailsStep = ({ formData, handleInputChange }) => (
     <div className='bg-green-50 p-6 rounded-lg border border-green-200'>
       <h4 className='font-semibold text-green-900 mb-4 flex items-center'>
         <User className='h-5 w-5 mr-2' />
-        Seller Information
+        Seller Information (Optional)
       </h4>
       <div className='grid grid-cols-1 md:grid-cols-3 gap-4'>
         <input
           type='text'
-          placeholder='Seller Full Name *'
+          placeholder='Seller Full Name'
           value={formData.sellerName || ''}
           onChange={(e) => handleInputChange('sellerName', e.target.value)}
           className='px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500'
         />
         <input
           type='email'
-          placeholder='Seller Email *'
+          placeholder='Seller Email'
           value={formData.sellerEmail || ''}
           onChange={(e) => handleInputChange('sellerEmail', e.target.value)}
           className='px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500'
         />
         <input
           type='tel'
-          placeholder='Seller Phone *'
+          placeholder='Seller Phone'
           value={formData.sellerPhone || ''}
           onChange={(e) => handleInputChange('sellerPhone', e.target.value)}
           className='px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500'
@@ -442,13 +730,19 @@ const PackagePaymentStep = ({
   currentStep,
   setCurrentStep,
   applicationId,
+  setApplicationId,
   user,
   hoaProperties,
   setShowAuthModal,
   stripePrices,
+  applicationType,
 }) => {
   const [isProcessing, setIsProcessing] = useState(false);
   const [paymentError, setPaymentError] = useState(null);
+  const [multiCommunityPricing, setMultiCommunityPricing] = useState(null);
+  const [standardMultiCommunityPricing, setStandardMultiCommunityPricing] = useState(null);
+  const [rushMultiCommunityPricing, setRushMultiCommunityPricing] = useState(null);
+  const [linkedProperties, setLinkedProperties] = useState([]);
 
   // Check if this is a pending payment application
   const [isPendingPayment, setIsPendingPayment] = React.useState(false);
@@ -475,6 +769,49 @@ const PackagePaymentStep = ({
     checkApplicationStatus();
   }, [applicationId]);
 
+  // Load multi-community pricing when component mounts or formData changes
+  React.useEffect(() => {
+    const loadMultiCommunityPricing = async () => {
+      if (formData.hoaProperty && hoaProperties) {
+        const selectedProperty = hoaProperties.find(prop => prop.name === formData.hoaProperty);
+        if (selectedProperty && selectedProperty.is_multi_community) {
+          try {
+            const { getLinkedProperties, calculateMultiCommunityPricing } = await import('../lib/multiCommunityUtils');
+            
+            const linked = await getLinkedProperties(selectedProperty.id);
+            setLinkedProperties(linked);
+            
+            // Calculate both standard and rush pricing
+            const [standardPricing, rushPricing] = await Promise.all([
+              calculateMultiCommunityPricing(selectedProperty.id, 'standard', 'standard'),
+              calculateMultiCommunityPricing(selectedProperty.id, 'rush', 'standard')
+            ]);
+            
+            setStandardMultiCommunityPricing(standardPricing);
+            setRushMultiCommunityPricing(rushPricing);
+            
+            // Set the current pricing based on selected package type
+            const currentPricing = (formData.packageType || 'standard') === 'rush' ? rushPricing : standardPricing;
+            setMultiCommunityPricing(currentPricing);
+          } catch (error) {
+            console.error('Error loading multi-community pricing:', error);
+            setMultiCommunityPricing(null);
+            setStandardMultiCommunityPricing(null);
+            setRushMultiCommunityPricing(null);
+            setLinkedProperties([]);
+          }
+        } else {
+          setMultiCommunityPricing(null);
+          setStandardMultiCommunityPricing(null);
+          setRushMultiCommunityPricing(null);
+          setLinkedProperties([]);
+        }
+      }
+    };
+    
+    loadMultiCommunityPricing();
+  }, [formData.hoaProperty, formData.packageType, hoaProperties]);
+
 
   const handlePayment = async () => {
     if (!formData.packageType || !formData.paymentMethod) {
@@ -491,6 +828,190 @@ const PackagePaymentStep = ({
     setPaymentError(null);
 
     try {
+      // Calculate total amount for payment bypass check using database pricing
+      const totalAmount = await calculateTotalDatabase(formData, hoaProperties, applicationType);
+      
+      // Check if payment is required (bypass for $0 transactions)
+      if (totalAmount === 0) {
+        // Skip payment for free transactions (e.g., Virginia settlement standard processing)
+        let createdApplicationId;
+
+        // Create or update application
+        if (applicationId) {
+          // Update existing application
+          const hoaProperty = (hoaProperties || []).find(
+            (h) => h.name === formData.hoaProperty
+          );
+
+          const applicationData = {
+            hoa_property_id: hoaProperty?.id,
+            property_address: formData.propertyAddress,
+            unit_number: formData.unitNumber,
+            submitter_type: formData.submitterType,
+            application_type: applicationType,
+            submitter_name: formData.submitterName,
+            submitter_email: formData.submitterEmail,
+            submitter_phone: formData.submitterPhone,
+            realtor_license: formData.realtorLicense,
+            buyer_name: formData.buyerName,
+            buyer_email: formData.buyerEmail,
+            buyer_phone: formData.buyerPhone,
+            seller_name: formData.sellerName,
+            seller_email: formData.sellerEmail,
+            seller_phone: formData.sellerPhone,
+            sale_price: parseFloat(formData.salePrice),
+            closing_date: formData.closingDate || null,
+            package_type: formData.packageType,
+            payment_method: formData.paymentMethod,
+            total_amount: totalAmount,
+            status: 'under_review',
+            payment_status: 'not_required',
+            submitted_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+            expected_completion_date: new Date(
+              Date.now() +
+                (formData.packageType === 'rush' ? 5 : 15) * 24 * 60 * 60 * 1000
+            )
+              .toISOString()
+              .split('T')[0],
+          };
+
+          const { data: applicationResult, error: applicationError } = await supabase
+            .from('applications')
+            .update(applicationData)
+            .eq('id', applicationId)
+            .select();
+
+          if (applicationError) throw applicationError;
+          createdApplicationId = applicationResult[0].id;
+        } else {
+          // Create new application
+          const hoaProperty = (hoaProperties || []).find(
+            (h) => h.name === formData.hoaProperty
+          );
+
+          const applicationData = {
+            user_id: user.id,
+            hoa_property_id: hoaProperty?.id,
+            property_address: formData.propertyAddress,
+            unit_number: formData.unitNumber,
+            submitter_type: formData.submitterType,
+            application_type: applicationType,
+            submitter_name: formData.submitterName,
+            submitter_email: formData.submitterEmail,
+            submitter_phone: formData.submitterPhone,
+            realtor_license: formData.realtorLicense,
+            buyer_name: formData.buyerName,
+            buyer_email: formData.buyerEmail,
+            buyer_phone: formData.buyerPhone,
+            seller_name: formData.sellerName,
+            seller_email: formData.sellerEmail,
+            seller_phone: formData.sellerPhone,
+            sale_price: parseFloat(formData.salePrice),
+            closing_date: formData.closingDate || null,
+            package_type: formData.packageType,
+            payment_method: formData.paymentMethod,
+            total_amount: totalAmount,
+            status: 'under_review',
+            payment_status: 'not_required',
+            submitted_at: new Date().toISOString(),
+            expected_completion_date: new Date(
+              Date.now() +
+                (formData.packageType === 'rush' ? 5 : 15) * 24 * 60 * 60 * 1000
+            )
+              .toISOString()
+              .split('T')[0],
+          };
+
+          const { data: applicationResult, error: applicationError } = await supabase
+            .from('applications')
+            .insert([applicationData])
+            .select();
+
+          if (applicationError) throw applicationError;
+          createdApplicationId = applicationResult[0].id;
+          
+          // Set the application ID for future updates
+          setApplicationId(createdApplicationId);
+        }
+
+        // CREATE THE PROPERTY OWNER FORMS for free transactions
+        await createPropertyOwnerForms(createdApplicationId, {
+          id: createdApplicationId,
+          submitter_type: formData.submitterType,
+          application_type: applicationType
+        });
+
+        // Send confirmation email
+        try {
+          const hoaProperty = (hoaProperties || []).find(
+            (h) => h.name === formData.hoaProperty
+          );
+          
+          const emailResponse = await fetch('/api/send-email', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              emailType: 'application_submission',
+              applicationId: createdApplicationId,
+              customerName: formData.submitterName,
+              customerEmail: formData.submitterEmail,
+              propertyAddress: formData.propertyAddress,
+              packageType: formData.packageType,
+              totalAmount: totalAmount,
+              hoaName: hoaProperty?.name || 'Unknown HOA',
+              submitterType: formData.submitterType,
+            }),
+          });
+
+          if (!emailResponse.ok) {
+            throw new Error('Failed to send confirmation email');
+          }
+        } catch (emailError) {
+          console.error('Error sending confirmation email:', emailError);
+          // Don't fail the submission if email fails
+        }
+
+        // Show success message and redirect
+        setSnackbarData({
+          message: 'Application submitted successfully! You will receive a confirmation email shortly.',
+          type: 'success'
+        });
+        setShowSnackbar(true);
+
+        // Reset form and redirect to applications
+        setCurrentStep(0);
+        await loadApplications();
+        setApplicationId(null);
+        
+        // Reset form data
+        setFormData({
+          hoaProperty: '',
+          propertyAddress: '',
+          unitNumber: '',
+          submitterType: '',
+          publicOffering: false,
+          submitterName: '',
+          submitterEmail: '',
+          submitterPhone: '',
+          realtorLicense: '',
+          buyerName: '',
+          buyerEmail: '',
+          buyerPhone: '',
+          sellerName: '',
+          sellerEmail: '',
+          sellerPhone: '',
+          salePrice: '',
+          closingDate: new Date().toISOString().split('T')[0],
+          packageType: 'standard',
+          paymentMethod: '',
+        });
+
+        return; // Exit early for free transactions
+      }
+
       if (formData.paymentMethod === 'credit_card') {
         let createdApplicationId;
 
@@ -506,6 +1027,7 @@ const PackagePaymentStep = ({
             property_address: formData.propertyAddress,
             unit_number: formData.unitNumber,
             submitter_type: formData.submitterType,
+            application_type: applicationType,
             submitter_name: formData.submitterName,
             submitter_email: formData.submitterEmail,
             submitter_phone: formData.submitterPhone,
@@ -520,7 +1042,7 @@ const PackagePaymentStep = ({
             closing_date: formData.closingDate || null,
             package_type: formData.packageType,
             payment_method: formData.paymentMethod,
-            total_amount: calculateTotal(formData, stripePrices),
+            total_amount: totalAmount,
             status: 'pending_payment',
             updated_at: new Date().toISOString(),
             expected_completion_date: new Date(
@@ -551,6 +1073,7 @@ const PackagePaymentStep = ({
             property_address: formData.propertyAddress,
             unit_number: formData.unitNumber,
             submitter_type: formData.submitterType,
+            application_type: applicationType,
             submitter_name: formData.submitterName,
             submitter_email: formData.submitterEmail,
             submitter_phone: formData.submitterPhone,
@@ -565,7 +1088,7 @@ const PackagePaymentStep = ({
             closing_date: formData.closingDate || null,
             package_type: formData.packageType,
             payment_method: formData.paymentMethod,
-            total_amount: calculateTotal(formData, stripePrices),
+            total_amount: totalAmount,
             status: 'pending_payment',
             submitted_at: new Date().toISOString(),
             expected_completion_date: new Date(
@@ -588,12 +1111,8 @@ const PackagePaymentStep = ({
           setApplicationId(createdApplicationId);
         }
 
-        // Get Stripe instance
-        const stripe = await stripePromise;
-
-        if (!stripe) {
-          throw new Error('Stripe failed to load. Please check your publishable key.');
-        }
+        // Get Stripe instance with enhanced error handling
+        const stripe = await getStripeWithFallback();
 
         // Create checkout session
         const response = await fetch('/api/create-checkout-session', {
@@ -606,7 +1125,7 @@ const PackagePaymentStep = ({
             paymentMethod: formData.paymentMethod,
             applicationId: createdApplicationId,
             formData: formData,
-            amount: Math.round(calculateTotal(formData, stripePrices) * 100), // Convert to cents
+            amount: Math.round(totalAmount * 100), // Convert to cents
           }),
         });
 
@@ -634,7 +1153,18 @@ const PackagePaymentStep = ({
       }
     } catch (error) {
       console.error('Payment error:', error);
-      setPaymentError(error.message || 'Payment failed. Please try again.');
+      
+      // Check if it's an ad blocker related error
+      if (error.message && (
+        error.message.includes('ad blockers') ||
+        error.message.includes('browser security settings') ||
+        error.message.includes('ERR_BLOCKED_BY_CLIENT')
+      )) {
+        setShowAdBlockerWarning(true);
+        setPaymentError('Payment system blocked. Please check your browser settings.');
+      } else {
+        setPaymentError(error.message || 'Payment failed. Please try again.');
+      }
     } finally {
       setIsProcessing(false);
     }
@@ -667,6 +1197,39 @@ const PackagePaymentStep = ({
         </p>
       </div>
 
+      {/* Multi-Community Notification */}
+      {multiCommunityPricing && multiCommunityPricing.associations && multiCommunityPricing.associations.length > 0 && (
+        <div className='bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6'>
+          <div className='flex items-start'>
+            <AlertCircle className='h-5 w-5 text-blue-600 mt-0.5 mr-3' />
+            <div className='flex-1'>
+              <h4 className='font-medium text-blue-900 mb-2'>
+                Multi-Community Association Detected
+              </h4>
+              <p className='text-sm text-blue-700 mb-3'>
+                Your selected property is part of multiple community associations. The pricing below includes all required documents and fees for each association.
+              </p>
+              <div className='text-sm'>
+                <div className='font-medium text-blue-900 mb-1'>Included Associations:</div>
+                <div className='space-y-1'>
+                  {multiCommunityPricing.associations.map((association, index) => (
+                    <div key={index} className='flex items-center text-sm text-blue-700'>
+                      <div className={`w-2 h-2 rounded-full mr-2 ${
+                        association.isPrimary ? 'bg-green-500' : 'bg-blue-500'
+                      }`}></div>
+                      <span className={association.isPrimary ? 'font-medium' : ''}>
+                        {association.name}
+                        {association.isPrimary && ' (Primary)'}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className='grid grid-cols-1 md:grid-cols-2 gap-6'>
         <div
           onClick={() => handleInputChange('packageType', 'standard')}
@@ -685,15 +1248,74 @@ const PackagePaymentStep = ({
             </div>
             <div className='text-right'>
               <div className='text-2xl font-bold text-green-600'>
-                ${stripePrices ? stripePrices.standard.displayAmount.toFixed(2) : '317.95'}
+                ${(() => {
+                  if (standardMultiCommunityPricing && standardMultiCommunityPricing.total) {
+                    const baseTotal = standardMultiCommunityPricing.total;
+                    const convenienceFeeTotal = formData.paymentMethod === 'credit_card' ? 
+                      standardMultiCommunityPricing.totalConvenienceFee : 0;
+                    return (baseTotal + convenienceFeeTotal).toFixed(2);
+                  }
+                  const total = calculateTotal(formData, stripePrices, hoaProperties);
+                  return total.toFixed(2);
+                })()}
               </div>
             </div>
           </div>
           <ul className='text-sm text-gray-600 space-y-1'>
-            <li>• Complete Virginia Resale Certificate</li>
-            <li>• HOA Documents Package</li>
-            <li>• Compliance Inspection Report</li>
-            <li>• Digital & Print Delivery</li>
+            {standardMultiCommunityPricing && standardMultiCommunityPricing.associations && standardMultiCommunityPricing.associations.length > 0 ? (
+              // Multi-community breakdown
+              <>
+                {standardMultiCommunityPricing.associations.map((association, index) => (
+                  <li key={index} className='font-medium text-gray-700'>
+                    {association.name} {association.isPrimary && '(Primary)'} - ${association.basePrice.toFixed(2)}
+                  </li>
+                ))}
+                <li>• Digital & Print Delivery</li>
+                <li>• 10-15 business days processing</li>
+              </>
+            ) : formData.submitterType === 'settlement' ? (
+              <>
+                {(() => {
+                  const selectedProperty = hoaProperties?.find(prop => prop.name === formData.hoaProperty);
+                  const location = selectedProperty?.location?.toUpperCase() || '';
+                  if (location.includes('VA') || location.includes('VIRGINIA')) {
+                    return (
+                      <>
+                        <li>• Dues Request - Escrow Instructions</li>
+                        <li>• Current HOA dues verification</li>
+                        <li>• Settlement statement preparation</li>
+                        <li>✓ Direct submission to accounting</li>
+                      </>
+                    );
+                  } else if (location.includes('NC') || location.includes('NORTH CAROLINA')) {
+                    return (
+                      <>
+                        <li>• Statement of Unpaid Assessments</li>
+                        <li>• Current assessment verification</li>
+                        <li>• Settlement documentation</li>
+                        <li>✓ Direct submission to accounting</li>
+                      </>
+                    );
+                  } else {
+                    return (
+                      <>
+                        <li>• Settlement documentation</li>
+                        <li>• HOA dues verification</li>
+                        <li>• Escrow instructions</li>
+                        <li>✓ Direct submission to accounting</li>
+                      </>
+                    );
+                  }
+                })()}
+              </>
+            ) : (
+              <>
+                <li>• Complete Virginia Resale Certificate</li>
+                <li>• HOA Documents Package</li>
+                <li>• Compliance Inspection Report</li>
+                <li>• Digital & Print Delivery</li>
+              </>
+            )}
           </ul>
         </div>
 
@@ -717,21 +1339,74 @@ const PackagePaymentStep = ({
             </div>
             <div className='text-right'>
               <div className='text-lg text-gray-500'>
-                ${stripePrices ? stripePrices.standard.displayAmount.toFixed(2) : '317.95'}
+                ${(() => {
+                  // Show base processing fee only (no rush, no credit card fees)
+                  if (formData.submitterType === 'builder' && formData.publicOffering) {
+                    return '200.00';
+                  }
+                  if (formData.submitterType === 'settlement') {
+                    const selectedProperty = hoaProperties?.find(prop => prop.name === formData.hoaProperty);
+                    if (selectedProperty?.location) {
+                      const location = selectedProperty.location.toUpperCase();
+                      if (location.includes('VA') || location.includes('VIRGINIA')) {
+                        return '0.00';
+                      } else if (location.includes('NC') || location.includes('NORTH CAROLINA')) {
+                        return '450.00';
+                      }
+                    }
+                    return '200.00'; // Fallback
+                  }
+                  // Regular pricing
+                  return stripePrices ? stripePrices.standard.displayAmount.toFixed(2) : '317.95';
+                })()}
               </div>
               <div className='text-sm text-gray-500'>
                 + ${stripePrices ? stripePrices.rush.rushFeeDisplay.toFixed(2) : '70.66'}
               </div>
               <div className='text-2xl font-bold text-orange-600'>
-                ${stripePrices ? (stripePrices.standard.displayAmount + stripePrices.rush.rushFeeDisplay).toFixed(2) : '388.61'}
+                ${(() => {
+                  if (rushMultiCommunityPricing && rushMultiCommunityPricing.associations && rushMultiCommunityPricing.associations.length > 0) {
+                    // Calculate rush pricing for multi-community
+                    const baseTotal = rushMultiCommunityPricing.total;
+                    const convenienceFeeTotal = formData.paymentMethod === 'credit_card' ? 
+                      rushMultiCommunityPricing.totalConvenienceFee : 0;
+                    return (baseTotal + convenienceFeeTotal).toFixed(2);
+                  }
+                  const tempFormData = { ...formData, packageType: 'rush' };
+                  const rushTotal = calculateTotal(tempFormData, stripePrices, hoaProperties);
+                  return rushTotal.toFixed(2);
+                })()}
               </div>
             </div>
           </div>
           <ul className='text-sm text-gray-600 space-y-1'>
-            <li>• Everything in Standard</li>
-            <li>• Priority queue processing</li>
-            <li>• Expedited compliance inspection</li>
-            <li>✓ 5-day completion guarantee</li>
+            {rushMultiCommunityPricing && rushMultiCommunityPricing.associations && rushMultiCommunityPricing.associations.length > 0 ? (
+              // Multi-community breakdown with rush fees
+              <>
+                {rushMultiCommunityPricing.associations.map((association, index) => (
+                  <li key={index} className='font-medium text-gray-700'>
+                    {association.name} {association.isPrimary && '(Primary)'} - ${association.basePrice.toFixed(2)} + ${association.rushFee.toFixed(2)} rush
+                  </li>
+                ))}
+                <li>• Priority queue processing</li>
+                <li>• Expedited compliance inspection</li>
+                <li>✓ 5-day completion guarantee</li>
+              </>
+            ) : formData.submitterType === 'settlement' ? (
+              <>
+                <li>• Everything in Standard</li>
+                <li>• Priority queue processing</li>
+                <li>• Expedited accounting review</li>
+                <li>✓ 3-day completion guarantee</li>
+              </>
+            ) : (
+              <>
+                <li>• Everything in Standard</li>
+                <li>• Priority queue processing</li>
+                <li>• Expedited compliance inspection</li>
+                <li>✓ 5-day completion guarantee</li>
+              </>
+            )}
           </ul>
         </div>
       </div>
@@ -794,26 +1469,93 @@ const PackagePaymentStep = ({
         <div className='bg-green-50 p-4 rounded-lg border border-green-200'>
           <h5 className='font-medium text-green-900 mb-2'>Order Summary</h5>
           <div className='space-y-2 text-sm'>
-            <div className='flex justify-between'>
-              <span>Processing Fee:</span>
-              <span>${stripePrices ? stripePrices.standard.displayAmount.toFixed(2) : '317.95'}</span>
-            </div>
-            {formData.packageType === 'rush' && (
-              <div className='flex justify-between'>
-                <span>Rush Processing:</span>
-                <span>+${stripePrices ? stripePrices.rush.rushFeeDisplay.toFixed(2) : '70.66'}</span>
-              </div>
+            {multiCommunityPricing && multiCommunityPricing.associations && multiCommunityPricing.associations.length > 0 ? (
+              // Multi-community pricing breakdown
+              <>
+                {multiCommunityPricing.associations.map((association, index) => (
+                  <div key={index} className='border-b border-green-200 pb-2 mb-2'>
+                    <div className='font-medium text-green-800 mb-1'>
+                      {association.name} {association.isPrimary && '(Primary)'}
+                    </div>
+                    <div className='flex justify-between ml-4'>
+                      <span>Processing Fee:</span>
+                      <span>${association.basePrice.toFixed(2)}</span>
+                    </div>
+                    {formData.packageType === 'rush' && (
+                      <div className='flex justify-between ml-4'>
+                        <span>Rush Processing:</span>
+                        <span>+${association.rushFee.toFixed(2)}</span>
+                      </div>
+                    )}
+                    {formData.paymentMethod === 'credit_card' && (
+                      <div className='flex justify-between ml-4'>
+                        <span>Convenience Fee:</span>
+                        <span>+${association.convenienceFee.toFixed(2)}</span>
+                      </div>
+                    )}
+                    <div className='flex justify-between ml-4 font-medium text-green-800'>
+                      <span>Subtotal:</span>
+                      <span>${association.total.toFixed(2)}</span>
+                    </div>
+                  </div>
+                ))}
+                <div className='border-t border-green-200 pt-2 flex justify-between font-semibold text-green-900'>
+                  <span>Total:</span>
+                  <span>${(() => {
+                    const baseTotal = multiCommunityPricing.total;
+                    const convenienceFeeTotal = formData.paymentMethod === 'credit_card' ? 
+                      multiCommunityPricing.totalConvenienceFee : 0;
+                    return (baseTotal + convenienceFeeTotal).toFixed(2);
+                  })()}</span>
+                </div>
+              </>
+            ) : (
+              // Single property pricing
+              <>
+                <div className='flex justify-between'>
+                  <span>Processing Fee:</span>
+                  <span>${(() => {
+                    // Calculate base processing fee only (no rush, no credit card fees)
+                    if (formData.submitterType === 'builder' && formData.publicOffering) {
+                      return '200.00';
+                    }
+                    if (formData.submitterType === 'settlement') {
+                      const selectedProperty = hoaProperties?.find(prop => prop.name === formData.hoaProperty);
+                      if (selectedProperty?.location) {
+                        const location = selectedProperty.location.toUpperCase();
+                        if (location.includes('VA') || location.includes('VIRGINIA')) {
+                          return '0.00';
+                        } else if (location.includes('NC') || location.includes('NORTH CAROLINA')) {
+                          return '450.00';
+                        }
+                      }
+                      return '200.00'; // Fallback for settlement
+                    }
+                    // Regular pricing for all other submitter types (seller, realtor, admin)
+                    if (stripePrices && stripePrices.standard && stripePrices.standard.displayAmount) {
+                      return stripePrices.standard.displayAmount.toFixed(2);
+                    }
+                    return '317.95'; // Fallback for regular pricing
+                  })()}</span>
+                </div>
+                {formData.packageType === 'rush' && (
+                  <div className='flex justify-between'>
+                    <span>Rush Processing:</span>
+                    <span>+${stripePrices ? stripePrices.rush.rushFeeDisplay.toFixed(2) : '70.66'}</span>
+                  </div>
+                )}
+                {formData.paymentMethod === 'credit_card' && (
+                  <div className='flex justify-between'>
+                    <span>Convenience Fee:</span>
+                    <span>+${stripePrices ? stripePrices.convenienceFee.display.toFixed(2) : '9.95'}</span>
+                  </div>
+                )}
+                <div className='border-t border-green-200 pt-2 flex justify-between font-semibold text-green-900'>
+                  <span>Total:</span>
+                  <span>${calculateTotal(formData, stripePrices, hoaProperties).toFixed(2)}</span>
+                </div>
+              </>
             )}
-            {formData.paymentMethod === 'credit_card' && (
-              <div className='flex justify-between'>
-                <span>Convenience Fee:</span>
-                <span>+${stripePrices ? stripePrices.convenienceFee.display.toFixed(2) : '9.95'}</span>
-              </div>
-            )}
-            <div className='border-t border-green-200 pt-2 flex justify-between font-semibold text-green-900'>
-              <span>Total:</span>
-              <span>${calculateTotal(formData, stripePrices)}</span>
-            </div>
           </div>
         </div>
 
@@ -848,7 +1590,15 @@ const PackagePaymentStep = ({
               Processing...
             </>
           ) : (
-            formData.paymentMethod === 'credit_card' ? 'Continue to Checkout' : `Pay $${calculateTotal(formData, stripePrices)}`
+            formData.paymentMethod === 'credit_card' ? 'Continue to Checkout' : `Pay $${(() => {
+              if (multiCommunityPricing && multiCommunityPricing.total) {
+                const baseTotal = multiCommunityPricing.total;
+                const convenienceFeeTotal = formData.paymentMethod === 'credit_card' ? 
+                  multiCommunityPricing.totalConvenienceFee : 0;
+                return (baseTotal + convenienceFeeTotal).toFixed(2);
+              }
+              return calculateTotal(formData, stripePrices, hoaProperties).toFixed(2);
+            })()}`
           )}
         </button>
       </div>
@@ -938,92 +1688,47 @@ const ConfirmationModal = ({ isOpen, onClose, onConfirm, title, message, confirm
   );
 };
 
-// Authentication Modal Component
-const AuthModal = ({ authMode, setAuthMode, setShowAuthModal, handleAuth }) => {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [firstName, setFirstName] = useState('');
-  const [lastName, setLastName] = useState('');
+// Ad Blocker Warning Modal Component
+const AdBlockerWarningModal = ({ isOpen, onClose }) => {
+  if (!isOpen) return null;
 
   return (
     <div className='fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50'>
-      <div className='bg-white rounded-lg p-8 max-w-md w-full mx-4'>
-        <div className='flex justify-between items-center mb-6'>
-          <h2 className='text-2xl font-bold text-green-800'>
-            {authMode === 'signin' ? 'Sign In' : 'Create Account'}
-          </h2>
-          <button onClick={() => setShowAuthModal(false)}>
-            <X className='h-6 w-6 text-gray-400' />
-          </button>
-        </div>
-
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            handleAuth(email, password, {
-              first_name: firstName,
-              last_name: lastName,
-            });
-          }}
-        >
-          {authMode === 'signup' && (
-            <div className='grid grid-cols-2 gap-4 mb-4'>
-              <input
-                type='text'
-                placeholder='First Name'
-                value={firstName}
-                onChange={(e) => setFirstName(e.target.value)}
-                className='px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500'
-                required
-              />
-              <input
-                type='text'
-                placeholder='Last Name'
-                value={lastName}
-                onChange={(e) => setLastName(e.target.value)}
-                className='px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500'
-                required
-              />
-            </div>
-          )}
-
-          <div className='space-y-4'>
-            <input
-              type='email'
-              placeholder='Email Address'
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className='w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500'
-              required
-            />
-            <input
-              type='password'
-              placeholder='Password'
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className='w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500'
-              required
-            />
+      <div className='bg-white rounded-lg p-6 max-w-md w-full mx-4'>
+        <div className='flex items-center mb-4'>
+          <div className='w-12 h-12 rounded-full flex items-center justify-center mr-4 bg-yellow-100'>
+            <AlertCircle className='h-6 w-6 text-yellow-600' />
           </div>
-
+          <div>
+            <h3 className='text-lg font-semibold text-gray-900'>Payment System Blocked</h3>
+          </div>
+        </div>
+        
+        <div className='text-gray-600 mb-6 space-y-3'>
+          <p>It appears that your browser's security settings or an ad blocker is preventing the payment system from loading properly.</p>
+          <p className='font-medium'>To fix this issue:</p>
+          <ul className='list-disc list-inside space-y-1 text-sm'>
+            <li>Disable ad blockers for this site</li>
+            <li>Check your browser's security settings</li>
+            <li>Try refreshing the page</li>
+            <li>Use a different browser if the issue persists</li>
+          </ul>
+        </div>
+        
+        <div className='flex justify-end space-x-3'>
           <button
-            type='submit'
-            className='w-full mt-6 px-6 py-3 bg-green-700 text-white rounded-lg hover:bg-green-800 transition-colors'
+            onClick={onClose}
+            className='px-4 py-2 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors'
           >
-            {authMode === 'signin' ? 'Sign In' : 'Create Account'}
+            Close
           </button>
-        </form>
-
-        <div className='mt-4 text-center'>
           <button
-            onClick={() =>
-              setAuthMode(authMode === 'signin' ? 'signup' : 'signin')
-            }
-            className='text-green-600 hover:text-green-800'
+            onClick={() => {
+              window.location.reload();
+            }}
+            className='px-4 py-2 text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors'
           >
-            {authMode === 'signin'
-              ? 'Need an account? Sign up'
-              : 'Already have an account? Sign in'}
+            Refresh Page
           </button>
         </div>
       </div>
@@ -1031,9 +1736,185 @@ const AuthModal = ({ authMode, setAuthMode, setShowAuthModal, handleAuth }) => {
   );
 };
 
-const ReviewSubmitStep = ({ formData, stripePrices, applicationId }) => {
+// Authentication Modal Component
+const AuthModal = ({ authMode, setAuthMode, setShowAuthModal, handleAuth, resetPassword }) => {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
+  const [showForgotPassword, setShowForgotPassword] = useState(false);
+  const [resetMessage, setResetMessage] = useState('');
+  const [isResetting, setIsResetting] = useState(false);
+
+  return (
+    <div className='fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50'>
+      <div className='bg-white rounded-lg p-8 max-w-md w-full mx-4'>
+        <div className='flex justify-between items-center mb-6'>
+          <h2 className='text-2xl font-bold text-green-800'>
+            {showForgotPassword ? 'Reset Password' : authMode === 'signin' ? 'Sign In' : 'Create Account'}
+          </h2>
+          <button onClick={() => setShowAuthModal(false)}>
+            <X className='h-6 w-6 text-gray-400' />
+          </button>
+        </div>
+
+        <form
+          onSubmit={async (e) => {
+            e.preventDefault();
+            if (showForgotPassword) {
+              setIsResetting(true);
+              setResetMessage('');
+              try {
+                const result = await resetPassword(email);
+                if (result.success) {
+                  setResetMessage('Check your email for password reset instructions.');
+                } else {
+                  setResetMessage(result.error || 'Failed to send reset email.');
+                }
+              } catch (error) {
+                setResetMessage('Failed to send reset email.');
+              } finally {
+                setIsResetting(false);
+              }
+            } else {
+              handleAuth(email, password, {
+                first_name: firstName,
+                last_name: lastName,
+              });
+            }
+          }}
+        >
+          {showForgotPassword ? (
+            <div className='space-y-4'>
+              <p className='text-gray-600 text-sm'>
+                Enter your email address and we'll send you a link to reset your password.
+              </p>
+              <input
+                type='email'
+                placeholder='Email Address'
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className='w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500'
+                required
+              />
+              {resetMessage && (
+                <div className={`text-sm p-3 rounded-lg ${resetMessage.includes('Check') ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                  {resetMessage}
+                </div>
+              )}
+            </div>
+          ) : (
+            <>
+              {authMode === 'signup' && (
+                <div className='grid grid-cols-2 gap-4 mb-4'>
+                  <input
+                    type='text'
+                    placeholder='First Name'
+                    value={firstName}
+                    onChange={(e) => setFirstName(e.target.value)}
+                    className='px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500'
+                    required
+                  />
+                  <input
+                    type='text'
+                    placeholder='Last Name'
+                    value={lastName}
+                    onChange={(e) => setLastName(e.target.value)}
+                    className='px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500'
+                    required
+                  />
+                </div>
+              )}
+
+              <div className='space-y-4'>
+                <input
+                  type='email'
+                  placeholder='Email Address'
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className='w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500'
+                  required
+                />
+                <input
+                  type='password'
+                  placeholder='Password'
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className='w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500'
+                  required
+                />
+              </div>
+            </>
+          )}
+
+          <button
+            type='submit'
+            disabled={showForgotPassword && isResetting}
+            className={`w-full mt-6 px-6 py-3 rounded-lg transition-colors flex items-center justify-center ${
+              showForgotPassword && isResetting
+                ? 'bg-gray-400 cursor-not-allowed'
+                : 'bg-green-700 hover:bg-green-800'
+            } text-white`}
+          >
+            {showForgotPassword && isResetting ? (
+              <>
+                <svg className='animate-spin -ml-1 mr-3 h-5 w-5 text-white' xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24'>
+                  <circle className='opacity-25' cx='12' cy='12' r='10' stroke='currentColor' strokeWidth='4'></circle>
+                  <path className='opacity-75' fill='currentColor' d='M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z'></path>
+                </svg>
+                Sending...
+              </>
+            ) : (
+              showForgotPassword ? 'Send Reset Email' : authMode === 'signin' ? 'Sign In' : 'Create Account'
+            )}
+          </button>
+        </form>
+
+        <div className='mt-4 text-center space-y-2'>
+          {showForgotPassword ? (
+            <button
+              onClick={() => {
+                setShowForgotPassword(false);
+                setResetMessage('');
+              }}
+              className='text-green-600 hover:text-green-800'
+            >
+              Back to Sign In
+            </button>
+          ) : (
+            <>
+              {authMode === 'signin' && (
+                <button
+                  onClick={() => setShowForgotPassword(true)}
+                  className='text-green-600 hover:text-green-800 text-sm'
+                >
+                  Forgot your password?
+                </button>
+              )}
+              <div>
+                <button
+                  onClick={() =>
+                    setAuthMode(authMode === 'signin' ? 'signup' : 'signin')
+                  }
+                  className='text-green-600 hover:text-green-800'
+                >
+                  {authMode === 'signin'
+                    ? 'Need an account? Sign up'
+                    : 'Already have an account? Sign in'}
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const ReviewSubmitStep = ({ formData, stripePrices, applicationId, hoaProperties }) => {
   // Check if user just returned from payment
   const [showPaymentSuccess, setShowPaymentSuccess] = React.useState(false);
+  const [multiCommunityInfo, setMultiCommunityInfo] = React.useState(null);
   
   React.useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -1044,6 +1925,29 @@ const ReviewSubmitStep = ({ formData, stripePrices, applicationId }) => {
       }
     }
   }, []);
+
+  // Load multi-community information
+  React.useEffect(() => {
+    const loadMultiCommunityInfo = async () => {
+      if (formData.hoaProperty && hoaProperties) {
+        const selectedProperty = hoaProperties.find(prop => prop.name === formData.hoaProperty);
+        if (selectedProperty && selectedProperty.is_multi_community) {
+          try {
+            const { getLinkedProperties } = await import('../lib/multiCommunityUtils');
+            const linkedProperties = await getLinkedProperties(selectedProperty.id);
+            setMultiCommunityInfo({
+              primaryProperty: selectedProperty,
+              linkedProperties: linkedProperties
+            });
+          } catch (error) {
+            console.error('Error loading multi-community info:', error);
+          }
+        }
+      }
+    };
+    
+    loadMultiCommunityInfo();
+  }, [formData.hoaProperty, hoaProperties]);
 
   return (
     <div className='space-y-6'>
@@ -1058,6 +1962,36 @@ const ReviewSubmitStep = ({ formData, stripePrices, applicationId }) => {
               <p className='text-sm text-green-700'>
                 Your payment has been processed successfully. Please review your information below and submit your application.
               </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Multi-Community Information */}
+      {multiCommunityInfo && (
+        <div className='bg-blue-50 border border-blue-200 rounded-lg p-6 mb-6'>
+          <div className='flex items-start'>
+            <Building2 className='h-6 w-6 text-blue-600 mr-3 mt-0.5' />
+            <div className='flex-1'>
+              <h4 className='text-lg font-semibold text-blue-900 mb-2'>
+                Multi-Community Association Detected
+              </h4>
+              <p className='text-sm text-blue-700 mb-3'>
+                Your property is part of multiple community associations. Additional documents and fees have been included for the following associations:
+              </p>
+              <div className='space-y-2'>
+                <div className='flex items-center text-sm'>
+                  <span className='w-2 h-2 bg-blue-600 rounded-full mr-2'></span>
+                  <span className='font-medium text-blue-900'>{multiCommunityInfo.primaryProperty.name}</span>
+                  <span className='ml-2 px-2 py-1 bg-blue-100 text-blue-700 rounded text-xs'>Primary</span>
+                </div>
+                {multiCommunityInfo.linkedProperties.map((property, index) => (
+                  <div key={index} className='flex items-center text-sm'>
+                    <span className='w-2 h-2 bg-blue-400 rounded-full mr-2'></span>
+                    <span className='text-blue-800'>{property.property_name}</span>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         </div>
@@ -1084,7 +2018,7 @@ const ReviewSubmitStep = ({ formData, stripePrices, applicationId }) => {
           </div>
           <div>
             <span className='font-medium'>Address:</span>{' '}
-            {formData.propertyAddress} {formData.unitNumber}
+            {formData.propertyAddress}{formData.unitNumber ? ` ${formData.unitNumber}` : ''}
           </div>
           <div>
             <span className='font-medium'>Sale Price:</span> $
@@ -1122,28 +2056,30 @@ const ReviewSubmitStep = ({ formData, stripePrices, applicationId }) => {
         </div>
       </div>
 
-      <div className='bg-white p-6 rounded-lg border border-gray-200'>
-        <h4 className='font-semibold text-gray-900 mb-4 flex items-center'>
-          <Users className='h-5 w-5 mr-2 text-green-600' />
-          Transaction Parties
-        </h4>
-        <div className='space-y-2 text-sm'>
-          <div>
-            <span className='font-medium'>Buyer:</span> {formData.buyerName}
-          </div>
-          <div>
-            <span className='font-medium'>Buyer Email:</span>{' '}
-            {formData.buyerEmail}
-          </div>
-          <div>
-            <span className='font-medium'>Seller:</span> {formData.sellerName}
-          </div>
-          <div>
-            <span className='font-medium'>Seller Email:</span>{' '}
-            {formData.sellerEmail}
+      {formData.submitterType !== 'settlement' && (
+        <div className='bg-white p-6 rounded-lg border border-gray-200'>
+          <h4 className='font-semibold text-gray-900 mb-4 flex items-center'>
+            <Users className='h-5 w-5 mr-2 text-green-600' />
+            Transaction Parties
+          </h4>
+          <div className='space-y-2 text-sm'>
+            <div>
+              <span className='font-medium'>Buyer:</span> {formData.buyerName}
+            </div>
+            <div>
+              <span className='font-medium'>Buyer Email:</span>{' '}
+              {formData.buyerEmail}
+            </div>
+            <div>
+              <span className='font-medium'>Seller:</span> {formData.sellerName}
+            </div>
+            <div>
+              <span className='font-medium'>Seller Email:</span>{' '}
+              {formData.sellerEmail}
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       <div className='bg-white p-6 rounded-lg border border-gray-200'>
         <h4 className='font-semibold text-gray-900 mb-4 flex items-center'>
@@ -1164,7 +2100,7 @@ const ReviewSubmitStep = ({ formData, stripePrices, applicationId }) => {
               : 'Bank Transfer'}
           </div>
           <div>
-            <span className='font-medium'>Total:</span> ${calculateTotal(formData, stripePrices)}
+            <span className='font-medium'>Total:</span> ${calculateTotal(formData, stripePrices, hoaProperties).toFixed(2)}
           </div>
         </div>
       </div>
@@ -1194,6 +2130,26 @@ export default function GMGResaleFlow() {
   // Get static data from context
   const { hoaProperties, stripePrices, isDataLoaded } = useAppContext();
   
+  // Handle Stripe analytics errors (commonly blocked by ad blockers)
+  useEffect(() => {
+    const handleStripeErrors = (event) => {
+      if (event.message && event.message.includes('r.stripe.com')) {
+        // Suppress Stripe analytics errors that are commonly blocked by ad blockers
+        event.preventDefault();
+        console.warn('Stripe analytics request blocked (likely by ad blocker) - this is normal and does not affect payment functionality');
+        return false;
+      }
+    };
+
+    // Add error listener for unhandled promise rejections
+    window.addEventListener('unhandledrejection', handleStripeErrors);
+    
+    // Cleanup
+    return () => {
+      window.removeEventListener('unhandledrejection', handleStripeErrors);
+    };
+  }, []);
+  
   // Get auth data from context
   const { 
     user, 
@@ -1206,6 +2162,7 @@ export default function GMGResaleFlow() {
     signIn, 
     signUp, 
     signOut, 
+    resetPassword,
     profile 
   } = useApplicantAuthStore();
   
@@ -1230,12 +2187,14 @@ export default function GMGResaleFlow() {
     message: '',
     type: 'success'
   });
+  const [showAdBlockerWarning, setShowAdBlockerWarning] = useState(false);
 
   const [formData, setFormData] = useState({
     hoaProperty: '',
     propertyAddress: '',
     unitNumber: '',
     submitterType: '',
+    publicOffering: false,
     submitterName: '',
     submitterEmail: '',
     submitterPhone: '',
@@ -1253,11 +2212,18 @@ export default function GMGResaleFlow() {
     totalAmount: 317.95,
   });
 
+  // Application type state
+  const [applicationType, setApplicationType] = useState('standard');
+  const [fieldRequirements, setFieldRequirements] = useState(null);
+  const [customMessaging, setCustomMessaging] = useState(null);
+  const [formSteps, setFormSteps] = useState([]);
+
   // Load applications for the current user
   const loadApplications = React.useCallback(async () => {
     if (!user) return;
 
     try {
+      console.log('Loading applications for user:', user.id);
       let query = supabase
         .from('applications')
         .select('*, hoa_properties(name)')
@@ -1274,6 +2240,7 @@ export default function GMGResaleFlow() {
         return;
       }
 
+      console.log('Loaded applications:', data?.length || 0, 'applications');
       setApplications(data || []);
     } catch (error) {
       console.error('Error in loadApplications:', error);
@@ -1305,6 +2272,7 @@ export default function GMGResaleFlow() {
         propertyAddress: data.property_address || '',
         unitNumber: data.unit_number || '',
         submitterType: data.submitter_type || '',
+        publicOffering: data.application_type === 'public_offering_statement',
         submitterName: data.submitter_name || '',
         submitterEmail: data.submitter_email || '',
         submitterPhone: data.submitter_phone || '',
@@ -1400,7 +2368,7 @@ export default function GMGResaleFlow() {
         closing_date: formData.closingDate || null,
         package_type: formData.packageType,
         payment_method: formData.paymentMethod,
-        total_amount: calculateTotal(formData, stripePrices),
+        total_amount: calculateTotal(formData, stripePrices, hoaProperties),
         status: 'draft',
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
@@ -1435,18 +2403,71 @@ export default function GMGResaleFlow() {
     }
   }, [user, currentStep, hoaProperties, formData, stripePrices, applicationId]);
 
+  // Update application type when submitter type or property changes
+  React.useEffect(() => {
+    if (formData.submitterType && formData.hoaProperty && hoaProperties) {
+      const selectedProperty = hoaProperties.find(prop => prop.name === formData.hoaProperty);
+      if (selectedProperty) {
+        let newApplicationType = determineApplicationType(formData.submitterType, selectedProperty);
+        if (formData.submitterType === 'builder' && formData.publicOffering) {
+          newApplicationType = 'public_offering_statement';
+        }
+        if (newApplicationType !== applicationType) {
+          setApplicationType(newApplicationType);
+          setFieldRequirements(getFieldRequirements(newApplicationType));
+          setCustomMessaging(getApplicationTypeMessaging(newApplicationType));
+          setFormSteps(getFormSteps(newApplicationType));
+          
+          // Update pricing when application type changes
+          updatePricingForApplicationType(newApplicationType);
+        }
+      }
+    }
+  }, [formData.submitterType, formData.hoaProperty, formData.publicOffering, hoaProperties, applicationType]);
+
+  // Update pricing based on application type
+  const updatePricingForApplicationType = React.useCallback(async (appType) => {
+    try {
+      const newTotal = await calculateTotalAmount(appType, formData.packageType, formData.paymentMethod);
+      setFormData(prev => ({
+        ...prev,
+        totalAmount: newTotal
+      }));
+    } catch (error) {
+      console.error('Error updating pricing:', error);
+    }
+  }, [formData.packageType, formData.paymentMethod]);
+
   // Memoize other handlers
   const nextStep = React.useCallback(async () => {
     if (currentStep < 5) {
       // Save draft before moving to next step
       await saveDraftApplication();
-      setCurrentStep(currentStep + 1);
+      
+      // Skip Transaction Details step for settlement agents
+      if (currentStep === 2 && formData.submitterType === 'settlement') {
+        setCurrentStep(4); // Jump to Package & Payment
+      } else if (currentStep === 2 && formData.submitterType === 'builder' && formData.publicOffering) {
+        // Skip Transaction Details for Public Offering Statement flow
+        setCurrentStep(4);
+      } else {
+        setCurrentStep(currentStep + 1);
+      }
     }
-  }, [currentStep, saveDraftApplication]);
+  }, [currentStep, saveDraftApplication, formData.submitterType, formData.publicOffering]);
 
   const prevStep = React.useCallback(() => {
-    if (currentStep > 1) setCurrentStep(currentStep - 1);
-  }, [currentStep]);
+    if (currentStep > 1) {
+      // Skip Transaction Details step when going back for settlement agents
+      if (currentStep === 4 && formData.submitterType === 'settlement') {
+        setCurrentStep(2); // Jump back to Submitter Info
+      } else if (currentStep === 4 && formData.submitterType === 'builder' && formData.publicOffering) {
+        setCurrentStep(2);
+      } else {
+        setCurrentStep(currentStep - 1);
+      }
+    }
+  }, [currentStep, formData.submitterType, formData.publicOffering]);
 
   // Delete draft application
   const deleteDraftApplication = React.useCallback(async (appId) => {
@@ -1516,6 +2537,12 @@ export default function GMGResaleFlow() {
           
           // Reload applications to refresh the list
           await loadApplications();
+          console.log('Applications reloaded successfully');
+          
+          // Force a small delay to ensure UI updates
+          setTimeout(() => {
+            console.log('UI should be updated now');
+          }, 100);
           
           // Show success snackbar
           setSnackbarData({
@@ -1561,6 +2588,7 @@ export default function GMGResaleFlow() {
       propertyAddress: '',
       unitNumber: '',
       submitterType: '',
+      publicOffering: false,
       submitterName: autoFillData.submitterName,
       submitterEmail: autoFillData.submitterEmail,
       submitterPhone: '',
@@ -1599,9 +2627,17 @@ export default function GMGResaleFlow() {
         applicationId
       );
 
-      // Generate unique access tokens
-      const inspectionToken = crypto.randomUUID();
-      const resaleToken = crypto.randomUUID();
+      // Get application type to determine required forms
+      const applicationTypeToUse = applicationData.application_type || applicationType || 'standard';
+      
+      // Import the getApplicationTypeData function
+      const { getApplicationTypeData } = await import('../lib/applicationTypes');
+      
+      // Get application type data to determine required forms
+      const appTypeData = await getApplicationTypeData(applicationTypeToUse);
+      const requiredForms = appTypeData.required_forms || [];
+
+      console.log(`Creating forms for application type: ${applicationTypeToUse}, Required forms: ${JSON.stringify(requiredForms)}`);
 
       // Determine recipient email (property owner email, or fallback to submitter)
       const recipientEmail =
@@ -1609,31 +2645,26 @@ export default function GMGResaleFlow() {
         applicationData.submitter_email ||
         'admin@gmgva.com';
 
-      // Create both forms at once
-      const formsToCreate = [
-        {
-          application_id: applicationId,
-          form_type: 'inspection_form',
-          status: 'not_started',
-          access_token: inspectionToken,
-          recipient_email: recipientEmail,
-          expires_at: new Date(
-            Date.now() + 30 * 24 * 60 * 60 * 1000
-          ).toISOString(), // 30 days from now
-          created_at: new Date().toISOString(),
-        },
-        {
-          application_id: applicationId,
-          form_type: 'resale_certificate',
-          status: 'not_started',
-          access_token: resaleToken,
-          recipient_email: recipientEmail,
-          expires_at: new Date(
-            Date.now() + 30 * 24 * 60 * 60 * 1000
-          ).toISOString(), // 30 days from now
-          created_at: new Date().toISOString(),
-        },
-      ];
+      // Create forms based on application type requirements
+      const formsToCreate = requiredForms.map(formType => ({
+        application_id: applicationId,
+        form_type: formType,
+        status: 'not_started',
+        access_token: crypto.randomUUID(),
+        recipient_email: recipientEmail,
+        expires_at: new Date(
+          Date.now() + 30 * 24 * 60 * 60 * 1000
+        ).toISOString(), // 30 days from now
+        created_at: new Date().toISOString(),
+        notes: applicationTypeToUse.startsWith('settlement_agent') 
+          ? 'Settlement agent request - requires accounting review'
+          : null
+      }));
+
+      if (formsToCreate.length === 0) {
+        console.log('No forms required for this application type');
+        return [];
+      }
 
       const { data, error } = await supabase
         .from('property_owner_forms')
@@ -1645,10 +2676,13 @@ export default function GMGResaleFlow() {
         throw error;
       }
 
+      console.log(`✅ Successfully created ${data.length} forms for application: ${applicationId}`);
       return data;
     } catch (error) {
       console.error('❌ Failed to create property owner forms:', error);
-      throw error;
+      // Don't throw error to prevent breaking the application flow
+      console.warn('Continuing without creating forms due to error');
+      return [];
     }
   };
 
@@ -1694,7 +2728,28 @@ export default function GMGResaleFlow() {
 
   const handleSubmit = async () => {
     try {
-      if (applicationId) {
+      // First, try to find existing application by applicationId or by matching pending payment application
+      let existingApplicationId = applicationId;
+      
+      if (!existingApplicationId) {
+        // Try to find a pending payment application for this user with matching details
+        const { data: pendingApps, error: searchError } = await supabase
+          .from('applications')
+          .select('id')
+          .eq('user_id', user.id)
+          .eq('status', 'pending_payment')
+          .eq('submitter_email', formData.submitterEmail)
+          .eq('property_address', formData.propertyAddress)
+          .order('created_at', { ascending: false })
+          .limit(1);
+          
+        if (!searchError && pendingApps && pendingApps.length > 0) {
+          existingApplicationId = pendingApps[0].id;
+          setApplicationId(existingApplicationId); // Update state for future use
+        }
+      }
+
+      if (existingApplicationId) {
         // Update existing application to under_review status
         const { data, error } = await supabase
           .from('applications')
@@ -1702,7 +2757,7 @@ export default function GMGResaleFlow() {
             status: 'under_review',
             submitted_at: new Date().toISOString(),
           })
-          .eq('id', applicationId)
+          .eq('id', existingApplicationId)
           .select()
           .single();
 
@@ -1775,7 +2830,7 @@ export default function GMGResaleFlow() {
           closing_date: formData.closingDate || null,
           package_type: formData.packageType,
           payment_method: formData.paymentMethod,
-          total_amount: calculateTotal(formData, stripePrices),
+          total_amount: calculateTotal(formData, stripePrices, hoaProperties),
           status: 'submitted',
           submitted_at: new Date().toISOString(),
         };
@@ -1840,6 +2895,7 @@ export default function GMGResaleFlow() {
         propertyAddress: '',
         unitNumber: '',
         submitterType: '',
+        publicOffering: false,
         submitterName: '',
         submitterEmail: '',
         submitterPhone: '',
@@ -1907,9 +2963,9 @@ export default function GMGResaleFlow() {
       return (
         <div className='space-y-8'>
           {/* Welcome Section */}
-          <div className='text-center py-12'>
-            <div className='w-20 h-20 bg-green-700 rounded-full flex items-center justify-center mx-auto mb-6'>
-              <Building2 className='h-10 w-10 text-white' />
+          <div className='text-center py-6'>
+            <div className='w-32 h-32 mx-auto mb-1'>
+              <Image src={companyLogo} alt='GMG Logo' width={128} height={128} className='object-contain' />
             </div>
             <h2 className='text-3xl font-bold text-gray-900 mb-4'>
               Welcome to GMG ResaleFlow
@@ -1952,90 +3008,6 @@ export default function GMGResaleFlow() {
                 </p>
               </div>
             )}
-          </div>
-
-          {/* Process Steps */}
-          <div className='bg-white rounded-lg shadow-sm border border-gray-200 p-8'>
-            <h3 className='text-2xl font-bold text-gray-900 mb-6 text-center'>
-              How It Works
-            </h3>
-            <div className='grid grid-cols-1 md:grid-cols-3 gap-8'>
-              <div className='text-center'>
-                <div className='w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4'>
-                  <FileText className='h-8 w-8 text-blue-600' />
-                </div>
-                <h4 className='text-lg font-semibold text-gray-900 mb-2'>
-                  1. Submit Application
-                </h4>
-                <p className='text-gray-600'>
-                  Provide property details, transaction information, and select
-                  your processing speed.
-                </p>
-              </div>
-              <div className='text-center'>
-                <div className='w-16 h-16 bg-yellow-100 rounded-full flex items-center justify-center mx-auto mb-4'>
-                  <Clock className='h-8 w-8 text-yellow-600' />
-                </div>
-                <h4 className='text-lg font-semibold text-gray-900 mb-2'>
-                  2. We Process
-                </h4>
-                <p className='text-gray-600'>
-                  Our team handles compliance inspections and gathers all
-                  required HOA documents.
-                </p>
-              </div>
-              <div className='text-center'>
-                <div className='w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4'>
-                  <CheckCircle className='h-8 w-8 text-green-600' />
-                </div>
-                <h4 className='text-lg font-semibold text-gray-900 mb-2'>
-                  3. Receive Documents
-                </h4>
-                <p className='text-gray-600'>
-                  Get your complete resale certificate package delivered
-                  electronically.
-                </p>
-              </div>
-            </div>
-          </div>
-
-          {/* Pricing Cards */}
-          <div className='grid grid-cols-1 md:grid-cols-2 gap-6'>
-            <div className='bg-white p-8 rounded-lg shadow-sm border border-gray-200'>
-              <h4 className='text-xl font-semibold text-gray-900 mb-2'>
-                Standard Processing
-              </h4>
-              <div className='text-3xl font-bold text-green-600 mb-4'>
-                $317.95
-              </div>
-              <p className='text-gray-600 mb-4'>10-15 business days</p>
-              <ul className='space-y-2 text-sm text-gray-600'>
-                <li>✓ Complete Virginia Resale Certificate</li>
-                <li>✓ HOA Documents Package</li>
-                <li>✓ Compliance Inspection Report</li>
-                <li>✓ Digital & Print Delivery</li>
-              </ul>
-            </div>
-            <div className='bg-orange-50 p-8 rounded-lg shadow-sm border border-orange-200'>
-              <div className='flex items-center justify-between mb-2'>
-                <h4 className='text-xl font-semibold text-gray-900'>
-                  Rush Processing
-                </h4>
-                <span className='px-3 py-1 bg-orange-100 text-orange-800 text-sm rounded-full font-medium'>
-                  PRIORITY
-                </span>
-              </div>
-              <div className='text-3xl font-bold text-orange-600 mb-4'>
-                $388.61
-              </div>
-              <p className='text-gray-600 mb-4'>5 business days</p>
-              <ul className='space-y-2 text-sm text-gray-600'>
-                <li>✓ Everything in Standard</li>
-                <li>✓ Priority queue processing</li>
-                <li>✓ Expedited compliance inspection</li>
-                <li>✓ 5-day completion guarantee</li>
-              </ul>
-            </div>
           </div>
 
           {/* Recent Applications - Only show if user has any */}
@@ -2122,6 +3094,90 @@ export default function GMGResaleFlow() {
               </div>
             </div>
           )}
+
+          {/* Process Steps */}
+          <div className='bg-white rounded-lg shadow-sm border border-gray-200 p-8'>
+            <h3 className='text-2xl font-bold text-gray-900 mb-6 text-center'>
+              How It Works
+            </h3>
+            <div className='grid grid-cols-1 md:grid-cols-3 gap-8'>
+              <div className='text-center'>
+                <div className='w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4'>
+                  <FileText className='h-8 w-8 text-blue-600' />
+                </div>
+                <h4 className='text-lg font-semibold text-gray-900 mb-2'>
+                  1. Submit Application
+                </h4>
+                <p className='text-gray-600'>
+                  Provide property details, transaction information, and select
+                  your processing speed.
+                </p>
+              </div>
+              <div className='text-center'>
+                <div className='w-16 h-16 bg-yellow-100 rounded-full flex items-center justify-center mx-auto mb-4'>
+                  <Clock className='h-8 w-8 text-yellow-600' />
+                </div>
+                <h4 className='text-lg font-semibold text-gray-900 mb-2'>
+                  2. We Process
+                </h4>
+                <p className='text-gray-600'>
+                  Our team handles compliance inspections and gathers all
+                  required HOA documents.
+                </p>
+              </div>
+              <div className='text-center'>
+                <div className='w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4'>
+                  <CheckCircle className='h-8 w-8 text-green-600' />
+                </div>
+                <h4 className='text-lg font-semibold text-gray-900 mb-2'>
+                  3. Receive Documents
+                </h4>
+                <p className='text-gray-600'>
+                  Get your complete resale certificate package delivered
+                  electronically.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Pricing Cards */}
+          <div className='grid grid-cols-1 md:grid-cols-2 gap-6'>
+            <div className='bg-white p-8 rounded-lg shadow-sm border border-gray-200'>
+              <h4 className='text-xl font-semibold text-gray-900 mb-2'>
+                Standard Processing
+              </h4>
+              <div className='text-3xl font-bold text-green-600 mb-4'>
+                $317.95
+              </div>
+              <p className='text-gray-600 mb-4'>10-15 business days</p>
+              <ul className='space-y-2 text-sm text-gray-600'>
+                <li>✓ Complete Virginia Resale Certificate</li>
+                <li>✓ HOA Documents Package</li>
+                <li>✓ Compliance Inspection Report</li>
+                <li>✓ Digital & Print Delivery</li>
+              </ul>
+            </div>
+            <div className='bg-orange-50 p-8 rounded-lg shadow-sm border border-orange-200'>
+              <div className='flex items-center justify-between mb-2'>
+                <h4 className='text-xl font-semibold text-gray-900'>
+                  Rush Processing
+                </h4>
+                <span className='px-3 py-1 bg-orange-100 text-orange-800 text-sm rounded-full font-medium'>
+                  PRIORITY
+                </span>
+              </div>
+              <div className='text-3xl font-bold text-orange-600 mb-4'>
+                $388.61
+              </div>
+              <p className='text-gray-600 mb-4'>5 business days</p>
+              <ul className='space-y-2 text-sm text-gray-600'>
+                <li>✓ Everything in Standard</li>
+                <li>✓ Priority queue processing</li>
+                <li>✓ Expedited compliance inspection</li>
+                <li>✓ 5-day completion guarantee</li>
+              </ul>
+            </div>
+          </div>
         </div>
       );
     }
@@ -2370,10 +3426,12 @@ export default function GMGResaleFlow() {
             currentStep={currentStep}
             setCurrentStep={setCurrentStep}
             applicationId={applicationId}
+            setApplicationId={setApplicationId}
             user={user}
             hoaProperties={hoaProperties}
             setShowAuthModal={setShowAuthModal}
             stripePrices={stripePrices}
+            applicationType={applicationType}
           />
         );
       case 5:
@@ -2382,6 +3440,7 @@ export default function GMGResaleFlow() {
             formData={formData}
             stripePrices={stripePrices}
             applicationId={applicationId}
+            hoaProperties={hoaProperties}
           />
         );
       default:
@@ -2418,14 +3477,9 @@ export default function GMGResaleFlow() {
             <div className='flex justify-between items-center py-4'>
               <div className='flex items-center space-x-4'>
                 <div className='flex items-center space-x-3'>
-                  <div className='w-10 h-10 bg-green-700 rounded-lg flex items-center justify-center'>
-                    <Building2 className='h-6 w-6 text-white' />
-                  </div>
+                  <Image src={companyLogo} alt='GMG Logo' width={50} height={50} className='object-contain' />
                   <div>
-                    <h1 className='text-xl font-bold text-green-900'>
-                      Goodman Management Group
-                    </h1>
-                    <p className='text-sm text-gray-600'>
+                    <p className='text-lg font-semibold text-gray-700'>
                       Resale Certificate System
                     </p>
                   </div>
@@ -2493,6 +3547,7 @@ export default function GMGResaleFlow() {
             setAuthMode={setAuthMode}
             setShowAuthModal={setShowAuthModal}
             handleAuth={handleAuth}
+            resetPassword={resetPassword}
           />
         )}
 
@@ -2505,6 +3560,12 @@ export default function GMGResaleFlow() {
           message={confirmModalData.message}
           confirmText={confirmModalData.confirmText}
           isDestructive={true}
+        />
+
+        {/* Ad Blocker Warning Modal */}
+        <AdBlockerWarningModal
+          isOpen={showAdBlockerWarning}
+          onClose={() => setShowAdBlockerWarning(false)}
         />
 
         {/* Snackbar */}
@@ -2527,14 +3588,9 @@ export default function GMGResaleFlow() {
           <div className='flex justify-between items-center py-4'>
             <div className='flex items-center space-x-4'>
               <div className='flex items-center space-x-3'>
-                <div className='w-10 h-10 bg-green-700 rounded-lg flex items-center justify-center'>
-                  <Building2 className='h-6 w-6 text-white' />
-                </div>
+                <Image src={companyLogo} alt='GMG Logo' width={50} height={50} className='object-contain' />
                 <div>
-                  <h1 className='text-xl font-bold text-green-900'>
-                    Goodman Management Group
-                  </h1>
-                  <p className='text-sm text-gray-600'>
+                  <p className='text-lg font-semibold text-gray-700'>
                     Resale Certificate System
                   </p>
                 </div>
@@ -2634,10 +3690,11 @@ export default function GMGResaleFlow() {
                 (currentStep === 2 &&
                   (!formData.submitterType ||
                     !formData.submitterName ||
-                    !formData.submitterEmail)) ||
+                    !formData.submitterEmail ||
+                    (formData.submitterType === 'settlement' && !formData.closingDate))) ||
                 (currentStep === 3 &&
+                  formData.submitterType !== 'settlement' &&
                   (!formData.buyerName ||
-                    !formData.sellerName ||
                     !formData.salePrice))
               }
               className='px-6 py-3 bg-green-700 text-white rounded-lg hover:bg-green-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2'
@@ -2651,7 +3708,7 @@ export default function GMGResaleFlow() {
               className='px-8 py-3 bg-green-700 text-white rounded-lg hover:bg-green-800 transition-colors flex items-center gap-2'
             >
               <CheckCircle className='h-5 w-5' />
-              {applicationId ? 'Submit Application' : `Submit Application & Pay $${calculateTotal(formData, stripePrices)}`}
+              {applicationId ? 'Submit Application' : `Submit Application & Pay $${calculateTotal(formData, stripePrices, hoaProperties).toFixed(2)}`}
             </button>
           ) : null}
         </div>
@@ -2664,6 +3721,7 @@ export default function GMGResaleFlow() {
           setAuthMode={setAuthMode}
           setShowAuthModal={setShowAuthModal}
           handleAuth={handleAuth}
+          resetPassword={resetPassword}
         />
       )}
 

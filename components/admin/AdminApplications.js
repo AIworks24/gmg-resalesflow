@@ -33,6 +33,7 @@ const AdminApplications = ({ userRole }) => {
   const [applications, setApplications] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedStatus, setSelectedStatus] = useState('all');
+  const [selectedApplicationType, setSelectedApplicationType] = useState('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedApplication, setSelectedApplication] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -62,6 +63,10 @@ const AdminApplications = ({ userRole }) => {
   const [inspectionFormData, setInspectionFormData] = useState(null);
   const [resaleFormData, setResaleFormData] = useState(null);
   const [loadingFormData, setLoadingFormData] = useState(false);
+  const [propertyGroups, setPropertyGroups] = useState([]);
+  const [loadingGroups, setLoadingGroups] = useState(false);
+  const [sendingGroupEmail, setSendingGroupEmail] = useState(null);
+  const [regeneratingGroupDocs, setRegeneratingGroupDocs] = useState(null);
 
   const supabase = createClientComponentClient();
   const router = useRouter();
@@ -194,7 +199,7 @@ const AdminApplications = ({ userRole }) => {
   useEffect(() => {
     setCurrentPage(1);
     loadApplications();
-  }, [selectedStatus, searchTerm]);
+  }, [selectedStatus, selectedApplicationType, searchTerm]);
 
 
   // Load property files when attachment modal opens
@@ -212,6 +217,73 @@ const AdminApplications = ({ userRole }) => {
       setPropertyFiles([]);
     }
   }, [showAttachmentModal, selectedApplication?.hoa_property_id]);
+
+  // Load property groups when application is selected
+  useEffect(() => {
+    if (selectedApplication?.id) {
+      loadPropertyGroups(selectedApplication.id);
+    } else {
+      setPropertyGroups([]);
+    }
+  }, [selectedApplication?.id]);
+
+  // Auto-create property groups for multi-community applications
+  useEffect(() => {
+    const checkAndCreateGroups = async () => {
+      // Only run if we have a multi-community application and no groups loaded yet
+      if (selectedApplication?.hoa_properties?.is_multi_community && 
+          selectedApplication?.id && 
+          !loadingGroups && 
+          propertyGroups.length === 0) {
+        
+        console.log('Multi-community application detected, checking for property groups...');
+        
+        try {
+          // First, try to load existing groups
+          const { data: existingGroups, error } = await supabase
+            .from('application_property_groups')
+            .select('*')
+            .eq('application_id', selectedApplication.id);
+
+          if (error) {
+            console.error('Error checking existing groups:', error);
+            return;
+          }
+
+          if (existingGroups && existingGroups.length > 0) {
+            // Groups already exist, just load them
+            console.log('Property groups already exist, loading them...');
+            setPropertyGroups(existingGroups);
+          } else {
+            // No groups exist, create them
+            console.log('No property groups found, creating them...');
+            
+            const response = await fetch('/api/admin/create-property-groups', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ applicationId: selectedApplication.id })
+            });
+            
+            if (response.ok) {
+              console.log('Property groups created successfully');
+              // Reload the groups
+              loadPropertyGroups(selectedApplication.id);
+            } else {
+              const error = await response.json();
+              console.error('Failed to create property groups:', error);
+            }
+          }
+        } catch (error) {
+          console.error('Error in checkAndCreateGroups:', error);
+        }
+      }
+    };
+
+    // Run the check after a short delay to ensure the component is fully loaded
+    const timeoutId = setTimeout(checkAndCreateGroups, 500);
+    
+    return () => clearTimeout(timeoutId);
+  }, [selectedApplication?.hoa_properties?.is_multi_community, selectedApplication?.id, loadingGroups, propertyGroups.length]);
 
   const loadApplications = async () => {
     setRefreshing(true);
@@ -241,6 +313,11 @@ const AdminApplications = ({ userRole }) => {
         countQuery = countQuery.neq('status', 'draft');
       }
 
+      // Apply application type filter
+      if (selectedApplicationType !== 'all') {
+        countQuery = countQuery.eq('application_type', selectedApplicationType);
+      }
+
       if (searchTerm) {
         countQuery = countQuery.or(`property_address.ilike.%${searchTerm}%,submitter_name.ilike.%${searchTerm}%,hoa_properties.name.ilike.%${searchTerm}%`);
       }
@@ -264,7 +341,7 @@ const AdminApplications = ({ userRole }) => {
         .select(
           `
           *,
-          hoa_properties(name, property_owner_email, property_owner_name),
+          hoa_properties(name, property_owner_email, property_owner_name, is_multi_community),
           property_owner_forms(id, form_type, status, completed_at, form_data, response_data),
           notifications(id, notification_type, status, sent_at)
         `
@@ -287,6 +364,11 @@ const AdminApplications = ({ userRole }) => {
       } else {
         // Only exclude draft status (applications not yet submitted) from "All Steps" view
         query = query.neq('status', 'draft');
+      }
+
+      // Apply application type filter
+      if (selectedApplicationType !== 'all') {
+        query = query.eq('application_type', selectedApplicationType);
       }
 
       if (searchTerm) {
@@ -984,6 +1066,77 @@ const AdminApplications = ({ userRole }) => {
     }
   };
 
+  // Property Groups Functions
+  const loadPropertyGroups = async (applicationId) => {
+    if (!applicationId) return;
+    
+    setLoadingGroups(true);
+    try {
+      const { data, error } = await supabase
+        .from('application_property_groups')
+        .select('*')
+        .eq('application_id', applicationId)
+        .order('is_primary', { ascending: false })
+        .order('created_at', { ascending: true });
+
+      if (error) throw error;
+      setPropertyGroups(data || []);
+    } catch (error) {
+      console.error('Error loading property groups:', error);
+      setSnackbar({ show: true, message: 'Error loading property groups: ' + error.message, type: 'error' });
+    } finally {
+      setLoadingGroups(false);
+    }
+  };
+
+  const handleSendGroupEmail = async (groupId) => {
+    setSendingGroupEmail(groupId);
+    try {
+      const response = await fetch('/api/admin/send-group-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ groupId, applicationId: selectedApplication.id })
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to send email');
+      }
+
+      setSnackbar({ show: true, message: 'Email sent successfully!', type: 'success' });
+      await loadPropertyGroups(selectedApplication.id);
+    } catch (error) {
+      console.error('Error sending group email:', error);
+      setSnackbar({ show: true, message: 'Error sending email: ' + error.message, type: 'error' });
+    } finally {
+      setSendingGroupEmail(null);
+    }
+  };
+
+  const handleRegenerateGroupDocs = async (groupId) => {
+    setRegeneratingGroupDocs(groupId);
+    try {
+      const response = await fetch('/api/admin/regenerate-group-docs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ groupId, applicationId: selectedApplication.id })
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to regenerate documents');
+      }
+
+      setSnackbar({ show: true, message: 'Documents regenerated successfully!', type: 'success' });
+      await loadPropertyGroups(selectedApplication.id);
+    } catch (error) {
+      console.error('Error regenerating group docs:', error);
+      setSnackbar({ show: true, message: 'Error regenerating documents: ' + error.message, type: 'error' });
+    } finally {
+      setRegeneratingGroupDocs(null);
+    }
+  };
+
   const renderAttachmentModal = () => {
     if (!selectedApplication) return null;
 
@@ -1296,6 +1449,23 @@ const AdminApplications = ({ userRole }) => {
               </select>
             </div>
 
+            {/* Application Type Filter */}
+            <div>
+              <label className='block text-sm font-medium text-gray-700 mb-2'>
+                Application Type
+              </label>
+              <select
+                value={selectedApplicationType}
+                onChange={(e) => setSelectedApplicationType(e.target.value)}
+                className='w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500'
+              >
+                <option value='all'>All Types</option>
+                <option value='standard'>Standard</option>
+                <option value='settlement_agent_va'>Settlement - Virginia</option>
+                <option value='settlement_agent_nc'>Settlement - North Carolina</option>
+              </select>
+            </div>
+
             {/* Assigned to Me Filter */}
             <div>
               <label className='block text-sm font-medium text-gray-700 mb-2'>
@@ -1337,6 +1507,9 @@ const AdminApplications = ({ userRole }) => {
                   <th className='px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider'>
                     Property Details
                   </th>
+                  <th className='px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider'>
+                    Application Type
+                  </th>
                   <th className='px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider workflow-column'>
                     Workflow Step
                   </th>
@@ -1367,6 +1540,36 @@ const AdminApplications = ({ userRole }) => {
                               {app.submitter_name} • {app.hoa_properties?.name || 'Unknown HOA'}
                             </div>
                           </div>
+                        </div>
+                      </td>
+
+                      <td className='px-6 py-4 whitespace-nowrap'>
+                        <div className='text-sm text-gray-900'>
+                          {(() => {
+                            const appType = app.application_type || 'standard';
+                            if (appType === 'settlement_agent_va') {
+                              return (
+                                <div className='flex items-center gap-2'>
+                                  <span className='inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800'>
+                                    Settlement - VA
+                                  </span>
+                                  <span className='text-xs text-gray-500'>FREE</span>
+                                </div>
+                              );
+                            } else if (appType === 'settlement_agent_nc') {
+                              return (
+                                <span className='inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800'>
+                                  Settlement - NC
+                                </span>
+                              );
+                            } else {
+                              return (
+                                <span className='inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-800'>
+                                  Standard
+                                </span>
+                              );
+                            }
+                          })()}
                         </div>
                       </td>
 
@@ -1563,6 +1766,23 @@ const AdminApplications = ({ userRole }) => {
               </div>
 
               <div className='p-6 space-y-6'>
+                {/* Multi-Community Indicator */}
+                {selectedApplication.hoa_properties?.is_multi_community && (
+                  <div className='bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6'>
+                    <div className='flex items-center'>
+                      <Building className='w-5 h-5 text-blue-600 mr-2' />
+                      <div>
+                        <h3 className='text-sm font-semibold text-blue-800'>
+                          Multi-Community Application
+                        </h3>
+                        <p className='text-sm text-blue-600 mt-1'>
+                          This application includes multiple community associations. Each property will be processed separately.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 {/* Application Overview */}
                 <div className='grid md:grid-cols-2 gap-6'>
                   <div>
@@ -1675,6 +1895,104 @@ const AdminApplications = ({ userRole }) => {
                     </div>
                   </div>
                 </div>
+
+                {/* Multi-Community Properties Section */}
+                {selectedApplication.hoa_properties?.is_multi_community && propertyGroups.length > 1 && (
+                  <div>
+                    <h3 className='text-lg font-semibold text-gray-800 mb-4'>
+                      Multi-Community Properties
+                    </h3>
+                    <div className='space-y-4'>
+                      {loadingGroups ? (
+                        <div className='flex items-center justify-center py-8'>
+                          <RefreshCw className='w-6 h-6 animate-spin text-blue-600' />
+                          <span className='ml-2 text-gray-600'>Loading property groups...</span>
+                        </div>
+                      ) : (
+                        propertyGroups.map((group) => (
+                          <div key={group.id} className='bg-gray-50 rounded-lg p-4 border border-gray-200'>
+                            <div className='flex items-center justify-between mb-3'>
+                              <div className='flex items-center gap-3'>
+                                <Building className='w-5 h-5 text-gray-600' />
+                                <div>
+                                  <h4 className='font-medium text-gray-900'>
+                                    {group.property_name}
+                                    {group.is_primary && (
+                                      <span className='ml-2 px-2 py-1 text-xs bg-blue-100 text-blue-800 rounded-full'>
+                                        Primary
+                                      </span>
+                                    )}
+                                  </h4>
+                                  <p className='text-sm text-gray-600'>
+                                    {group.property_location}
+                                  </p>
+                                  {group.property_owner_email && (
+                                    <p className='text-sm text-gray-500'>
+                                      Manager: {group.property_owner_email}
+                                    </p>
+                                  )}
+                                </div>
+                              </div>
+                              <div className='flex items-center gap-2'>
+                                <span className={`px-2 py-1 text-xs rounded-full ${
+                                  group.status === 'completed' ? 'bg-green-100 text-green-800' :
+                                  group.status === 'email_sent' ? 'bg-blue-100 text-blue-800' :
+                                  group.status === 'failed' ? 'bg-red-100 text-red-800' :
+                                  'bg-yellow-100 text-yellow-800'
+                                }`}>
+                                  {group.status === 'completed' ? 'Completed' :
+                                   group.status === 'email_sent' ? 'Email Sent' :
+                                   group.status === 'failed' ? 'Failed' : 'Pending'}
+                                </span>
+                              </div>
+                            </div>
+                            
+                            <div className='flex items-center gap-2'>
+                              <button
+                                onClick={() => handleSendGroupEmail(group.id)}
+                                disabled={sendingGroupEmail === group.id || group.status === 'email_sent'}
+                                className='px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed flex items-center gap-1'
+                              >
+                                {sendingGroupEmail === group.id ? (
+                                  <RefreshCw className='w-3 h-3 animate-spin' />
+                                ) : (
+                                  <FileText className='w-3 h-3' />
+                                )}
+                                Send Email
+                              </button>
+                              
+                              <button
+                                onClick={() => handleRegenerateGroupDocs(group.id)}
+                                disabled={regeneratingGroupDocs === group.id}
+                                className='px-3 py-1 text-sm bg-green-600 text-white rounded hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed flex items-center gap-1'
+                              >
+                                {regeneratingGroupDocs === group.id ? (
+                                  <RefreshCw className='w-3 h-3 animate-spin' />
+                                ) : (
+                                  <RefreshCw className='w-3 h-3' />
+                                )}
+                                Regenerate Docs
+                              </button>
+                            </div>
+                            
+                            {group.generated_docs && group.generated_docs.length > 0 && (
+                              <div className='mt-3 pt-3 border-t border-gray-200'>
+                                <p className='text-sm text-gray-600 mb-2'>Generated Documents:</p>
+                                <div className='flex flex-wrap gap-2'>
+                                  {group.generated_docs.map((doc, index) => (
+                                    <span key={index} className='px-2 py-1 text-xs bg-gray-200 text-gray-700 rounded'>
+                                      {doc.type || `Document ${index + 1}`}
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                )}
 
                 {/* Comments Section */}
                 <div>
@@ -1829,7 +2147,7 @@ const AdminApplications = ({ userRole }) => {
                                   onClick={() => handleGeneratePDF(selectedApplication.forms.resaleCertificate.form_data, selectedApplication.id)}
                                   disabled={generatingPDF}
                                   className='px-4 py-2 bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed'
-                                  title="Generate or regenerate PDF"
+                                  title="Generate or regenerate PDF."
                                 >
                                   {generatingPDF ? 'Generating...' : 
                                     (taskStatuses.pdf === 'completed' || taskStatuses.pdf === 'update_needed' ? 'Regenerate' : 'Generate')

@@ -17,10 +17,10 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { id } = req.body;
+    const { userId } = req.body;
 
     // Validate required fields
-    if (!id) {
+    if (!userId) {
       return res.status(400).json({ error: 'User ID is required' });
     }
 
@@ -28,7 +28,7 @@ export default async function handler(req, res) {
     const { error: profileError } = await supabaseAdmin
       .from('profiles')
       .delete()
-      .eq('id', id);
+      .eq('id', userId);
 
     if (profileError) {
       console.error('Profile error:', profileError);
@@ -36,7 +36,7 @@ export default async function handler(req, res) {
     }
 
     // Delete from auth
-    const { error: authError } = await supabaseAdmin.auth.admin.deleteUser(id);
+    const { error: authError } = await supabaseAdmin.auth.admin.deleteUser(userId);
     if (authError) {
       console.error('Auth error:', authError);
       return res.status(400).json({ error: authError.message });

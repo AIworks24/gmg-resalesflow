@@ -3,7 +3,6 @@ import { createClient } from '@supabase/supabase-js';
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-// Create a Supabase client with service role key for admin operations
 const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
   auth: {
     autoRefreshToken: false,
@@ -19,15 +18,9 @@ export default async function handler(req, res) {
   try {
     const { email, password, first_name, last_name, role } = req.body;
 
-    // Validate required fields
-    if (!email || !password || !role) {
-      return res.status(400).json({ error: 'Missing required fields' });
-    }
+    console.log('Creating user with:', { email, role });
 
-    // Check if user already exists in auth by trying to create first
-    // (The createUser method will fail if email already exists)
-
-    // Create user in auth
+    // Step 1: Create auth user
     const { data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({
       email,
       password,
@@ -36,28 +29,26 @@ export default async function handler(req, res) {
 
     if (authError) {
       console.error('Auth error:', authError);
-      return res.status(400).json({ error: authError.message });
+      return res.status(400).json({ error: `Auth error: ${authError.message}` });
     }
 
+    console.log('Auth user created with ID:', authData.user.id);
 
-    // Supabase automatically creates a profile when auth user is created
-    // So we need to UPDATE the existing profile instead of creating a new one
+    // Step 2: Create profile using raw SQL to avoid any ORM issues
     const { error: profileError } = await supabaseAdmin
-      .from('profiles')
-      .update({
-        email,
-        first_name: first_name || '',
-        last_name: last_name || '',
-        role,
-        updated_at: new Date().toISOString()
-      })
-      .eq('id', authData.user.id);
+      .rpc('create_user_profile', {
+        user_id: authData.user.id,
+        user_email: email,
+        user_first_name: first_name || '',
+        user_last_name: last_name || '',
+        user_role: role
+      });
 
     if (profileError) {
       console.error('Profile error:', profileError);
-      // If profile creation fails, we should delete the auth user
+      // Clean up auth user
       await supabaseAdmin.auth.admin.deleteUser(authData.user.id);
-      return res.status(400).json({ error: profileError.message });
+      return res.status(400).json({ error: `Profile error: ${profileError.message}` });
     }
 
     return res.status(200).json({ 
@@ -73,6 +64,6 @@ export default async function handler(req, res) {
 
   } catch (error) {
     console.error('Unexpected error:', error);
-    return res.status(500).json({ error: 'Internal server error' });
+    return res.status(500).json({ error: `Unexpected error: ${error.message}` });
   }
-} 
+}

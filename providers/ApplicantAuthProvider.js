@@ -26,7 +26,7 @@ export function ApplicantAuthProvider({ children }) {
     if (!isInitialized || isLoading) return;
 
     const currentPath = router.pathname;
-    const isPublicRoute = ['/', '/login', '/signup', '/about', '/contact'].includes(currentPath);
+    const isPublicRoute = ['/', '/login', '/signup', '/about', '/contact', '/reset-password'].includes(currentPath);
     const isAdminRoute = currentPath.startsWith('/admin');
     
     // Don't handle auth for admin routes (handled by AdminAuthProvider)

@@ -346,7 +346,13 @@
       "permissions": ["Create applications", "View own applications", "Resume/delete drafts"]
     },
     "admin": {
+      "permissions": ["View all applications", "Process forms", "Generate PDFs", "Send emails", "Access admin dashboard", "Manage users"]
+    },
+    "staff": {
       "permissions": ["View all applications", "Process forms", "Generate PDFs", "Send emails", "Access admin dashboard"]
+    },
+    "accounting": {
+      "permissions": ["View all applications", "Access admin dashboard", "Process settlement agent forms"]
     }
   },
   "external_integrations": {

@@ -20,8 +20,17 @@ import {
   Upload,
   ChevronLeft,
   ChevronRight,
-  RefreshCw
+  RefreshCw,
+  Link,
+  Unlink,
+  AlertTriangle
 } from 'lucide-react';
+import { 
+  getLinkedProperties, 
+  hasLinkedProperties, 
+  linkProperties, 
+  unlinkProperties 
+} from '../../lib/multiCommunityUtils';
 import AdminLayout from './AdminLayout';
 
 const AdminPropertiesManagement = ({ userRole }) => {
@@ -42,6 +51,14 @@ const AdminPropertiesManagement = ({ userRole }) => {
   const [pageSize, setPageSize] = useState(10);
   const [totalCount, setTotalCount] = useState(0);
 
+  // Multi-community state
+  const [isMultiCommunity, setIsMultiCommunity] = useState(false);
+  const [linkedProperties, setLinkedProperties] = useState([]);
+  const [availableProperties, setAvailableProperties] = useState([]);
+  const [selectedLinkedProperties, setSelectedLinkedProperties] = useState([]);
+  const [showLinkModal, setShowLinkModal] = useState(false);
+  const [linkingProperty, setLinkingProperty] = useState(null);
+
   const [formData, setFormData] = useState({
     name: '',
     location: '',
@@ -51,19 +68,29 @@ const AdminPropertiesManagement = ({ userRole }) => {
     management_contact: '',
     phone: '',
     email: '',
-    special_requirements: ''
+    special_requirements: '',
+    is_multi_community: false
   });
 
   const supabase = createClientComponentClient();
   const router = useRouter();
 
   useEffect(() => {
-    loadProperties();
-  }, []);
-
-  useEffect(() => {
     loadProperties(currentPage, searchTerm);
   }, [currentPage, pageSize]);
+
+  // Debounced search effect
+  useEffect(() => {
+    const timeoutId = setTimeout(() => {
+      if (searchTerm !== '') {
+        loadProperties(1, searchTerm); // Always search from page 1
+      } else {
+        loadProperties(currentPage, searchTerm);
+      }
+    }, 300);
+
+    return () => clearTimeout(timeoutId);
+  }, [searchTerm]);
 
   useEffect(() => {
     if (properties.length > 0) {
@@ -99,7 +126,7 @@ const AdminPropertiesManagement = ({ userRole }) => {
         .order('name', { ascending: true });
 
       // Apply search filter if provided
-      if (search.trim()) {
+      if (search && search.trim()) {
         query = query.or(`name.ilike.%${search}%,location.ilike.%${search}%,property_owner_name.ilike.%${search}%,property_owner_email.ilike.%${search}%`);
       }
 
@@ -114,6 +141,9 @@ const AdminPropertiesManagement = ({ userRole }) => {
       setTotalCount(count || 0);
     } catch (error) {
       console.error('Error loading properties:', error);
+      // Show error state instead of freezing
+      setProperties([]);
+      setTotalCount(0);
     } finally {
       setLoading(false);
     }
@@ -214,13 +244,16 @@ const AdminPropertiesManagement = ({ userRole }) => {
       management_contact: '',
       phone: '',
       email: '',
-      special_requirements: ''
+      special_requirements: '',
+      is_multi_community: false
     });
     setSelectedFiles([]);
+    setIsMultiCommunity(false);
+    setLinkedProperties([]);
     setShowModal(true);
   };
 
-  const openEditModal = (property) => {
+  const openEditModal = async (property) => {
     setModalMode('edit');
     setSelectedProperty(property);
     setFormData({
@@ -232,9 +265,25 @@ const AdminPropertiesManagement = ({ userRole }) => {
       management_contact: property.management_contact || '',
       phone: property.phone || '',
       email: property.email || '',
-      special_requirements: property.special_requirements || ''
+      special_requirements: property.special_requirements || '',
+      is_multi_community: property.is_multi_community || false
     });
     setSelectedFiles([]);
+    setIsMultiCommunity(property.is_multi_community || false);
+    
+    // Load linked properties for this property
+    if (property.is_multi_community) {
+      try {
+        const linked = await getLinkedProperties(property.id);
+        setLinkedProperties(linked);
+      } catch (error) {
+        console.error('Error loading linked properties:', error);
+        setLinkedProperties([]);
+      }
+    } else {
+      setLinkedProperties([]);
+    }
+    
     setShowModal(true);
   };
 
@@ -308,9 +357,113 @@ const AdminPropertiesManagement = ({ userRole }) => {
   const handleSearch = (value) => {
     setSearchTerm(value);
     setCurrentPage(1); // Reset to first page when searching
-    setTimeout(() => {
-      loadProperties(1, value);
-    }, 300); // Debounce search
+    // Remove the setTimeout and let the useEffect handle the loading
+    // This prevents race conditions with pagination
+  };
+
+  // Multi-community functions
+  const loadAvailableProperties = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('hoa_properties')
+        .select('id, name, location')
+        .order('name');
+
+      if (error) throw error;
+      setAvailableProperties(data || []);
+    } catch (error) {
+      console.error('Error loading available properties:', error);
+    }
+  };
+
+  const openLinkModal = async (property) => {
+    setLinkingProperty(property);
+    setSelectedLinkedProperties([]);
+    loadAvailableProperties();
+    
+    // Load existing linked properties for this property
+    try {
+      const linked = await getLinkedProperties(property.id);
+      setLinkedProperties(linked);
+    } catch (error) {
+      console.error('Error loading linked properties:', error);
+      setLinkedProperties([]);
+    }
+    
+    setShowLinkModal(true);
+  };
+
+  const handleLinkProperties = async () => {
+    if (!linkingProperty || selectedLinkedProperties.length === 0) return;
+
+    try {
+      await linkProperties(linkingProperty.id, selectedLinkedProperties);
+      setShowLinkModal(false);
+      setLinkingProperty(null);
+      setSelectedLinkedProperties([]);
+      
+      // Reload properties to show updated multi-community status
+      loadProperties();
+      
+      // If we're in edit mode, reload the linked properties
+      if (selectedProperty && selectedProperty.id === linkingProperty.id) {
+        const linked = await getLinkedProperties(linkingProperty.id);
+        setLinkedProperties(linked);
+      }
+    } catch (error) {
+      console.error('Error linking properties:', error);
+      alert('Error linking properties: ' + error.message);
+    }
+  };
+
+  const handleUnlinkProperty = async (propertyId, linkedPropertyId) => {
+    try {
+      await unlinkProperties(propertyId, [linkedPropertyId]);
+      
+      // Reload linked properties
+      const linked = await getLinkedProperties(propertyId);
+      setLinkedProperties(linked);
+      
+      // Reload properties list
+      loadProperties();
+    } catch (error) {
+      console.error('Error unlinking property:', error);
+      alert('Error unlinking property: ' + error.message);
+    }
+  };
+
+  const handleMultiCommunityToggle = async (checked) => {
+    setIsMultiCommunity(checked);
+    setFormData({...formData, is_multi_community: checked});
+    
+    if (!checked && linkedProperties.length > 0) {
+      // Warn user about existing links
+      const confirmUnlink = confirm(
+        `This property has ${linkedProperties.length} linked properties. Unchecking this will remove all property links. Do you want to continue?`
+      );
+      
+      if (confirmUnlink) {
+        try {
+          // Unlink all properties
+          const linkedIds = linkedProperties.map(prop => prop.linked_property_id);
+          await unlinkProperties(selectedProperty.id, linkedIds);
+          setLinkedProperties([]);
+          alert('All property links have been removed.');
+        } catch (error) {
+          console.error('Error unlinking properties:', error);
+          alert('Error removing property links: ' + error.message);
+          // Revert the checkbox
+          setIsMultiCommunity(true);
+          setFormData({...formData, is_multi_community: true});
+        }
+      } else {
+        // User cancelled, revert the checkbox
+        setIsMultiCommunity(true);
+        setFormData({...formData, is_multi_community: true});
+      }
+    } else if (!checked) {
+      setLinkedProperties([]);
+    }
   };
 
   const totalPages = Math.ceil(totalCount / pageSize);
@@ -341,7 +494,11 @@ const AdminPropertiesManagement = ({ userRole }) => {
               </p>
             </div>
             <button
-              onClick={() => loadProperties(currentPage, searchTerm)}
+              onClick={() => {
+                setCurrentPage(1);
+                setSearchTerm('');
+                loadProperties(1, '');
+              }}
               disabled={loading}
               className='flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50'
             >
@@ -389,6 +546,9 @@ const AdminPropertiesManagement = ({ userRole }) => {
                   Owner
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Multi-Community
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   Files
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -397,7 +557,23 @@ const AdminPropertiesManagement = ({ userRole }) => {
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
-              {properties.map((property) => (
+              {loading ? (
+                <tr>
+                  <td colSpan="6" className="px-6 py-12 text-center">
+                    <div className="flex items-center justify-center">
+                      <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600 mr-3"></div>
+                      <span className="text-gray-600">Loading properties...</span>
+                    </div>
+                  </td>
+                </tr>
+              ) : properties.length === 0 ? (
+                <tr>
+                  <td colSpan="6" className="px-6 py-12 text-center text-gray-500">
+                    No properties found
+                  </td>
+                </tr>
+              ) : (
+                properties.map((property) => (
                 <tr key={property.id} className="hover:bg-gray-50">
                   <td className="px-6 py-4 whitespace-nowrap">
                     <div className="text-sm font-medium text-gray-900">
@@ -416,6 +592,16 @@ const AdminPropertiesManagement = ({ userRole }) => {
                     <div className="text-sm text-gray-500">
                       {property.property_owner_email}
                     </div>
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap">
+                    {property.is_multi_community ? (
+                      <div className="flex items-center gap-2">
+                        <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
+                        <span className="text-sm text-blue-600 font-medium">Multi-Community</span>
+                      </div>
+                    ) : (
+                      <span className="text-sm text-gray-400">Single</span>
+                    )}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap">
                     <div className="flex items-center gap-2">
@@ -449,8 +635,23 @@ const AdminPropertiesManagement = ({ userRole }) => {
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-2">
                     <button
+                      onClick={() => router.push(`/admin/property-files/${property.id}`)}
+                      className="text-green-600 hover:text-green-900"
+                      title="Manage Documents"
+                    >
+                      <FileText className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={() => openLinkModal(property)}
+                      className="text-purple-600 hover:text-purple-900"
+                      title={property.is_multi_community ? "Manage Linked Properties" : "Link Properties"}
+                    >
+                      <Link className="w-4 h-4" />
+                    </button>
+                    <button
                       onClick={() => openEditModal(property)}
                       className="text-blue-600 hover:text-blue-900"
+                      title="Edit Property"
                     >
                       <Edit className="w-4 h-4" />
                     </button>
@@ -460,12 +661,14 @@ const AdminPropertiesManagement = ({ userRole }) => {
                         setShowDeleteConfirm(true);
                       }}
                       className="text-red-600 hover:text-red-900"
+                      title="Delete Property"
                     >
                       <Trash2 className="w-4 h-4" />
                     </button>
                   </td>
                 </tr>
-              ))}
+                ))
+              )}
             </tbody>
           </table>
         </div>
@@ -677,6 +880,37 @@ const AdminPropertiesManagement = ({ userRole }) => {
                   </div>
                 </div>
 
+                {/* Multi-Community Settings */}
+                <div className="border-t pt-4">
+                  <h3 className="text-md font-medium text-gray-900 mb-3">Multi-Community Settings</h3>
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="checkbox"
+                      id="is_multi_community"
+                      checked={isMultiCommunity}
+                      onChange={(e) => handleMultiCommunityToggle(e.target.checked)}
+                      className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                    />
+                    <label htmlFor="is_multi_community" className="text-sm font-medium text-gray-700">
+                      Check for Multiple Community Associations
+                    </label>
+                  </div>
+                  {isMultiCommunity && (
+                    <div className="mt-3 p-3 bg-blue-50 rounded-md">
+                      <div className="flex items-start gap-2">
+                        <AlertTriangle className="w-4 h-4 text-blue-600 mt-0.5" />
+                        <div className="text-sm text-blue-800">
+                          <p className="font-medium">Multi-Community Property</p>
+                          <p className="text-blue-600">
+                            This property will automatically include additional associations when selected by users. 
+                            Use the Link Properties button to manage associated properties.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
                 {/* Special Requirements */}
                 <div className="border-t pt-4">
                   <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -760,6 +994,103 @@ const AdminPropertiesManagement = ({ userRole }) => {
                   </button>
                 </div>
               </form>
+            </div>
+          </div>
+        )}
+
+        {/* Property Linking Modal */}
+        {showLinkModal && linkingProperty && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+            <div className="bg-white rounded-lg max-w-2xl w-full max-h-[80vh] overflow-y-auto p-6">
+              <div className="flex justify-between items-center mb-4">
+                <h2 className="text-lg font-semibold">
+                  Link Properties for {linkingProperty.name}
+                </h2>
+                <button
+                  onClick={() => setShowLinkModal(false)}
+                  className="text-gray-400 hover:text-gray-600"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="mb-4">
+                <p className="text-sm text-gray-600 mb-4">
+                  Select properties that should be automatically included when users select "{linkingProperty.name}".
+                  These properties will generate additional transactions and documents.
+                </p>
+
+                {/* Current linked properties */}
+                {linkedProperties.length > 0 && (
+                  <div className="mb-4">
+                    <h3 className="text-sm font-medium text-gray-700 mb-2">Currently Linked Properties:</h3>
+                    <div className="space-y-2">
+                      {linkedProperties.map((linked) => (
+                        <div key={linked.linked_property_id} className="flex items-center justify-between p-2 bg-gray-50 rounded-md">
+                          <div>
+                            <span className="text-sm font-medium text-gray-900">{linked.property_name}</span>
+                            <span className="text-sm text-gray-500 ml-2">({linked.location})</span>
+                          </div>
+                          <button
+                            onClick={() => handleUnlinkProperty(linkingProperty.id, linked.linked_property_id)}
+                            className="text-red-600 hover:text-red-800"
+                            title="Unlink Property"
+                          >
+                            <Unlink className="w-4 h-4" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Available properties to link */}
+                <div>
+                  <h3 className="text-sm font-medium text-gray-700 mb-2">Available Properties to Link:</h3>
+                  <div className="max-h-60 overflow-y-auto border border-gray-200 rounded-md">
+                    {availableProperties
+                      .filter(prop => prop.id !== linkingProperty.id) // Don't show the property itself
+                      .map((property) => (
+                        <div key={property.id} className="flex items-center p-3 hover:bg-gray-50">
+                          <input
+                            type="checkbox"
+                            id={`link-${property.id}`}
+                            checked={selectedLinkedProperties.includes(property.id)}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setSelectedLinkedProperties([...selectedLinkedProperties, property.id]);
+                              } else {
+                                setSelectedLinkedProperties(selectedLinkedProperties.filter(id => id !== property.id));
+                              }
+                            }}
+                            className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                          />
+                          <label htmlFor={`link-${property.id}`} className="ml-3 flex-1 cursor-pointer">
+                            <div className="text-sm font-medium text-gray-900">{property.name}</div>
+                            <div className="text-sm text-gray-500">{property.location}</div>
+                          </label>
+                        </div>
+                      ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-3 pt-4 border-t">
+                <button
+                  onClick={() => setShowLinkModal(false)}
+                  className="px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleLinkProperties}
+                  disabled={selectedLinkedProperties.length === 0}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                >
+                  <Link className="w-4 h-4" />
+                  Link {selectedLinkedProperties.length} Properties
+                </button>
+              </div>
             </div>
           </div>
         )}

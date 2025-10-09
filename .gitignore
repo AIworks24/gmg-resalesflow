@@ -157,3 +157,5 @@ config.local.json
 
 # AI Editors
 CLAUDE.md
+.claude/
+.env*.local

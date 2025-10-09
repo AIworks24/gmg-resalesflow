@@ -9,7 +9,7 @@ const useAdminAuthStore = create(
   profile: null,
   isLoading: true,
   isInitialized: false,
-  role: null, // 'admin', 'staff', or null
+  role: null, // 'admin', 'staff', 'accounting', or null
 
   // Actions
   initialize: async () => {
@@ -28,8 +28,8 @@ const useAdminAuthStore = create(
           .eq('id', user.id)
           .single();
         
-        // Only allow admin and staff users
-        if (profile?.role === 'admin' || profile?.role === 'staff') {
+        // Only allow admin, staff, and accounting users
+        if (profile?.role === 'admin' || profile?.role === 'staff' || profile?.role === 'accounting') {
           set({
             user,
             profile,
@@ -127,7 +127,7 @@ const useAdminAuthStore = create(
           .eq('id', data.user.id)
           .single();
 
-        if (profile?.role === 'admin' || profile?.role === 'staff') {
+        if (profile?.role === 'admin' || profile?.role === 'staff' || profile?.role === 'accounting') {
           set({
             user: data.user,
             profile,
@@ -136,9 +136,9 @@ const useAdminAuthStore = create(
           });
           return { success: true };
         } else {
-          // Sign out if not admin/staff
+          // Sign out if not admin/staff/accounting
           await supabase.auth.signOut();
-          throw new Error('Access denied. Admin or staff role required.');
+          throw new Error('Access denied. Admin, staff, or accounting role required.');
         }
       }
     } catch (error) {
@@ -176,7 +176,7 @@ const useAdminAuthStore = create(
   // Computed getters
   isAuthenticated: () => {
     const { user, role } = get();
-    return !!user && (role === 'admin' || role === 'staff');
+    return !!user && (role === 'admin' || role === 'staff' || role === 'accounting');
   },
 
   isAdmin: () => {
@@ -189,6 +189,11 @@ const useAdminAuthStore = create(
     return role === 'staff';
   },
 
+  isAccounting: () => {
+    const { role } = get();
+    return role === 'accounting';
+  },
+
   hasRole: (requiredRole) => {
     const { role } = get();
     if (requiredRole === 'admin') {
@@ -196,6 +201,9 @@ const useAdminAuthStore = create(
     }
     if (requiredRole === 'staff') {
       return role === 'admin' || role === 'staff';
+    }
+    if (requiredRole === 'accounting') {
+      return role === 'admin' || role === 'accounting';
     }
     return false;
   },
