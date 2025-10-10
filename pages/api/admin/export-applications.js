@@ -1,4 +1,4 @@
-import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
+import { createPagesServerClient } from '@supabase/auth-helpers-nextjs';
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -6,7 +6,7 @@ export default async function handler(req, res) {
   }
 
   try {
-    const supabase = createClientComponentClient();
+    const supabase = createPagesServerClient({ req, res });
     const { dateRange } = req.body;
 
     // Build query

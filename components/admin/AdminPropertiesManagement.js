@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
 import { useRouter } from 'next/router';
+import useSWR from 'swr';
 import {
   Building,
   Plus,
@@ -34,8 +35,6 @@ import {
 import AdminLayout from './AdminLayout';
 
 const AdminPropertiesManagement = ({ userRole }) => {
-  const [properties, setProperties] = useState([]);
-  const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [showModal, setShowModal] = useState(false);
   const [modalMode, setModalMode] = useState('add'); // 'add' or 'edit'
@@ -49,7 +48,6 @@ const AdminPropertiesManagement = ({ userRole }) => {
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
-  const [totalCount, setTotalCount] = useState(0);
 
   // Multi-community state
   const [isMultiCommunity, setIsMultiCommunity] = useState(false);
@@ -75,21 +73,41 @@ const AdminPropertiesManagement = ({ userRole }) => {
   const supabase = createClientComponentClient();
   const router = useRouter();
 
-  useEffect(() => {
-    loadProperties(currentPage, searchTerm);
-  }, [currentPage, pageSize]);
+  // SWR fetcher function
+  const fetcher = async (url) => {
+    const res = await fetch(url);
+    if (!res.ok) {
+      const error = new Error('Failed to fetch properties');
+      error.info = await res.json();
+      error.status = res.status;
+      throw error;
+    }
+    return res.json();
+  };
 
-  // Debounced search effect
-  useEffect(() => {
-    const timeoutId = setTimeout(() => {
-      if (searchTerm !== '') {
-        loadProperties(1, searchTerm); // Always search from page 1
-      } else {
-        loadProperties(currentPage, searchTerm);
-      }
-    }, 300);
+  // Build API URL with query parameters
+  const apiUrl = `/api/admin/hoa-properties?page=${currentPage}&pageSize=${pageSize}&search=${encodeURIComponent(searchTerm)}`;
 
-    return () => clearTimeout(timeoutId);
+  // Fetch properties using SWR
+  const { data: swrData, error: swrError, isLoading, mutate } = useSWR(
+    apiUrl,
+    fetcher,
+    {
+      refreshInterval: 0,
+      revalidateOnFocus: false,
+      dedupingInterval: 5000,
+    }
+  );
+
+  // Extract data from SWR response
+  const properties = swrData?.properties || [];
+  const totalCount = swrData?.totalCount || 0;
+
+  // Reset to page 1 when search term changes
+  useEffect(() => {
+    if (searchTerm !== '') {
+      setCurrentPage(1);
+    }
   }, [searchTerm]);
 
   useEffect(() => {
@@ -113,41 +131,6 @@ const AdminPropertiesManagement = ({ userRole }) => {
   }, [router.query.edit, properties]);
 
 
-  const loadProperties = async (page = currentPage, search = searchTerm) => {
-    try {
-      setLoading(true);
-      
-      const from = (page - 1) * pageSize;
-      const to = from + pageSize - 1;
-
-      let query = supabase
-        .from('hoa_properties')
-        .select('*', { count: 'exact' })
-        .order('name', { ascending: true });
-
-      // Apply search filter if provided
-      if (search && search.trim()) {
-        query = query.or(`name.ilike.%${search}%,location.ilike.%${search}%,property_owner_name.ilike.%${search}%,property_owner_email.ilike.%${search}%`);
-      }
-
-      // Apply pagination
-      query = query.range(from, to);
-
-      const { data, error, count } = await query;
-
-      if (error) throw error;
-      
-      setProperties(data || []);
-      setTotalCount(count || 0);
-    } catch (error) {
-      console.error('Error loading properties:', error);
-      // Show error state instead of freezing
-      setProperties([]);
-      setTotalCount(0);
-    } finally {
-      setLoading(false);
-    }
-  };
 
 
   // File management functions
@@ -222,7 +205,7 @@ const AdminPropertiesManagement = ({ userRole }) => {
       if (updateError) throw updateError;
 
       setSelectedFiles([]);
-      await loadProperties(); // Reload properties to get updated documents_folder
+      mutate(); // Reload properties
       await loadAllPropertyFiles(); // Reload all files
     } catch (error) {
       console.error('Error uploading files:', error);
@@ -327,7 +310,7 @@ const AdminPropertiesManagement = ({ userRole }) => {
       }
 
       setShowModal(false);
-      loadProperties();
+      mutate();
     } catch (error) {
       console.error('Error saving property:', error);
       alert('Error saving property: ' + error.message);
@@ -347,7 +330,7 @@ const AdminPropertiesManagement = ({ userRole }) => {
 
       setShowDeleteConfirm(false);
       setPropertyToDelete(null);
-      loadProperties();
+      mutate();
     } catch (error) {
       console.error('Error deleting property:', error);
       alert('Error deleting property: ' + error.message);
@@ -403,7 +386,7 @@ const AdminPropertiesManagement = ({ userRole }) => {
       setSelectedLinkedProperties([]);
       
       // Reload properties to show updated multi-community status
-      loadProperties();
+      mutate();
       
       // If we're in edit mode, reload the linked properties
       if (selectedProperty && selectedProperty.id === linkingProperty.id) {
@@ -425,7 +408,7 @@ const AdminPropertiesManagement = ({ userRole }) => {
       setLinkedProperties(linked);
       
       // Reload properties list
-      loadProperties();
+      mutate();
     } catch (error) {
       console.error('Error unlinking property:', error);
       alert('Error unlinking property: ' + error.message);
@@ -468,14 +451,119 @@ const AdminPropertiesManagement = ({ userRole }) => {
 
   const totalPages = Math.ceil(totalCount / pageSize);
 
-  if (loading) {
+  // Show error state if SWR encountered an error
+  if (swrError) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
-          <p className="text-gray-600">Loading properties...</p>
+      <AdminLayout>
+        <div className="min-h-screen flex items-center justify-center">
+          <div className="text-center">
+            <AlertTriangle className='w-12 h-12 text-red-500 mx-auto mb-4' />
+            <h3 className='text-lg font-semibold text-gray-900 mb-2'>Failed to load properties</h3>
+            <p className='text-gray-600 mb-4'>Please try refreshing the page</p>
+            <button
+              onClick={() => mutate()}
+              className='px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700'
+            >
+              Retry
+            </button>
+          </div>
         </div>
-      </div>
+      </AdminLayout>
+    );
+  }
+
+  // Show skeleton loading state
+  if (isLoading && properties.length === 0) {
+    return (
+      <AdminLayout>
+        <div className="max-w-7xl mx-auto p-6">
+          {/* Header Skeleton */}
+          <div className='mb-8'>
+            <div className='flex items-center justify-between'>
+              <div className='flex-1'>
+                <div className='h-9 bg-gray-200 rounded w-64 mb-2 animate-pulse'></div>
+                <div className='h-5 bg-gray-200 rounded w-96 animate-pulse'></div>
+              </div>
+              <div className='h-10 w-28 bg-gray-200 rounded animate-pulse'></div>
+            </div>
+          </div>
+
+          {/* Controls Skeleton */}
+          <div className="flex justify-between items-center mb-6">
+            <div className="h-10 w-64 bg-gray-200 rounded-lg animate-pulse"></div>
+            <div className="h-10 w-36 bg-gray-200 rounded-lg animate-pulse"></div>
+          </div>
+
+          {/* Table Skeleton */}
+          <div className="bg-white rounded-lg shadow overflow-hidden">
+            <table className="min-w-full divide-y divide-gray-200">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-6 py-3 text-left">
+                    <div className="h-4 bg-gray-200 rounded w-20 animate-pulse"></div>
+                  </th>
+                  <th className="px-6 py-3 text-left">
+                    <div className="h-4 bg-gray-200 rounded w-20 animate-pulse"></div>
+                  </th>
+                  <th className="px-6 py-3 text-left">
+                    <div className="h-4 bg-gray-200 rounded w-16 animate-pulse"></div>
+                  </th>
+                  <th className="px-6 py-3 text-left">
+                    <div className="h-4 bg-gray-200 rounded w-32 animate-pulse"></div>
+                  </th>
+                  <th className="px-6 py-3 text-left">
+                    <div className="h-4 bg-gray-200 rounded w-12 animate-pulse"></div>
+                  </th>
+                  <th className="px-6 py-3 text-left">
+                    <div className="h-4 bg-gray-200 rounded w-16 animate-pulse"></div>
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
+                {[1, 2, 3, 4, 5, 6, 7, 8].map((i) => (
+                  <tr key={i}>
+                    <td className="px-6 py-4">
+                      <div className="h-4 bg-gray-200 rounded w-40 mb-1 animate-pulse"></div>
+                      <div className="h-3 bg-gray-200 rounded w-24 animate-pulse"></div>
+                    </td>
+                    <td className="px-6 py-4">
+                      <div className="h-4 bg-gray-200 rounded w-32 animate-pulse"></div>
+                    </td>
+                    <td className="px-6 py-4">
+                      <div className="h-4 bg-gray-200 rounded w-36 mb-1 animate-pulse"></div>
+                      <div className="h-3 bg-gray-200 rounded w-40 animate-pulse"></div>
+                    </td>
+                    <td className="px-6 py-4">
+                      <div className="h-5 bg-gray-200 rounded-full w-12 animate-pulse"></div>
+                    </td>
+                    <td className="px-6 py-4">
+                      <div className="h-4 bg-gray-200 rounded w-8 animate-pulse"></div>
+                    </td>
+                    <td className="px-6 py-4">
+                      <div className="flex gap-2">
+                        <div className="h-8 w-8 bg-gray-200 rounded animate-pulse"></div>
+                        <div className="h-8 w-8 bg-gray-200 rounded animate-pulse"></div>
+                        <div className="h-8 w-8 bg-gray-200 rounded animate-pulse"></div>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Pagination Skeleton */}
+          <div className="mt-4 flex items-center justify-between">
+            <div className="h-4 bg-gray-200 rounded w-48 animate-pulse"></div>
+            <div className="flex gap-2">
+              <div className="h-8 w-8 bg-gray-200 rounded animate-pulse"></div>
+              <div className="h-8 w-8 bg-gray-200 rounded animate-pulse"></div>
+              <div className="h-8 w-8 bg-gray-200 rounded animate-pulse"></div>
+              <div className="h-8 w-8 bg-gray-200 rounded animate-pulse"></div>
+            </div>
+          </div>
+        </div>
+      </AdminLayout>
     );
   }
 
@@ -497,13 +585,13 @@ const AdminPropertiesManagement = ({ userRole }) => {
               onClick={() => {
                 setCurrentPage(1);
                 setSearchTerm('');
-                loadProperties(1, '');
+                mutate();
               }}
-              disabled={loading}
+              disabled={isLoading}
               className='flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50'
             >
-              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-              {loading ? 'Refreshing...' : 'Refresh'}
+              <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
+              {isLoading ? 'Refreshing...' : 'Refresh'}
             </button>
           </div>
         </div>
@@ -557,15 +645,36 @@ const AdminPropertiesManagement = ({ userRole }) => {
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
-              {loading ? (
-                <tr>
-                  <td colSpan="6" className="px-6 py-12 text-center">
-                    <div className="flex items-center justify-center">
-                      <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600 mr-3"></div>
-                      <span className="text-gray-600">Loading properties...</span>
-                    </div>
-                  </td>
-                </tr>
+              {isLoading && properties.length > 0 ? (
+                // Skeleton rows while refreshing with existing data
+                [1, 2, 3].map((i) => (
+                  <tr key={`skeleton-${i}`} className="animate-pulse">
+                    <td className="px-6 py-4">
+                      <div className="h-4 bg-gray-200 rounded w-40 mb-1"></div>
+                      <div className="h-3 bg-gray-200 rounded w-24"></div>
+                    </td>
+                    <td className="px-6 py-4">
+                      <div className="h-4 bg-gray-200 rounded w-32"></div>
+                    </td>
+                    <td className="px-6 py-4">
+                      <div className="h-4 bg-gray-200 rounded w-36 mb-1"></div>
+                      <div className="h-3 bg-gray-200 rounded w-40"></div>
+                    </td>
+                    <td className="px-6 py-4">
+                      <div className="h-5 bg-gray-200 rounded-full w-12"></div>
+                    </td>
+                    <td className="px-6 py-4">
+                      <div className="h-4 bg-gray-200 rounded w-8"></div>
+                    </td>
+                    <td className="px-6 py-4">
+                      <div className="flex gap-2">
+                        <div className="h-8 w-8 bg-gray-200 rounded"></div>
+                        <div className="h-8 w-8 bg-gray-200 rounded"></div>
+                        <div className="h-8 w-8 bg-gray-200 rounded"></div>
+                      </div>
+                    </td>
+                  </tr>
+                ))
               ) : properties.length === 0 ? (
                 <tr>
                   <td colSpan="6" className="px-6 py-12 text-center text-gray-500">

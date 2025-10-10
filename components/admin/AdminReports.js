@@ -79,6 +79,8 @@ const AdminReports = () => {
     refetch 
   } = useApplications(filters);
 
+  // Extract the applications array and count from the API response
+  // API response structure: { data: [...], count: X, page: Y, limit: Z }
   const applications = applicationsData?.data || [];
   const totalApplications = applicationsData?.count || 0;
 
@@ -396,7 +398,7 @@ const AdminReports = () => {
             </table>
           </div>
 
-          {applications.length === 0 && (
+          {applications.length === 0 && !isLoading && (
             <div className="text-center py-12">
               <FileText className="w-12 h-12 text-gray-400 mx-auto mb-4" />
               <h3 className="text-lg font-medium text-gray-900 mb-2">No applications found</h3>

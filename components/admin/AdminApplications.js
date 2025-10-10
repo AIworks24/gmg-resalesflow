@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
+import useSWR from 'swr';
 import {
   FileText,
   CheckCircle,
@@ -30,13 +31,19 @@ import AdminResaleCertificateForm from './AdminResaleCertificateForm';
 import AdminLayout from './AdminLayout';
 
 const AdminApplications = ({ userRole }) => {
-  const [applications, setApplications] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [selectedStatus, setSelectedStatus] = useState('all');
+  const supabase = createClientComponentClient();
+  const router = useRouter();
+
+  // Get parameters from URL query (for dashboard navigation)
+  const urlStatus = router.query.status || 'all';
+  const sortBy = router.query.sortBy || 'created_at';
+  const sortOrder = router.query.sortOrder || 'desc';
+
+  // Initialize state from URL params
+  const [selectedStatus, setSelectedStatus] = useState(urlStatus);
   const [selectedApplicationType, setSelectedApplicationType] = useState('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedApplication, setSelectedApplication] = useState(null);
-  const [refreshing, setRefreshing] = useState(false);
   const [sendingEmail, setSendingEmail] = useState(false);
   const [generatingPDF, setGeneratingPDF] = useState(false);
   const [dateFilter, setDateFilter] = useState('all'); // 'all', 'today', 'week', 'month', 'custom'
@@ -46,7 +53,6 @@ const AdminApplications = ({ userRole }) => {
   });
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(10);
-  const [totalCount, setTotalCount] = useState(0);
   const [showAttachmentModal, setShowAttachmentModal] = useState(false);
   const [temporaryAttachments, setTemporaryAttachments] = useState([]);
   const [uploading, setUploading] = useState(false);
@@ -68,8 +74,39 @@ const AdminApplications = ({ userRole }) => {
   const [sendingGroupEmail, setSendingGroupEmail] = useState(null);
   const [regeneratingGroupDocs, setRegeneratingGroupDocs] = useState(null);
 
-  const supabase = createClientComponentClient();
-  const router = useRouter();
+  // Sync selectedStatus with URL query parameter when it changes (for dashboard navigation)
+  useEffect(() => {
+    const statusFromUrl = router.query.status || 'all';
+    if (statusFromUrl !== selectedStatus) {
+      setSelectedStatus(statusFromUrl);
+    }
+  }, [router.query.status, router.isReady]);
+
+  // SWR fetcher function
+  const fetcher = async (url) => {
+    const res = await fetch(url);
+    if (!res.ok) {
+      const error = new Error('Failed to fetch applications');
+      error.info = await res.json();
+      error.status = res.status;
+      throw error;
+    }
+    return res.json();
+  };
+
+  // Build dynamic API URL with sort parameters
+  const apiUrl = `/api/admin/applications?sortBy=${sortBy}&sortOrder=${sortOrder}`;
+
+  // Fetch applications using SWR (will auto-refresh when URL changes)
+  const { data: swrData, error: swrError, isLoading, mutate } = useSWR(
+    apiUrl,
+    fetcher,
+    {
+      refreshInterval: 0, // Disable auto-refresh (manual refresh only)
+      revalidateOnFocus: false,
+      dedupingInterval: 5000, // Prevent duplicate requests within 5 seconds
+    }
+  );
 
   // Snackbar helper function
   const showSnackbar = (message, type = 'success') => {
@@ -150,6 +187,9 @@ const AdminApplications = ({ userRole }) => {
     return hoursUntilDeadline < 48;
   };
 
+  // Get current user email for assignment filter
+  const [userEmail, setUserEmail] = useState(null);
+
   useEffect(() => {
     // Handle URL query parameters on component mount
     const { query } = router;
@@ -159,6 +199,15 @@ const AdminApplications = ({ userRole }) => {
     if (query.date) {
       setDateFilter(query.date);
     }
+
+    // Get current user email
+    const getCurrentUserEmail = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        setUserEmail(user.email);
+      }
+    };
+    getCurrentUserEmail();
 
     // Load staff members for assignment dropdown
     const loadStaffMembers = async () => {
@@ -179,27 +228,10 @@ const AdminApplications = ({ userRole }) => {
     loadStaffMembers();
   }, [router.query]);
 
-  // Initial load of applications
-  useEffect(() => {
-    loadApplications();
-  }, []);
-
-  // Reload applications when date filter changes (reset to page 1)
+  // Reset to page 1 when filters change
   useEffect(() => {
     setCurrentPage(1);
-    loadApplications();
-  }, [dateFilter, customDateRange, assignedToMe]);
-
-  // Reload applications when page or items per page changes
-  useEffect(() => {
-    loadApplications();
-  }, [currentPage, itemsPerPage]);
-
-  // Reload applications when status filter or search term changes (reset to page 1)
-  useEffect(() => {
-    setCurrentPage(1);
-    loadApplications();
-  }, [selectedStatus, selectedApplicationType, searchTerm]);
+  }, [dateFilter, customDateRange, assignedToMe, selectedStatus, selectedApplicationType, searchTerm]);
 
 
   // Load property files when attachment modal opens
@@ -221,14 +253,32 @@ const AdminApplications = ({ userRole }) => {
   // Load property groups when application is selected
   useEffect(() => {
     if (selectedApplication?.id) {
-      loadPropertyGroups(selectedApplication.id);
+      // Use property groups from API response if available (faster, no extra query)
+      if (selectedApplication.application_property_groups) {
+        setPropertyGroups(selectedApplication.application_property_groups);
+        setLoadingGroups(false);
+      } else {
+        // Fallback to separate query if not in API response
+        loadPropertyGroups(selectedApplication.id);
+      }
     } else {
       setPropertyGroups([]);
     }
-  }, [selectedApplication?.id]);
+  }, [selectedApplication?.id, selectedApplication?.application_property_groups]);
 
   // Auto-create property groups for multi-community applications
   useEffect(() => {
+    // Quick check: if data is already in API response, use it immediately (no delay)
+    if (selectedApplication?.hoa_properties?.is_multi_community && 
+        selectedApplication?.id && 
+        selectedApplication.application_property_groups && 
+        selectedApplication.application_property_groups.length > 0 &&
+        propertyGroups.length === 0) {
+      console.log('Property groups in API response, loading immediately...');
+      setPropertyGroups(selectedApplication.application_property_groups);
+      return;
+    }
+    
     const checkAndCreateGroups = async () => {
       // Only run if we have a multi-community application and no groups loaded yet
       if (selectedApplication?.hoa_properties?.is_multi_community && 
@@ -238,8 +288,16 @@ const AdminApplications = ({ userRole }) => {
         
         console.log('Multi-community application detected, checking for property groups...');
         
+        // Check if groups are already in the API response (preferred)
+        if (selectedApplication.application_property_groups && 
+            selectedApplication.application_property_groups.length > 0) {
+          console.log('Property groups already in API response, using them...');
+          setPropertyGroups(selectedApplication.application_property_groups);
+          return;
+        }
+        
         try {
-          // First, try to load existing groups
+          // Fallback: try to load existing groups via direct query
           const { data: existingGroups, error } = await supabase
             .from('application_property_groups')
             .select('*')
@@ -280,169 +338,87 @@ const AdminApplications = ({ userRole }) => {
     };
 
     // Run the check after a short delay to ensure the component is fully loaded
+    // Only use timeout if we need to query/create (not when data is already in API response)
     const timeoutId = setTimeout(checkAndCreateGroups, 500);
     
     return () => clearTimeout(timeoutId);
-  }, [selectedApplication?.hoa_properties?.is_multi_community, selectedApplication?.id, loadingGroups, propertyGroups.length]);
+  }, [
+    selectedApplication?.hoa_properties?.is_multi_community, 
+    selectedApplication?.id, 
+    selectedApplication?.application_property_groups,  // Added to detect API data arrival
+    loadingGroups, 
+    propertyGroups.length
+  ]);
 
-  const loadApplications = async () => {
-    setRefreshing(true);
-    try {
-      // First, get the total count for pagination
-      let countQuery = supabase
-        .from('applications')
-        .select('*', { count: 'exact', head: true });
-
-      // Apply filters to count query
-      const dateRange = getDateRange();
-      if (dateRange) {
-        countQuery = countQuery
-          .gte('created_at', dateRange.start.toISOString())
-          .lte('created_at', dateRange.end.toISOString());
-      }
-      
-      if (selectedStatus !== 'all' && selectedStatus !== 'urgent') {
-        if (selectedStatus === 'ongoing') {
-          // Ongoing includes all statuses between payment_confirmed and completed
-          countQuery = countQuery.in('status', ['under_review', 'compliance_pending', 'compliance_completed', 'documents_generated', 'awaiting_property_owner_response']);
-        } else {
-          countQuery = countQuery.eq('status', selectedStatus);
-        }
-      } else {
-        // Only exclude draft status (applications not yet submitted) from "All Steps" view
-        countQuery = countQuery.neq('status', 'draft');
-      }
-
-      // Apply application type filter
-      if (selectedApplicationType !== 'all') {
-        countQuery = countQuery.eq('application_type', selectedApplicationType);
-      }
-
-      if (searchTerm) {
-        countQuery = countQuery.or(`property_address.ilike.%${searchTerm}%,submitter_name.ilike.%${searchTerm}%,hoa_properties.name.ilike.%${searchTerm}%`);
-      }
-
-      // Add assigned to me filter
-      if (assignedToMe) {
-        countQuery = countQuery.eq('assigned_to', userEmail);
-      }
-
-      const { count, error: countError } = await countQuery;
-      if (countError) throw countError;
-      
-      // For urgent filter, we'll need to calculate count after filtering
-      if (selectedStatus !== 'urgent') {
-        setTotalCount(count || 0);
-      }
-
-      // Then get the paginated data
-      let query = supabase
-        .from('applications')
-        .select(
-          `
-          *,
-          hoa_properties(name, property_owner_email, property_owner_name, is_multi_community),
-          property_owner_forms(id, form_type, status, completed_at, form_data, response_data),
-          notifications(id, notification_type, status, sent_at)
-        `
-        );
-
-      // Apply all filters to data query
-      if (dateRange) {
-        query = query
-          .gte('created_at', dateRange.start.toISOString())
-          .lte('created_at', dateRange.end.toISOString());
-      }
-
-      if (selectedStatus !== 'all' && selectedStatus !== 'urgent') {
-        if (selectedStatus === 'ongoing') {
-          // Ongoing includes all statuses between payment_confirmed and completed
-          query = query.in('status', ['under_review', 'compliance_pending', 'compliance_completed', 'documents_generated', 'awaiting_property_owner_response']);
-        } else {
-          query = query.eq('status', selectedStatus);
-        }
-      } else {
-        // Only exclude draft status (applications not yet submitted) from "All Steps" view
-        query = query.neq('status', 'draft');
-      }
-
-      // Apply application type filter
-      if (selectedApplicationType !== 'all') {
-        query = query.eq('application_type', selectedApplicationType);
-      }
-
-      if (searchTerm) {
-        query = query.or(`property_address.ilike.%${searchTerm}%,submitter_name.ilike.%${searchTerm}%,hoa_properties.name.ilike.%${searchTerm}%`);
-      }
-
-      // Add assigned to me filter
-      if (assignedToMe) {
-        query = query.eq('assigned_to', userEmail);
-      }
-
-      // Apply pagination (skip for urgent filter since we filter post-query)
-      if (selectedStatus !== 'urgent') {
-        const startIndex = (currentPage - 1) * itemsPerPage;
-        query = query.range(startIndex, startIndex + itemsPerPage - 1);
-      }
-      query = query.order('created_at', { ascending: false });
-
-      const { data, error } = await query;
-
-      if (error) {
-        console.error('❌ Applications query error:', error);
-        throw error;
-      }
-
-      // Process the data to group forms by application
-      const processedData = data.map((app) => {
-        // Find the inspection form and resale certificate form for this application
-        const inspectionForm = app.property_owner_forms?.find(
-          (f) => f.form_type === 'inspection_form'
-        );
-        const resaleCertificate = app.property_owner_forms?.find(
-          (f) => f.form_type === 'resale_certificate'
-        );
-
-        const processedApp = {
-          ...app,
-          forms: {
-            inspectionForm: inspectionForm || {
-              status: 'not_created',
-              id: null,
-            },
-            resaleCertificate: resaleCertificate || {
-              status: 'not_created',
-              id: null,
-            },
-          },
-          notifications: app.notifications || [],
-        };
-
-        return processedApp;
-      });
-
-      // Apply urgent filter if selected
-      let finalData = processedData;
-      if (selectedStatus === 'urgent') {
-        const urgentApps = processedData.filter(app => isApplicationUrgent(app));
-        // Set total count for urgent applications
-        setTotalCount(urgentApps.length);
-        
-        // Apply pagination manually for urgent applications
-        const startIndex = (currentPage - 1) * itemsPerPage;
-        finalData = urgentApps.slice(startIndex, startIndex + itemsPerPage);
-      }
-
-      setApplications(finalData);
-    } catch (err) {
-      console.error('❌ Failed to load applications:', err);
-      setApplications([]); // Set empty array on error to prevent crashes
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
+  // Client-side filtering and pagination using useMemo
+  const { applications, totalCount } = useMemo(() => {
+    // API response structure: { data: [...], count: X, page: Y, limit: Z }
+    if (!swrData?.data) {
+      return { applications: [], totalCount: 0 };
     }
-  };
+
+    let filtered = [...swrData.data];
+
+    // Apply date filter
+    const dateRange = getDateRange();
+    if (dateRange) {
+      filtered = filtered.filter(app => {
+        const createdAt = new Date(app.created_at);
+        return createdAt >= dateRange.start && createdAt <= dateRange.end;
+      });
+    }
+
+    // Apply status filter
+    if (selectedStatus !== 'all' && selectedStatus !== 'urgent') {
+      if (selectedStatus === 'ongoing') {
+        filtered = filtered.filter(app =>
+          ['under_review', 'compliance_pending', 'compliance_completed', 'documents_generated', 'awaiting_property_owner_response'].includes(app.status)
+        );
+      } else if (selectedStatus === 'pending') {
+        // Pending = applications without approval notifications
+        filtered = filtered.filter(app =>
+          !app.notifications?.some(n => n.notification_type === 'application_approved')
+        );
+      } else if (selectedStatus === 'completed') {
+        // Completed = applications with approval notifications
+        filtered = filtered.filter(app =>
+          app.notifications?.some(n => n.notification_type === 'application_approved')
+        );
+      } else {
+        filtered = filtered.filter(app => app.status === selectedStatus);
+      }
+    } else if (selectedStatus === 'urgent') {
+      filtered = filtered.filter(app => isApplicationUrgent(app));
+    }
+
+    // Apply application type filter
+    if (selectedApplicationType !== 'all') {
+      filtered = filtered.filter(app => app.application_type === selectedApplicationType);
+    }
+
+    // Apply search filter
+    if (searchTerm) {
+      const searchLower = searchTerm.toLowerCase();
+      filtered = filtered.filter(app =>
+        app.property_address?.toLowerCase().includes(searchLower) ||
+        app.submitter_name?.toLowerCase().includes(searchLower) ||
+        app.hoa_properties?.name?.toLowerCase().includes(searchLower)
+      );
+    }
+
+    // Apply assigned to me filter
+    if (assignedToMe && userEmail) {
+      filtered = filtered.filter(app => app.assigned_to === userEmail);
+    }
+
+    const count = filtered.length;
+
+    // Apply pagination
+    const startIndex = (currentPage - 1) * itemsPerPage;
+    const paginated = filtered.slice(startIndex, startIndex + itemsPerPage);
+
+    return { applications: paginated, totalCount: count };
+  }, [swrData, dateFilter, customDateRange, selectedStatus, selectedApplicationType, searchTerm, assignedToMe, userEmail, currentPage, itemsPerPage]);
 
 
   const handleAssignApplication = async (applicationId, assignedTo) => {
@@ -458,7 +434,7 @@ const AdminApplications = ({ userRole }) => {
 
       if (response.ok) {
         showSnackbar(assignedTo ? `Application assigned to ${assignedTo}` : 'Application unassigned', 'success');
-        loadApplications(); // Refresh the applications list
+        mutate(); // Refresh the applications list
         
         // Update the selected application if it's open in the modal
         if (selectedApplication && selectedApplication.id === applicationId) {
@@ -495,7 +471,7 @@ const AdminApplications = ({ userRole }) => {
         await refreshSelectedApplication(applicationId);
         
         // Refresh applications list in background (don't wait for it)
-        loadApplications();
+        mutate();
       } else {
         const error = await response.json();
         showSnackbar(error.error || 'Failed to complete task', 'error');
@@ -522,7 +498,7 @@ const AdminApplications = ({ userRole }) => {
         await refreshSelectedApplication(applicationId);
         
         // Refresh applications list in background (don't wait for it)
-        loadApplications();
+        mutate();
       } else {
         const error = await response.json();
         showSnackbar(error.error || 'Failed to save comments', 'error');
@@ -795,7 +771,7 @@ const AdminApplications = ({ userRole }) => {
     setResaleFormData(null);
     
     // Refresh applications list in background (don't wait for it)
-    loadApplications();
+    mutate();
   };
 
   const handleGeneratePDF = async (formData, applicationId) => {
@@ -818,7 +794,7 @@ const AdminApplications = ({ userRole }) => {
       await refreshSelectedApplication(applicationId);
       
       // Refresh applications list in background (don't wait for it)
-      loadApplications();
+      mutate();
     } catch (error) {
       console.error('Failed to generate PDF:', error);
       showSnackbar('Failed to generate PDF. Please try again.', 'error');
@@ -854,7 +830,7 @@ const AdminApplications = ({ userRole }) => {
       await refreshSelectedApplication(applicationId);
       
       // Refresh applications list in background (don't wait for it)
-      loadApplications();
+      mutate();
       
       showSnackbar('Email sent successfully!', 'success');
     } catch (error) {
@@ -1345,14 +1321,38 @@ const AdminApplications = ({ userRole }) => {
     );
   };
 
-  if (loading) {
+  // Show error state if SWR encountered an error
+  if (swrError) {
     return (
-      <div className='flex items-center justify-center min-h-screen'>
-        <div className='flex items-center gap-3 text-gray-600'>
-          <RefreshCw className='w-5 h-5 animate-spin' />
-          <span>Loading applications...</span>
+      <AdminLayout>
+        <div className='flex items-center justify-center min-h-screen'>
+          <div className='text-center'>
+            <AlertTriangle className='w-12 h-12 text-red-500 mx-auto mb-4' />
+            <h3 className='text-lg font-semibold text-gray-900 mb-2'>Failed to load applications</h3>
+            <p className='text-gray-600 mb-4'>Please try refreshing the page</p>
+            <button
+              onClick={() => mutate()}
+              className='px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700'
+            >
+              Retry
+            </button>
+          </div>
         </div>
-      </div>
+      </AdminLayout>
+    );
+  }
+
+  // Show initial loading state
+  if (isLoading) {
+    return (
+      <AdminLayout>
+        <div className='flex items-center justify-center min-h-screen'>
+          <div className='flex items-center gap-3 text-gray-600'>
+            <RefreshCw className='w-5 h-5 animate-spin' />
+            <span>Loading applications...</span>
+          </div>
+        </div>
+      </AdminLayout>
     );
   }
 
@@ -1372,12 +1372,12 @@ const AdminApplications = ({ userRole }) => {
               </p>
             </div>
             <button
-              onClick={loadApplications}
-              disabled={refreshing}
+              onClick={() => mutate()}
+              disabled={isLoading}
               className='flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50'
             >
-              <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
-              {refreshing ? 'Refreshing...' : 'Refresh'}
+              <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
+              {isLoading ? 'Refreshing...' : 'Refresh'}
             </button>
           </div>
         </div>

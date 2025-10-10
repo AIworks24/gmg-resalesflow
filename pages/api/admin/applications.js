@@ -1,0 +1,167 @@
+import { createPagesServerClient } from '@supabase/auth-helpers-nextjs';
+import { getCache, setCache } from '../../../lib/redis';
+
+export default async function handler(req, res) {
+  if (req.method !== 'GET') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  try {
+    // Create server-side Supabase client (handles auth properly)
+    const supabase = createPagesServerClient({ req, res });
+
+    // Verify user is authenticated and has admin role
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
+    
+    if (authError || !user) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    // Check if user has admin or staff role
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('role')
+      .eq('email', user.email)
+      .single();
+
+    if (!profile || !['admin', 'staff'].includes(profile.role)) {
+      return res.status(403).json({ error: 'Forbidden - Admin access required' });
+    }
+
+    // Parse query parameters
+    const { 
+      page = 1, 
+      limit = 1000,  // Default to high limit for backward compatibility
+      status = 'all', 
+      search = '',
+      dateStart = null,
+      dateEnd = null,
+      sortBy = 'created_at',  // Default sort field
+      sortOrder = 'desc'      // Default sort direction
+    } = req.query;
+
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+
+    // Generate dynamic cache key based on filters (including sort parameters)
+    const cacheKey = `admin:applications:${status}:${search}:${dateStart || 'null'}:${dateEnd || 'null'}:${sortBy}:${sortOrder}:${pageNum}:${limitNum}`;
+    
+    // Try to get from cache first
+    const cachedData = await getCache(cacheKey);
+
+    if (cachedData) {
+      console.log('✅ Applications cache HIT:', cacheKey);
+      return res.status(200).json({ 
+        ...cachedData,
+        cached: true,
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    console.log('❌ Applications cache MISS - fetching from database:', cacheKey);
+
+    // Build query
+    let query = supabase
+      .from('applications')
+      .select(`
+        *,
+        hoa_properties(name, property_owner_email, property_owner_name, is_multi_community),
+        property_owner_forms(id, form_type, status, completed_at, form_data, response_data),
+        notifications(id, notification_type, status, sent_at),
+        application_property_groups(
+          id,
+          property_name,
+          status,
+          created_at,
+          hoa_properties(id, name, location)
+        )
+      `, { count: 'exact' })
+      .neq('status', 'draft');
+
+    // Apply status filter
+    if (status !== 'all') {
+      query = query.eq('status', status);
+    }
+
+    // Apply search filter
+    if (search) {
+      query = query.or(`property_address.ilike.%${search}%,submitter_name.ilike.%${search}%,hoa_properties.name.ilike.%${search}%`);
+    }
+
+    // Apply date range filter
+    if (dateStart && dateEnd) {
+      query = query
+        .gte('created_at', dateStart)
+        .lte('created_at', dateEnd);
+    }
+
+    // Apply sorting (validate sortBy to prevent SQL injection)
+    const allowedSortFields = ['created_at', 'property_address', 'status', 'submitter_name', 'application_type'];
+    const validSortBy = allowedSortFields.includes(sortBy) ? sortBy : 'created_at';
+    const isAscending = sortOrder === 'asc';
+
+    // Apply pagination and sorting
+    const startIndex = (pageNum - 1) * limitNum;
+    query = query
+      .range(startIndex, startIndex + limitNum - 1)
+      .order(validSortBy, { ascending: isAscending });
+
+    // Execute query
+    const { data: applications, error: queryError, count } = await query;
+
+    if (queryError) {
+      console.error('Database query error:', queryError);
+      throw queryError;
+    }
+
+    // Process the data to group forms by application
+    const processedApplications = (applications || []).map((app) => {
+      const inspectionForm = app.property_owner_forms?.find(
+        (f) => f.form_type === 'inspection_form'
+      );
+      const resaleCertificate = app.property_owner_forms?.find(
+        (f) => f.form_type === 'resale_certificate'
+      );
+
+      return {
+        ...app,
+        forms: {
+          inspectionForm: inspectionForm || {
+            status: 'not_created',
+            id: null,
+          },
+          resaleCertificate: resaleCertificate || {
+            status: 'not_created',
+            id: null,
+          },
+        },
+        notifications: app.notifications || [],
+      };
+    });
+
+    // Prepare response data
+    const responseData = {
+      data: processedApplications,
+      count: count || 0,
+      page: pageNum,
+      limit: limitNum,
+      totalPages: Math.ceil((count || 0) / limitNum)
+    };
+
+    // Store in cache with 5-minute TTL
+    await setCache(cacheKey, responseData, 300);
+
+    return res.status(200).json({ 
+      ...responseData,
+      cached: false,
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('Applications API error:', error);
+    return res.status(500).json({ 
+      error: 'Failed to fetch applications',
+      message: error.message 
+    });
+  }
+}

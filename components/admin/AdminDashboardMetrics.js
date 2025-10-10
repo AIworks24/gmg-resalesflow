@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
+import useSWR from 'swr';
 import {
   BarChart3,
   Clock,
@@ -17,8 +17,41 @@ import { useRouter } from 'next/router';
 import AdminLayout from './AdminLayout';
 
 const AdminDashboardMetrics = ({ userRole }) => {
-  const [loading, setLoading] = useState(true);
-  const [metrics, setMetrics] = useState({
+  const router = useRouter();
+
+  // SWR fetcher function
+  const fetcher = async (url) => {
+    const res = await fetch(url);
+    if (!res.ok) {
+      const error = new Error('Failed to fetch dashboard summary');
+      error.info = await res.json();
+      error.status = res.status;
+      throw error;
+    }
+    return res.json();
+  };
+
+  // Fetch dashboard summary using SWR
+  const { data: swrData, error: swrError, isLoading, mutate } = useSWR(
+    '/api/admin/dashboard-summary',
+    fetcher,
+    {
+      refreshInterval: 0, // Disable auto-refresh (manual refresh only)
+      revalidateOnFocus: false,
+      dedupingInterval: 5000, // Prevent duplicate requests within 5 seconds
+    }
+  );
+
+  // Function to force refresh with cache bypass
+  const forceRefresh = async () => {
+    await mutate(
+      fetch('/api/admin/dashboard-summary?bypass=true').then(res => res.json()),
+      { revalidate: false }
+    );
+  };
+
+  // Extract data from SWR response with defaults
+  const metrics = swrData?.metrics || {
     totalApplications: 0,
     pendingApplications: 0,
     completedApplications: 0,
@@ -28,188 +61,9 @@ const AdminDashboardMetrics = ({ userRole }) => {
     overdue: 0,
     formsCompleted: 0,
     emailsSent: 0,
-  });
-  const [workflowDistribution, setWorkflowDistribution] = useState([]);
-  const [recentActivity, setRecentActivity] = useState([]);
-  const [refreshing, setRefreshing] = useState(false);
-
-  const supabase = createClientComponentClient();
-  const router = useRouter();
-
-  useEffect(() => {
-    loadMetrics();
-  }, []);
-
-
-  const loadMetrics = async () => {
-    setRefreshing(true);
-    try {
-      // Get basic application counts
-      const { data: applications, error } = await supabase
-        .from('applications')
-        .select(`
-          *,
-          property_owner_forms(form_type, status),
-          notifications(notification_type, sent_at)
-        `);
-
-      if (error) throw error;
-
-      // Calculate metrics
-      const total = applications.length;
-      const completed = applications.filter(app => 
-        app.notifications?.some(n => n.notification_type === 'application_approved')
-      ).length;
-      const pending = total - completed;
-
-      // Today's submissions
-      const today = new Date();
-      const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-      const todaySubmissions = applications.filter(app => 
-        new Date(app.created_at) >= todayStart
-      ).length;
-
-      // Deadline calculations
-      const now = new Date();
-      let urgentCount = 0;
-      let nearDeadlineCount = 0;
-      let overdueCount = 0;
-
-      applications.forEach(app => {
-        // Skip completed applications
-        if (app.notifications?.some(n => n.notification_type === 'application_approved')) {
-          return;
-        }
-
-        // Calculate deadline (e.g., 7 days from submission)
-        const submittedDate = new Date(app.created_at);
-        const deadline = new Date(submittedDate);
-        deadline.setDate(deadline.getDate() + 7); // 7-day deadline
-
-        const hoursUntilDeadline = (deadline - now) / (1000 * 60 * 60);
-
-        if (hoursUntilDeadline < 0) {
-          overdueCount++;
-          urgentCount++;
-        } else if (hoursUntilDeadline < 24) {
-          // Less than 24 hours
-          nearDeadlineCount++;
-          urgentCount++;
-        } else if (hoursUntilDeadline < 48) {
-          // Less than 48 hours
-          nearDeadlineCount++;
-        }
-      });
-
-      // Forms completed
-      const allForms = applications.flatMap(app => app.property_owner_forms || []);
-      const formsCompleted = allForms.filter(form => form.status === 'completed').length;
-
-      // Emails sent
-      const emailsSent = applications.filter(app => 
-        app.notifications?.some(n => n.notification_type === 'application_approved')
-      ).length;
-
-      // Workflow distribution
-      const distribution = [
-        { 
-          name: 'Forms Required', 
-          count: applications.filter(app => {
-            const forms = app.property_owner_forms || [];
-            return forms.length === 0 || forms.every(f => f.status === 'not_created');
-          }).length,
-          color: 'bg-yellow-500'
-        },
-        { 
-          name: 'Forms In Progress', 
-          count: applications.filter(app => {
-            const forms = app.property_owner_forms || [];
-            return forms.some(f => f.status === 'in_progress' || f.status === 'not_started');
-          }).length,
-          color: 'bg-blue-500'
-        },
-        { 
-          name: 'Generate PDF', 
-          count: applications.filter(app => {
-            const forms = app.property_owner_forms || [];
-            const allFormsCompleted = forms.length >= 2 && forms.every(f => f.status === 'completed');
-            return allFormsCompleted && !app.pdf_url;
-          }).length,
-          color: 'bg-orange-500'
-        },
-        { 
-          name: 'Send Email', 
-          count: applications.filter(app => {
-            const hasEmail = app.notifications?.some(n => n.notification_type === 'application_approved');
-            return app.pdf_url && !hasEmail;
-          }).length,
-          color: 'bg-purple-500'
-        },
-        { 
-          name: 'Completed', 
-          count: completed,
-          color: 'bg-green-500'
-        }
-      ];
-
-      // Recent activity (last 5 applications)
-      const recent = applications
-        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
-        .slice(0, 5)
-        .map(app => ({
-          id: app.id,
-          property: app.property_address,
-          submitter: app.submitter_name,
-          date: app.created_at,
-          status: getWorkflowStep(app).text
-        }));
-
-      setMetrics({
-        totalApplications: total,
-        pendingApplications: pending,
-        completedApplications: completed,
-        urgentApplications: urgentCount,
-        todaySubmissions,
-        nearDeadline: nearDeadlineCount,
-        overdue: overdueCount,
-        formsCompleted,
-        emailsSent,
-      });
-
-      setWorkflowDistribution(distribution);
-      setRecentActivity(recent);
-
-    } catch (error) {
-      console.error('Error loading metrics:', error);
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
   };
-
-  const getWorkflowStep = (application) => {
-    const forms = application.property_owner_forms || [];
-    const hasPDF = application.pdf_url;
-    const hasEmail = application.notifications?.some(n => n.notification_type === 'application_approved');
-
-    if (forms.length === 0) {
-      return { step: 1, text: 'Forms Required' };
-    }
-    
-    if (forms.some(f => f.status !== 'completed')) {
-      return { step: 2, text: 'Forms In Progress' };
-    }
-    
-    if (!hasPDF) {
-      return { step: 3, text: 'Generate PDF' };
-    }
-    
-    if (!hasEmail) {
-      return { step: 4, text: 'Send Email' };
-    }
-    
-    return { step: 5, text: 'Completed' };
-  };
+  const workflowDistribution = swrData?.workflowDistribution || [];
+  const recentActivity = swrData?.recentActivity || [];
 
 
   const navigateToApplications = (filter = {}) => {
@@ -221,14 +75,95 @@ const AdminDashboardMetrics = ({ userRole }) => {
     router.push(`/admin/applications${queryString ? '?' + queryString : ''}`);
   };
 
-  if (loading) {
+  // Show error state if SWR encountered an error
+  if (swrError) {
     return (
-      <div className='flex items-center justify-center min-h-screen'>
-        <div className='flex items-center gap-3 text-gray-600'>
-          <RefreshCw className='w-5 h-5 animate-spin' />
-          <span>Loading dashboard...</span>
+      <AdminLayout>
+        <div className='flex items-center justify-center min-h-screen'>
+          <div className='text-center'>
+            <AlertTriangle className='w-12 h-12 text-red-500 mx-auto mb-4' />
+            <h3 className='text-lg font-semibold text-gray-900 mb-2'>Failed to load dashboard</h3>
+            <p className='text-gray-600 mb-4'>Please try refreshing the page</p>
+            <button
+              onClick={forceRefresh}
+              className='px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700'
+            >
+              Retry
+            </button>
+          </div>
         </div>
-      </div>
+      </AdminLayout>
+    );
+  }
+
+  // Show skeleton loading state
+  if (isLoading) {
+    return (
+      <AdminLayout>
+        <div className='max-w-7xl mx-auto p-6'>
+          {/* Header Skeleton */}
+          <div className='mb-8'>
+            <div className='flex items-center justify-between'>
+              <div className='flex-1'>
+                <div className='h-9 bg-gray-200 rounded w-64 mb-2 animate-pulse'></div>
+                <div className='h-5 bg-gray-200 rounded w-96 animate-pulse'></div>
+              </div>
+              <div className='h-10 w-28 bg-gray-200 rounded animate-pulse'></div>
+            </div>
+          </div>
+
+          {/* Metric Cards Skeleton */}
+          <div className='grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8'>
+            {[1, 2, 3, 4].map((i) => (
+              <div key={i} className='bg-white p-6 rounded-lg shadow-md border'>
+                <div className='flex items-center justify-between'>
+                  <div className='flex-1'>
+                    <div className='h-4 bg-gray-200 rounded w-32 mb-3 animate-pulse'></div>
+                    <div className='h-8 bg-gray-200 rounded w-20 mb-2 animate-pulse'></div>
+                    <div className='h-3 bg-gray-200 rounded w-24 animate-pulse'></div>
+                  </div>
+                  <div className='w-12 h-12 bg-gray-100 rounded-full animate-pulse'></div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Workflow & Recent Activity Skeleton */}
+          <div className='grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8'>
+            {/* Workflow Distribution Skeleton */}
+            <div className='bg-white p-6 rounded-lg shadow-md border'>
+              <div className='h-6 bg-gray-200 rounded w-48 mb-4 animate-pulse'></div>
+              <div className='space-y-4'>
+                {[1, 2, 3, 4, 5].map((i) => (
+                  <div key={i}>
+                    <div className='flex items-center justify-between mb-2'>
+                      <div className='h-4 bg-gray-200 rounded w-32 animate-pulse'></div>
+                      <div className='h-4 bg-gray-200 rounded w-12 animate-pulse'></div>
+                    </div>
+                    <div className='h-2 bg-gray-200 rounded w-full animate-pulse'></div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Recent Activity Skeleton */}
+            <div className='bg-white p-6 rounded-lg shadow-md border'>
+              <div className='h-6 bg-gray-200 rounded w-40 mb-4 animate-pulse'></div>
+              <div className='space-y-4'>
+                {[1, 2, 3, 4, 5].map((i) => (
+                  <div key={i} className='flex items-start gap-3 p-3'>
+                    <div className='w-8 h-8 bg-gray-200 rounded-full animate-pulse'></div>
+                    <div className='flex-1'>
+                      <div className='h-4 bg-gray-200 rounded w-3/4 mb-2 animate-pulse'></div>
+                      <div className='h-3 bg-gray-200 rounded w-1/2 animate-pulse'></div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      </AdminLayout>
     );
   }
 
@@ -248,12 +183,12 @@ const AdminDashboardMetrics = ({ userRole }) => {
               </p>
             </div>
             <button
-              onClick={loadMetrics}
-              disabled={refreshing}
+              onClick={forceRefresh}
+              disabled={isLoading}
               className='flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50'
             >
-              <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
-              {refreshing ? 'Refreshing...' : 'Refresh'}
+              <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
+              {isLoading ? 'Refreshing...' : 'Refresh'}
             </button>
           </div>
         </div>

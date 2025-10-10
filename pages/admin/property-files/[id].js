@@ -1,28 +1,38 @@
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/router';
 import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
+import { useSupabaseQuerySingle } from '../../../hooks/useSupabaseQuery';
 import AdminLayout from '../../../components/admin/AdminLayout';
 import PropertyFileManagement from '../../../components/admin/PropertyFileManagement';
-import { ArrowLeft, Building } from 'lucide-react';
+import { ArrowLeft, Building, AlertTriangle, RefreshCw } from 'lucide-react';
 
 const PropertyFilesPage = () => {
   const router = useRouter();
   const { id } = router.query;
-  const [property, setProperty] = useState(null);
-  const [loading, setLoading] = useState(true);
   const [userRole, setUserRole] = useState('');
   
   const supabase = createClientComponentClient();
 
+  // Fetch property using the new hook
+  const { 
+    data: property, 
+    error: propertyError, 
+    isLoading,
+    mutate 
+  } = useSupabaseQuerySingle(
+    'hoa_properties',
+    '*',
+    { eq: { id } },
+    { 
+      revalidateOnMount: true,
+      // Only fetch if we have an ID
+      isPaused: () => !id
+    }
+  );
+
   useEffect(() => {
     checkAuth();
   }, []);
-
-  useEffect(() => {
-    if (id) {
-      loadProperty();
-    }
-  }, [id]);
 
   const checkAuth = async () => {
     try {
@@ -47,24 +57,35 @@ const PropertyFilesPage = () => {
     }
   };
 
-  const loadProperty = async () => {
-    try {
-      setLoading(true);
-      const { data, error } = await supabase
-        .from('hoa_properties')
-        .select('*')
-        .eq('id', id)
-        .single();
-
-      if (error) throw error;
-      setProperty(data);
-    } catch (error) {
-      console.error('Error loading property:', error);
-      alert('Error loading property details');
-    } finally {
-      setLoading(false);
-    }
-  };
+  // Handle error state
+  if (propertyError) {
+    return (
+      <AdminLayout userRole={userRole}>
+        <div className="container mx-auto px-4 py-8">
+          <button
+            onClick={() => router.push('/admin/properties')}
+            className="flex items-center gap-2 text-gray-600 hover:text-gray-900 mb-4"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            Back to Properties
+          </button>
+          <div className="flex items-center justify-center py-12">
+            <div className="text-center">
+              <AlertTriangle className="w-12 h-12 text-red-500 mx-auto mb-4" />
+              <h3 className="text-lg font-semibold text-gray-900 mb-2">Failed to load property</h3>
+              <p className="text-gray-600 mb-4">Please try again</p>
+              <button
+                onClick={() => mutate()}
+                className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700"
+              >
+                Retry
+              </button>
+            </div>
+          </div>
+        </div>
+      </AdminLayout>
+    );
+  }
 
   return (
     <AdminLayout userRole={userRole}>
@@ -90,16 +111,19 @@ const PropertyFilesPage = () => {
         </div>
 
         {/* File Management Component */}
-        {!loading && property && (
+        {!isLoading && property && (
           <PropertyFileManagement 
             propertyId={property.id} 
             propertyName={property.name}
           />
         )}
 
-        {loading && (
+        {isLoading && (
           <div className="flex items-center justify-center py-12">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-green-600"></div>
+            <div className="flex items-center gap-3 text-gray-600">
+              <RefreshCw className="w-8 h-8 animate-spin" />
+              <span>Loading property...</span>
+            </div>
           </div>
         )}
       </div>

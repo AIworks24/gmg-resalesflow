@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
+import { deleteCachePattern } from '../../../lib/redis';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -41,6 +42,10 @@ export default async function handler(req, res) {
       console.error('Auth error:', authError);
       return res.status(400).json({ error: authError.message });
     }
+
+    // Invalidate Redis cache for users to force refresh
+    await deleteCachePattern('admin:users:*');
+    console.log('✅ Redis cache invalidated for admin:users:*');
 
     return res.status(200).json({ 
       success: true, 
