@@ -23,6 +23,7 @@ import {
   Upload,
   Trash2,
   Paperclip,
+  Mail,
 } from 'lucide-react';
 import { useRouter } from 'next/router';
 import { mapFormDataToPDFFields } from '../../lib/pdfService';
@@ -69,6 +70,10 @@ const AdminApplications = ({ userRole }) => {
   const [inspectionFormData, setInspectionFormData] = useState(null);
   const [resaleFormData, setResaleFormData] = useState(null);
   const [loadingFormData, setLoadingFormData] = useState(false);
+  const [currentFormType, setCurrentFormType] = useState(null); // 'inspection' | 'resale'
+  const [currentFormId, setCurrentFormId] = useState(null);
+  const [currentGroupId, setCurrentGroupId] = useState(null);
+  const [loadingFormKey, setLoadingFormKey] = useState(null); // scope loading to a specific button
   const [propertyGroups, setPropertyGroups] = useState([]);
   const [loadingGroups, setLoadingGroups] = useState(false);
   const [sendingGroupEmail, setSendingGroupEmail] = useState(null);
@@ -434,7 +439,7 @@ const AdminApplications = ({ userRole }) => {
 
       if (response.ok) {
         showSnackbar(assignedTo ? `Application assigned to ${assignedTo}` : 'Application unassigned', 'success');
-        mutate(); // Refresh the applications list
+        await mutate(); // Refresh the applications list
         
         // Update the selected application if it's open in the modal
         if (selectedApplication && selectedApplication.id === applicationId) {
@@ -470,8 +475,8 @@ const AdminApplications = ({ userRole }) => {
         // Update the selected application if it's open in the modal
         await refreshSelectedApplication(applicationId);
         
-        // Refresh applications list in background (don't wait for it)
-        mutate();
+         // Refresh applications list immediately
+         await mutate();
       } else {
         const error = await response.json();
         showSnackbar(error.error || 'Failed to complete task', 'error');
@@ -497,8 +502,8 @@ const AdminApplications = ({ userRole }) => {
         // Update the selected application if it's open in the modal
         await refreshSelectedApplication(applicationId);
         
-        // Refresh applications list in background (don't wait for it)
-        mutate();
+         // Refresh applications list immediately so dashboard reflects new state
+         await mutate();
       } else {
         const error = await response.json();
         showSnackbar(error.error || 'Failed to save comments', 'error');
@@ -632,10 +637,14 @@ const AdminApplications = ({ userRole }) => {
     }
   };
 
-  const handleCompleteForm = async (applicationId, formType) => {
+  const handleCompleteForm = async (applicationId, formType, group) => {
     setLoadingFormData(true);
+    setLoadingFormKey(`${formType}:${group?.id || 'app'}`);
+    setCurrentFormType(formType);
+    setCurrentGroupId(group?.id || null);
     try {
-      await loadFormData(applicationId, formType);
+      const newFormId = await loadFormData(applicationId, formType, group);
+      if (newFormId) setCurrentFormId(newFormId);
       if (formType === 'inspection') {
         setShowInspectionFormModal(true);
       } else if (formType === 'resale') {
@@ -645,10 +654,11 @@ const AdminApplications = ({ userRole }) => {
       showSnackbar('Failed to load form data: ' + error.message, 'error');
     } finally {
       setLoadingFormData(false);
+      setLoadingFormKey(null);
     }
   };
 
-  const loadFormData = async (applicationId, formType) => {
+  const loadFormData = async (applicationId, formType, group) => {
     try {
       // Load application data with HOA properties
       const { data: appData, error: appError } = await supabase
@@ -661,6 +671,10 @@ const AdminApplications = ({ userRole }) => {
         .single();
 
       if (appError) throw appError;
+
+      // If a property group is provided, override HOA context for the form UI
+      const effectiveHoaName = group?.hoa_properties?.name || group?.property_name || appData.hoa_properties?.name;
+      const effectiveHoaId = group?.property_id || appData.hoa_property_id;
 
       // Get or create the form
       let { data: formData, error: formError } = await supabase
@@ -686,19 +700,19 @@ const AdminApplications = ({ userRole }) => {
           .select()
           .single();
 
-        if (createError) throw createError;
-        formData = newForm;
+         if (createError) throw createError;
+         formData = newForm;
       } else if (formError) {
         throw formError;
       }
 
       // Load template data for resale certificate forms
       let templateData = null;
-      if (formType === 'resale' && appData.hoa_property_id) {
+      if (formType === 'resale' && effectiveHoaId) {
         const { data: template } = await supabase
           .from('hoa_property_resale_templates')
           .select('template_data')
-          .eq('hoa_property_id', appData.hoa_property_id)
+          .eq('hoa_property_id', effectiveHoaId)
           .single();
         
         templateData = template?.template_data || null;
@@ -707,6 +721,12 @@ const AdminApplications = ({ userRole }) => {
       // Combine the data
       const combinedData = {
         ...appData,
+        // override HOA/name context for UI when working within a property group
+        hoa_property_id: effectiveHoaId || appData.hoa_property_id,
+        hoa_properties: {
+          ...(appData.hoa_properties || {}),
+          name: effectiveHoaName
+        },
         property_owner_forms: [formData],
         resale_template: templateData
       };
@@ -716,6 +736,8 @@ const AdminApplications = ({ userRole }) => {
       } else {
         setResaleFormData(combinedData);
       }
+
+      return formData?.id || null;
     } catch (error) {
       console.error('Error loading form data:', error);
       throw error;
@@ -731,7 +753,10 @@ const AdminApplications = ({ userRole }) => {
           *,
           hoa_properties(name, property_owner_email, property_owner_name),
           property_owner_forms(id, form_type, status, completed_at, form_data, response_data),
-          notifications(id, notification_type, status, sent_at)
+          notifications(id, notification_type, status, sent_at),
+          application_property_groups(id, property_id, property_name, property_location, is_primary, status, generated_docs,
+            hoa_properties(id, name, location)
+          )
         `)
         .eq('id', applicationId)
         .single();
@@ -752,9 +777,14 @@ const AdminApplications = ({ userRole }) => {
             resaleCertificate: resaleCertificate || { status: 'not_created', id: null },
           },
           notifications: updatedApp.notifications || [],
+          application_property_groups: updatedApp.application_property_groups || []
         };
         
         setSelectedApplication(processedApp);
+        // Keep property groups rendered after refresh
+        if (processedApp.application_property_groups && processedApp.application_property_groups.length > 0) {
+          setPropertyGroups(processedApp.application_property_groups);
+        }
       }
     }
   };
@@ -770,8 +800,66 @@ const AdminApplications = ({ userRole }) => {
     setInspectionFormData(null);
     setResaleFormData(null);
     
-    // Refresh applications list in background (don't wait for it)
-    mutate();
+    // Auto-mark the corresponding task complete when a form is submitted
+    try {
+      if (selectedApplication && currentFormType) {
+        if (currentFormType === 'inspection') {
+          // Application-level inspection completion (primary only)
+          await fetch('/api/complete-task', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ applicationId: selectedApplication.id, taskName: 'inspection_form' })
+          });
+          // Ensure the inspection form record shows completed in UI immediately
+          if (currentFormId) {
+            await supabase
+              .from('property_owner_forms')
+              .update({ status: 'completed', completed_at: new Date().toISOString() })
+              .eq('id', currentFormId);
+          }
+          // Optimistic UI update so the task flips instantly
+          setSelectedApplication((prev) => prev ? {
+            ...prev,
+            inspection_form_completed_at: new Date().toISOString(),
+            forms: {
+              ...prev.forms,
+              inspectionForm: {
+                ...(prev.forms?.inspectionForm || {}),
+                status: 'completed'
+              }
+            }
+          } : prev);
+          await refreshSelectedApplication(selectedApplication.id);
+        } else if (currentFormType === 'resale') {
+          // Per-property: mark the specific group's status as completed
+          if (currentGroupId) {
+            await supabase
+              .from('application_property_groups')
+              .update({ status: 'completed', updated_at: new Date().toISOString() })
+              .eq('id', currentGroupId);
+            await loadPropertyGroups(selectedApplication.id);
+          } else {
+            // Single-property application: mark the application-level resale task as complete
+            await fetch('/api/complete-task', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ applicationId: selectedApplication.id, taskName: 'resale_certificate' })
+            });
+            await refreshSelectedApplication(selectedApplication.id);
+          }
+          // Optionally also set application-level when primary completes via UI button
+        }
+      }
+    } catch (e) {
+      console.error('Auto-complete task failed:', e);
+    } finally {
+      setCurrentFormType(null);
+      setCurrentGroupId(null);
+      setCurrentFormId(null);
+    }
+    
+         // Refresh applications list immediately
+         await mutate();
   };
 
   const handleGeneratePDF = async (formData, applicationId) => {
@@ -793,8 +881,8 @@ const AdminApplications = ({ userRole }) => {
       // Update the selected application if it's open in the modal
       await refreshSelectedApplication(applicationId);
       
-      // Refresh applications list in background (don't wait for it)
-      mutate();
+     // Refresh applications list immediately
+     await mutate();
     } catch (error) {
       console.error('Failed to generate PDF:', error);
       showSnackbar('Failed to generate PDF. Please try again.', 'error');
@@ -829,8 +917,8 @@ const AdminApplications = ({ userRole }) => {
       // Update the selected application if it's open in the modal
       await refreshSelectedApplication(applicationId);
       
-      // Refresh applications list in background (don't wait for it)
-      mutate();
+       // Refresh applications list immediately
+       await mutate();
       
       showSnackbar('Email sent successfully!', 'success');
     } catch (error) {
@@ -1897,102 +1985,197 @@ const AdminApplications = ({ userRole }) => {
                 </div>
 
                 {/* Multi-Community Properties Section */}
-                {selectedApplication.hoa_properties?.is_multi_community && propertyGroups.length > 1 && (
-                  <div>
-                    <h3 className='text-lg font-semibold text-gray-800 mb-4'>
-                      Multi-Community Properties
-                    </h3>
-                    <div className='space-y-4'>
-                      {loadingGroups ? (
-                        <div className='flex items-center justify-center py-8'>
-                          <RefreshCw className='w-6 h-6 animate-spin text-blue-600' />
-                          <span className='ml-2 text-gray-600'>Loading property groups...</span>
+                {(() => {
+                  const isMultiCommunity = selectedApplication.hoa_properties?.is_multi_community && propertyGroups.length > 1;
+                  
+                  if (isMultiCommunity) {
+                    return (
+                      <div>
+                        <h3 className='text-lg font-semibold text-gray-800 mb-4'>
+                          Multi-Community Properties
+                        </h3>
+                        <div className='space-y-4'>
+                          {loadingGroups ? (
+                            <div className='flex items-center justify-center py-8'>
+                              <RefreshCw className='w-6 h-6 animate-spin text-blue-600' />
+                              <span className='ml-2 text-gray-600'>Loading property groups...</span>
+                            </div>
+                          ) : (
+                            propertyGroups.map((group) => (
+                              <div key={group.id} className='bg-gray-50 rounded-lg p-4 border border-gray-200'>
+                                <div className='flex items-center justify-between mb-3'>
+                                  <div className='flex items-center gap-3'>
+                                    <Building className='w-5 h-5 text-gray-600' />
+                                    <div>
+                                      <h4 className='font-medium text-gray-900'>
+                                        {group.property_name}
+                                        {group.is_primary && (
+                                          <span className='ml-2 px-2 py-1 text-xs bg-blue-100 text-blue-800 rounded-full'>
+                                            Primary
+                                          </span>
+                                        )}
+                                      </h4>
+                                      <p className='text-sm text-gray-600'>
+                                        {group.property_location}
+                                      </p>
+                                      {group.property_owner_email && (
+                                        <p className='text-sm text-gray-500'>
+                                          Manager: {group.property_owner_email}
+                                        </p>
+                                      )}
+                                    </div>
+                                  </div>
+                                  <div className='flex items-center gap-2'>
+                                    {(() => {
+                                      // Derive user-facing status for header badge
+                                      const isPrimary = !!group.is_primary;
+                                      const primaryCompleted = !!(selectedApplication.inspection_form_completed_at && selectedApplication.resale_certificate_completed_at);
+                                      const derivedStatus = isPrimary
+                                        ? (primaryCompleted ? 'completed' : 'pending')
+                                        : (group.status === 'completed' ? 'completed' : (group.status === 'failed' ? 'failed' : (group.status === 'email_sent' ? 'email_sent' : 'pending')));
+
+                                      const badgeClass = derivedStatus === 'completed'
+                                        ? 'bg-green-100 text-green-800'
+                                        : derivedStatus === 'email_sent'
+                                          ? 'bg-blue-100 text-blue-800'
+                                          : derivedStatus === 'failed'
+                                            ? 'bg-red-100 text-red-800'
+                                            : 'bg-yellow-100 text-yellow-800';
+
+                                      const label = derivedStatus === 'completed'
+                                        ? 'Completed'
+                                        : derivedStatus === 'email_sent'
+                                          ? 'Email Sent'
+                                          : derivedStatus === 'failed'
+                                            ? 'Failed'
+                                            : 'Pending';
+
+                                      return (
+                                        <span className={`px-2 py-1 text-xs rounded-full ${badgeClass}`}>
+                                          {label}
+                                        </span>
+                                      );
+                                    })()}
+                                  </div>
+                              </div>
+
+                              {/* Per-Property Tasks */}
+                              <div className='mt-3 space-y-3'>
+                                {(() => {
+                                  const taskStatuses = getTaskStatuses(selectedApplication);
+                                  const isPrimary = !!group.is_primary;
+                                  const resaleStatusForGroup = group.status === 'completed' ? 'completed' : 'not_started';
+
+                                  return (
+                                    <>
+                                      {/* Task A: Property Inspection Form (Primary only) */}
+                                      <div className={`border rounded-lg p-3 ${getTaskStatusColor(isPrimary ? taskStatuses.inspection : 'not_started')}`}>
+                                        <div className='flex items-center justify-between'>
+                                          <div className='flex items-center gap-3'>
+                                            <div className='flex items-center justify-center w-6 h-6 rounded-full bg-white border-2 border-current'>
+                                              <span className='text-xs font-bold'>1</span>
+                                            </div>
+                                            {getTaskStatusIcon(isPrimary ? taskStatuses.inspection : 'not_started')}
+                                            <div>
+                                              <h5 className='font-medium text-sm'>Property Inspection Form</h5>
+                                              {isPrimary ? (
+                                                <p className='text-xs opacity-75'>{getTaskStatusText(taskStatuses.inspection)}</p>
+                                              ) : (
+                                                <div className='flex items-center gap-2'>
+                                                  <span className='text-xs text-gray-500'>Not applicable for secondary properties</span>
+                                                  <span className='px-2 py-0.5 text-[10px] rounded-full bg-gray-200 text-gray-700'>Not applicable</span>
+                                                </div>
+                                              )}
+                                            </div>
+                                          </div>
+                                          <div className='flex gap-2'>
+                                            {isPrimary ? (
+                                              <>
+                                            <button
+                                              onClick={() => handleCompleteForm(selectedApplication.id, 'inspection', group)}
+                                                  disabled={loadingFormData}
+                                                  className='px-3 py-1 text-xs bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity font-medium disabled:opacity-50 disabled:cursor-not-allowed'
+                                                >
+                                              {loadingFormKey === `inspection:${group.id}` ? 'Loading...' : getFormButtonText(taskStatuses.inspection)}
+                                                </button>
+                                                {!selectedApplication.inspection_form_completed_at && (
+                                                  <button
+                                                    onClick={() => handleCompleteTask(selectedApplication.id, 'inspection_form')}
+                                                    className='px-2 py-1 text-xs bg-green-100 text-green-800 border border-green-300 rounded-md hover:bg-green-200 transition-colors font-medium'
+                                                    title='Mark this task as completed'
+                                                  >
+                                                    Mark Complete
+                                                  </button>
+                                                )}
+                                              </>
+                                            ) : (
+                                              <span className='text-xs text-gray-400'>Disabled</span>
+                                            )}
+                                          </div>
+                                        </div>
+                                      </div>
+
+                                      {/* Task B: Virginia Resale Certificate (All properties) */}
+                                      <div className={`border rounded-lg p-3 ${getTaskStatusColor(resaleStatusForGroup)}`}>
+                                        <div className='flex items-center justify-between'>
+                                          <div className='flex items-center gap-3'>
+                                            <div className='flex items-center justify-center w-6 h-6 rounded-full bg-white border-2 border-current'>
+                                              <span className='text-xs font-bold'>2</span>
+                                            </div>
+                                            {getTaskStatusIcon(resaleStatusForGroup)}
+                                            <div>
+                                              <h5 className='font-medium text-sm'>Virginia Resale Certificate</h5>
+                                              <p className='text-xs opacity-75'>{getTaskStatusText(resaleStatusForGroup)}</p>
+                                            </div>
+                                          </div>
+                                          <div className='flex gap-2'>
+                                            <button
+                                              onClick={() => handleCompleteForm(selectedApplication.id, 'resale', group)}
+                                              disabled={loadingFormData}
+                                              className='px-3 py-1 text-xs bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity font-medium disabled:opacity-50 disabled:cursor-not-allowed'
+                                            >
+                                              {loadingFormKey === `resale:${group.id}` ? 'Loading...' : 'Fill Form'}
+                                            </button>
+                                            {isPrimary && !selectedApplication.resale_certificate_completed_at && (
+                                              <button
+                                                onClick={() => handleCompleteTask(selectedApplication.id, 'resale_certificate')}
+                                                className='px-2 py-1 text-xs bg-green-100 text-green-800 border border-green-300 rounded-md hover:bg-green-200 transition-colors font-medium'
+                                                title='Mark this task as completed'
+                                              >
+                                                Mark Complete
+                                              </button>
+                                            )}
+                                          </div>
+                                        </div>
+                                      </div>
+
+                                      {/* Per-property send/regenerate controls removed per request */}
+                                    </>
+                                  );
+                                })()}
+                              </div>
+
+                              {group.generated_docs && group.generated_docs.length > 0 && (
+                                  <div className='mt-3 pt-3 border-t border-gray-200'>
+                                    <p className='text-sm text-gray-600 mb-2'>Generated Documents:</p>
+                                    <div className='flex flex-wrap gap-2'>
+                                      {group.generated_docs.map((doc, index) => (
+                                        <span key={index} className='px-2 py-1 text-xs bg-gray-200 text-gray-700 rounded'>
+                                          {doc.type || `Document ${index + 1}`}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            ))
+                          )}
                         </div>
-                      ) : (
-                        propertyGroups.map((group) => (
-                          <div key={group.id} className='bg-gray-50 rounded-lg p-4 border border-gray-200'>
-                            <div className='flex items-center justify-between mb-3'>
-                              <div className='flex items-center gap-3'>
-                                <Building className='w-5 h-5 text-gray-600' />
-                                <div>
-                                  <h4 className='font-medium text-gray-900'>
-                                    {group.property_name}
-                                    {group.is_primary && (
-                                      <span className='ml-2 px-2 py-1 text-xs bg-blue-100 text-blue-800 rounded-full'>
-                                        Primary
-                                      </span>
-                                    )}
-                                  </h4>
-                                  <p className='text-sm text-gray-600'>
-                                    {group.property_location}
-                                  </p>
-                                  {group.property_owner_email && (
-                                    <p className='text-sm text-gray-500'>
-                                      Manager: {group.property_owner_email}
-                                    </p>
-                                  )}
-                                </div>
-                              </div>
-                              <div className='flex items-center gap-2'>
-                                <span className={`px-2 py-1 text-xs rounded-full ${
-                                  group.status === 'completed' ? 'bg-green-100 text-green-800' :
-                                  group.status === 'email_sent' ? 'bg-blue-100 text-blue-800' :
-                                  group.status === 'failed' ? 'bg-red-100 text-red-800' :
-                                  'bg-yellow-100 text-yellow-800'
-                                }`}>
-                                  {group.status === 'completed' ? 'Completed' :
-                                   group.status === 'email_sent' ? 'Email Sent' :
-                                   group.status === 'failed' ? 'Failed' : 'Pending'}
-                                </span>
-                              </div>
-                            </div>
-                            
-                            <div className='flex items-center gap-2'>
-                              <button
-                                onClick={() => handleSendGroupEmail(group.id)}
-                                disabled={sendingGroupEmail === group.id || group.status === 'email_sent'}
-                                className='px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed flex items-center gap-1'
-                              >
-                                {sendingGroupEmail === group.id ? (
-                                  <RefreshCw className='w-3 h-3 animate-spin' />
-                                ) : (
-                                  <FileText className='w-3 h-3' />
-                                )}
-                                Send Email
-                              </button>
-                              
-                              <button
-                                onClick={() => handleRegenerateGroupDocs(group.id)}
-                                disabled={regeneratingGroupDocs === group.id}
-                                className='px-3 py-1 text-sm bg-green-600 text-white rounded hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed flex items-center gap-1'
-                              >
-                                {regeneratingGroupDocs === group.id ? (
-                                  <RefreshCw className='w-3 h-3 animate-spin' />
-                                ) : (
-                                  <RefreshCw className='w-3 h-3' />
-                                )}
-                                Regenerate Docs
-                              </button>
-                            </div>
-                            
-                            {group.generated_docs && group.generated_docs.length > 0 && (
-                              <div className='mt-3 pt-3 border-t border-gray-200'>
-                                <p className='text-sm text-gray-600 mb-2'>Generated Documents:</p>
-                                <div className='flex flex-wrap gap-2'>
-                                  {group.generated_docs.map((doc, index) => (
-                                    <span key={index} className='px-2 py-1 text-xs bg-gray-200 text-gray-700 rounded'>
-                                      {doc.type || `Document ${index + 1}`}
-                                    </span>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
-                          </div>
-                        ))
-                      )}
-                    </div>
-                  </div>
-                )}
+                      </div>
+                    );
+                  }
+                  return null;
+                })()}
 
                 {/* Comments Section */}
                 <div>
@@ -2028,12 +2211,13 @@ const AdminApplications = ({ userRole }) => {
                   </div>
                 </div>
 
-                {/* Task-Based Workflow */}
-                <div>
-                  <h3 className='text-lg font-semibold text-gray-800 mb-4'>
-                    Tasks
-                  </h3>
-                  <div className='space-y-4'>
+                {/* Task-Based Workflow (hidden for multi-community; use per-property tasks above) */}
+                {!selectedApplication.hoa_properties?.is_multi_community && (
+                  <div>
+                    <h3 className='text-lg font-semibold text-gray-800 mb-4'>
+                      Tasks
+                    </h3>
+                    <div className='space-y-4'>
                     {(() => {
                       const taskStatuses = getTaskStatuses(selectedApplication);
                       const bothFormsCompleted = taskStatuses.inspection === 'completed' && taskStatuses.resale === 'completed';
@@ -2042,202 +2226,284 @@ const AdminApplications = ({ userRole }) => {
 
                       return (
                         <>
-                          {/* Task 1: Property Inspection Form */}
-                          <div className={`border rounded-lg p-4 ${getTaskStatusColor(taskStatuses.inspection)}`}>
-                            <div className='flex items-center justify-between'>
-                              <div className='flex items-center gap-3'>
-                                <div className='flex items-center justify-center w-8 h-8 rounded-full bg-white border-2 border-current'>
-                                  <span className='text-sm font-bold'>1</span>
+                                {/* Task 1: Property Inspection Form */}
+                                <div className={`border rounded-lg p-4 ${getTaskStatusColor(taskStatuses.inspection)}`}>
+                                  <div className='flex items-center justify-between'>
+                                    <div className='flex items-center gap-3'>
+                                      <div className='flex items-center justify-center w-8 h-8 rounded-full bg-white border-2 border-current'>
+                                        <span className='text-sm font-bold'>1</span>
+                                      </div>
+                                      {getTaskStatusIcon(taskStatuses.inspection)}
+                                      <div>
+                                        <h4 className='font-medium'>Property Inspection Form</h4>
+                                        <p className='text-sm opacity-75'>{getTaskStatusText(taskStatuses.inspection)}</p>
+                                        <p className='text-xs opacity-60 mt-1'>Complete the property inspection checklist and verify compliance requirements</p>
+                                      </div>
+                                    </div>
+                                    <div className='flex gap-2'>
+                                      <button
+                                        onClick={() => handleCompleteForm(selectedApplication.id, 'inspection')}
+                                        disabled={loadingFormData}
+                                        className='px-4 py-2 bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed'
+                                      >
+                                        {loadingFormData ? 'Loading...' : getFormButtonText(taskStatuses.inspection)}
+                                      </button>
+                                      {!selectedApplication.inspection_form_completed_at && (
+                                        <button
+                                          onClick={() => handleCompleteTask(selectedApplication.id, 'inspection_form')}
+                                          className='px-3 py-2 bg-green-100 text-green-800 border border-green-300 rounded-md hover:bg-green-200 transition-colors text-sm font-medium'
+                                          title='Mark this task as completed'
+                                        >
+                                          Mark Complete
+                                        </button>
+                                      )}
+                                    </div>
+                                  </div>
+                                  <div className='mt-2 space-y-1'>
+                                    {selectedApplication.inspection_form_completed_at && (
+                                      <div className='text-sm opacity-75'>
+                                        Task Completed: {new Date(selectedApplication.inspection_form_completed_at).toLocaleString()}
+                                      </div>
+                                    )}
+                                  </div>
                                 </div>
-                                {getTaskStatusIcon(taskStatuses.inspection)}
-                                <div>
-                                  <h4 className='font-medium'>Property Inspection Form</h4>
-                                  <p className='text-sm opacity-75'>{getTaskStatusText(taskStatuses.inspection)}</p>
-                                  <p className='text-xs opacity-60 mt-1'>Complete the property inspection checklist and verify compliance requirements</p>
-                                </div>
-                              </div>
-                              <div className='flex gap-2'>
-                                <button
-                                  onClick={() => handleCompleteForm(selectedApplication.id, 'inspection')}
-                                  disabled={loadingFormData}
-                                  className='px-4 py-2 bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed'
-                                >
-                                  {loadingFormData ? 'Loading...' : getFormButtonText(taskStatuses.inspection)}
-                                </button>
-                                {!selectedApplication.inspection_form_completed_at && (
-                                  <button
-                                    onClick={() => handleCompleteTask(selectedApplication.id, 'inspection_form')}
-                                    className='px-3 py-2 bg-green-100 text-green-800 border border-green-300 rounded-md hover:bg-green-200 transition-colors text-sm font-medium'
-                                    title='Mark this task as completed'
-                                  >
-                                    Mark Complete
-                                  </button>
-                                )}
-                              </div>
-                            </div>
-                            <div className='mt-2 space-y-1'>
-                              {selectedApplication.inspection_form_completed_at && (
-                                <div className='text-sm opacity-75'>
-                                  Task Completed: {new Date(selectedApplication.inspection_form_completed_at).toLocaleString()}
-                                </div>
-                              )}
-                            </div>
-                          </div>
 
-                          {/* Task 2: Virginia Resale Certificate */}
-                          <div className={`border rounded-lg p-4 ${getTaskStatusColor(taskStatuses.resale)}`}>
-                            <div className='flex items-center justify-between'>
-                              <div className='flex items-center gap-3'>
-                                <div className='flex items-center justify-center w-8 h-8 rounded-full bg-white border-2 border-current'>
-                                  <span className='text-sm font-bold'>2</span>
+                                {/* Task 2: Virginia Resale Certificate */}
+                                <div className={`border rounded-lg p-4 ${getTaskStatusColor(taskStatuses.resale)}`}>
+                                  <div className='flex items-center justify-between'>
+                                    <div className='flex items-center gap-3'>
+                                      <div className='flex items-center justify-center w-8 h-8 rounded-full bg-white border-2 border-current'>
+                                        <span className='text-sm font-bold'>2</span>
+                                      </div>
+                                      {getTaskStatusIcon(taskStatuses.resale)}
+                                      <div>
+                                        <h4 className='font-medium'>Virginia Resale Certificate</h4>
+                                        <p className='text-sm opacity-75'>{getTaskStatusText(taskStatuses.resale)}</p>
+                                        <p className='text-xs opacity-60 mt-1'>Fill out the official Virginia resale disclosure form with property and HOA information</p>
+                                      </div>
+                                    </div>
+                                    <div className='flex gap-2'>
+                                      <button
+                                        onClick={() => handleCompleteForm(selectedApplication.id, 'resale')}
+                                        disabled={loadingFormData}
+                                        className='px-4 py-2 bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed'
+                                      >
+                                        {loadingFormData ? 'Loading...' : getFormButtonText(taskStatuses.resale)}
+                                      </button>
+                                      {!selectedApplication.resale_certificate_completed_at && (
+                                        <button
+                                          onClick={() => handleCompleteTask(selectedApplication.id, 'resale_certificate')}
+                                          className='px-3 py-2 bg-green-100 text-green-800 border border-green-300 rounded-md hover:bg-green-200 transition-colors text-sm font-medium'
+                                          title='Mark this task as completed'
+                                        >
+                                          Mark Complete
+                                        </button>
+                                      )}
+                                    </div>
+                                  </div>
+                                  <div className='mt-2 space-y-1'>
+                                    {selectedApplication.resale_certificate_completed_at && (
+                                      <div className='text-sm opacity-75'>
+                                        Task Completed: {new Date(selectedApplication.resale_certificate_completed_at).toLocaleString()}
+                                      </div>
+                                    )}
+                                  </div>
                                 </div>
-                                {getTaskStatusIcon(taskStatuses.resale)}
-                                <div>
-                                  <h4 className='font-medium'>Virginia Resale Certificate</h4>
-                                  <p className='text-sm opacity-75'>{getTaskStatusText(taskStatuses.resale)}</p>
-                                  <p className='text-xs opacity-60 mt-1'>Fill out the official Virginia resale disclosure form with property and HOA information</p>
-                                </div>
-                              </div>
-                              <div className='flex gap-2'>
-                                <button
-                                  onClick={() => handleCompleteForm(selectedApplication.id, 'resale')}
-                                  disabled={loadingFormData}
-                                  className='px-4 py-2 bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed'
-                                >
-                                  {loadingFormData ? 'Loading...' : getFormButtonText(taskStatuses.resale)}
-                                </button>
-                                {!selectedApplication.resale_certificate_completed_at && (
-                                  <button
-                                    onClick={() => handleCompleteTask(selectedApplication.id, 'resale_certificate')}
-                                    className='px-3 py-2 bg-green-100 text-green-800 border border-green-300 rounded-md hover:bg-green-200 transition-colors text-sm font-medium'
-                                    title='Mark this task as completed'
-                                  >
-                                    Mark Complete
-                                  </button>
-                                )}
-                              </div>
-                            </div>
-                            <div className='mt-2 space-y-1'>
-                              {selectedApplication.resale_certificate_completed_at && (
-                                <div className='text-sm opacity-75'>
-                                  Task Completed: {new Date(selectedApplication.resale_certificate_completed_at).toLocaleString()}
-                                </div>
-                              )}
-                            </div>
-                          </div>
 
-                          {/* Task 3: Generate PDF */}
-                          <div className={`border rounded-lg p-4 ${getTaskStatusColor(taskStatuses.pdf)}`}>
-                            <div className='flex items-center justify-between'>
-                              <div className='flex items-center gap-3'>
-                                <div className='flex items-center justify-center w-8 h-8 rounded-full bg-white border-2 border-current'>
-                                  <span className='text-sm font-bold'>3</span>
+                                {/* Task 3: Generate PDF */}
+                                <div className={`border rounded-lg p-4 ${getTaskStatusColor(taskStatuses.pdf)}`}>
+                                  <div className='flex items-center justify-between'>
+                                    <div className='flex items-center gap-3'>
+                                      <div className='flex items-center justify-center w-8 h-8 rounded-full bg-white border-2 border-current'>
+                                        <span className='text-sm font-bold'>3</span>
+                                      </div>
+                                      {getTaskStatusIcon(taskStatuses.pdf, generatingPDF)}
+                                      <div>
+                                        <h4 className='font-medium'>Generate PDF</h4>
+                                        <p className='text-sm opacity-75'>
+                                          {generatingPDF ? 'Generating...' : getTaskStatusText(taskStatuses.pdf)}
+                                        </p>
+                                        <p className='text-xs opacity-60 mt-1'>Create the final PDF document combining both completed forms for delivery</p>
+                                      </div>
+                                    </div>
+                                    <div className='flex gap-2'>
+                                      <button
+                                        onClick={() => handleGeneratePDF(selectedApplication.forms.resaleCertificate.form_data, selectedApplication.id)}
+                                        disabled={generatingPDF}
+                                        className='px-4 py-2 bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed'
+                                        title="Generate or regenerate PDF."
+                                      >
+                                        {generatingPDF ? 'Generating...' : 
+                                          (taskStatuses.pdf === 'completed' || taskStatuses.pdf === 'update_needed' ? 'Regenerate' : 'Generate')
+                                        }
+                                      </button>
+                                      {selectedApplication.pdf_url && (
+                                        <button
+                                          onClick={() => window.open(selectedApplication.pdf_url, '_blank')}
+                                          className='px-3 py-2 bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity text-sm font-medium flex items-center gap-1'
+                                          title='View PDF'
+                                        >
+                                          <Eye className='w-4 h-4' />
+                                          View
+                                        </button>
+                                      )}
+                                    </div>
+                                  </div>
+                                  <div className='mt-2 space-y-1'>
+                                    {selectedApplication.pdf_completed_at && (
+                                      <div className='text-sm opacity-75'>
+                                        Task Completed: {new Date(selectedApplication.pdf_completed_at).toLocaleString()}
+                                      </div>
+                                    )}
+                                  </div>
                                 </div>
-                                {getTaskStatusIcon(taskStatuses.pdf, generatingPDF)}
-                                <div>
-                                  <h4 className='font-medium'>Generate PDF</h4>
-                                  <p className='text-sm opacity-75'>
-                                    {generatingPDF ? 'Generating...' : getTaskStatusText(taskStatuses.pdf)}
-                                  </p>
-                                  <p className='text-xs opacity-60 mt-1'>Create the final PDF document combining both completed forms for delivery</p>
-                                </div>
-                              </div>
-                              <div className='flex gap-2'>
-                                <button
-                                  onClick={() => handleGeneratePDF(selectedApplication.forms.resaleCertificate.form_data, selectedApplication.id)}
-                                  disabled={generatingPDF}
-                                  className='px-4 py-2 bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed'
-                                  title="Generate or regenerate PDF."
-                                >
-                                  {generatingPDF ? 'Generating...' : 
-                                    (taskStatuses.pdf === 'completed' || taskStatuses.pdf === 'update_needed' ? 'Regenerate' : 'Generate')
-                                  }
-                                </button>
-                                {selectedApplication.pdf_url && (
-                                  <button
-                                    onClick={() => window.open(selectedApplication.pdf_url, '_blank')}
-                                    className='px-3 py-2 bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity text-sm font-medium flex items-center gap-1'
-                                    title='View PDF'
-                                  >
-                                    <Eye className='w-4 h-4' />
-                                    View
-                                  </button>
-                                )}
-                              </div>
-                            </div>
-                            <div className='mt-2 space-y-1'>
-                              {selectedApplication.pdf_completed_at && (
-                                <div className='text-sm opacity-75'>
-                                  Task Completed: {new Date(selectedApplication.pdf_completed_at).toLocaleString()}
-                                </div>
-                              )}
-                            </div>
-                          </div>
 
-                          {/* Task 4: Send Completion Email */}
-                          <div className={`border rounded-lg p-4 ${getTaskStatusColor(taskStatuses.email)}`}>
-                            <div className='flex items-center justify-between'>
-                              <div className='flex items-center gap-3'>
-                                <div className='flex items-center justify-center w-8 h-8 rounded-full bg-white border-2 border-current'>
-                                  <span className='text-sm font-bold'>4</span>
+                                {/* Task 4: Send Completion Email */}
+                                <div className={`border rounded-lg p-4 ${getTaskStatusColor(taskStatuses.email)}`}>
+                                  <div className='flex items-center justify-between'>
+                                    <div className='flex items-center gap-3'>
+                                      <div className='flex items-center justify-center w-8 h-8 rounded-full bg-white border-2 border-current'>
+                                        <span className='text-sm font-bold'>4</span>
+                                      </div>
+                                      {getTaskStatusIcon(taskStatuses.email, sendingEmail)}
+                                      <div>
+                                        <h4 className='font-medium'>Send Completion Email</h4>
+                                        <p className='text-sm opacity-75'>
+                                          {sendingEmail ? 'Sending...' : getTaskStatusText(taskStatuses.email)}
+                                        </p>
+                                        <p className='text-xs opacity-60 mt-1'>Send the completed resale certificate PDF and property files to the applicant</p>
+                                      </div>
+                                    </div>
+                                    <div className='flex items-center gap-2'>
+                                      <button
+                                        onClick={() => setShowAttachmentModal(true)}
+                                        className='px-3 py-1.5 bg-gray-100 text-gray-700 border border-gray-300 rounded-md hover:opacity-80 transition-opacity text-xs font-medium'
+                                        title="Manage email attachments"
+                                      >
+                                        Update Attachment
+                                      </button>
+                                      <button
+                                        onClick={() => handleSendApprovalEmail(selectedApplication.id)}
+                                        disabled={!emailCanBeSent || sendingEmail || taskStatuses.pdf === 'update_needed'}
+                                        className='px-4 py-2 bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed'
+                                        title={
+                                          !bothFormsCompleted 
+                                            ? 'Both forms must be completed first' 
+                                            : taskStatuses.pdf !== 'completed' 
+                                              ? 'PDF must be generated first' 
+                                              : taskStatuses.pdf === 'update_needed'
+                                                ? 'PDF needs to be regenerated after form updates'
+                                                : ''
+                                        }
+                                      >
+                                        {sendingEmail ? 'Sending...' : 'Send Email'}
+                                      </button>
+                                      {!selectedApplication.email_completed_at && (
+                                        <button
+                                          onClick={() => handleCompleteTask(selectedApplication.id, 'email')}
+                                          className='px-3 py-2 bg-green-100 text-green-800 border border-green-300 rounded-md hover:bg-green-200 transition-colors text-sm font-medium'
+                                          title='Mark this task as completed'
+                                        >
+                                          Mark Complete
+                                        </button>
+                                      )}
+                                    </div>
+                                  </div>
+                                  <div className='mt-2 space-y-1'>
+                                    {selectedApplication.email_completed_at && (
+                                      <div className='text-sm opacity-75'>
+                                        Task Completed: {new Date(selectedApplication.email_completed_at).toLocaleString()}
+                                      </div>
+                                    )}
+                                  </div>
                                 </div>
-                                {getTaskStatusIcon(taskStatuses.email, sendingEmail)}
-                                <div>
-                                  <h4 className='font-medium'>Send Completion Email</h4>
-                                  <p className='text-sm opacity-75'>
-                                    {sendingEmail ? 'Sending...' : getTaskStatusText(taskStatuses.email)}
-                                  </p>
-                                  <p className='text-xs opacity-60 mt-1'>Send the completed resale certificate PDF and property files to the applicant</p>
-                                </div>
-                              </div>
-                              <div className='flex items-center gap-2'>
-                                <button
-                                  onClick={() => setShowAttachmentModal(true)}
-                                  className='px-3 py-1.5 bg-gray-100 text-gray-700 border border-gray-300 rounded-md hover:opacity-80 transition-opacity text-xs font-medium'
-                                  title="Manage email attachments"
-                                >
-                                  Update Attachment
-                                </button>
-                                <button
-                                  onClick={() => handleSendApprovalEmail(selectedApplication.id)}
-                                  disabled={!emailCanBeSent || sendingEmail || taskStatuses.pdf === 'update_needed'}
-                                  className='px-4 py-2 bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed'
-                                  title={
-                                    !bothFormsCompleted 
-                                      ? 'Both forms must be completed first' 
-                                      : taskStatuses.pdf !== 'completed' 
-                                        ? 'PDF must be generated first' 
-                                        : taskStatuses.pdf === 'update_needed'
-                                          ? 'PDF needs to be regenerated after form updates'
-                                          : ''
-                                  }
-                                >
-                                  {sendingEmail ? 'Sending...' : 'Send Email'}
-                                </button>
-                                {!selectedApplication.email_completed_at && (
-                                  <button
-                                    onClick={() => handleCompleteTask(selectedApplication.id, 'email')}
-                                    className='px-3 py-2 bg-green-100 text-green-800 border border-green-300 rounded-md hover:bg-green-200 transition-colors text-sm font-medium'
-                                    title='Mark this task as completed'
-                                  >
-                                    Mark Complete
-                                  </button>
-                                )}
-                              </div>
-                            </div>
-                            <div className='mt-2 space-y-1'>
-                              {selectedApplication.email_completed_at && (
-                                <div className='text-sm opacity-75'>
-                                  Task Completed: {new Date(selectedApplication.email_completed_at).toLocaleString()}
-                                </div>
-                              )}
-                            </div>
-                          </div>
                         </>
                       );
                     })()}
                   </div>
                 </div>
+
+                )}
+
+                {/* Actions Panel for Multi-Community Applications */}
+                {(() => {
+                  const isMultiCommunity = selectedApplication.hoa_properties?.is_multi_community && propertyGroups.length > 1;
+                  
+                  if (isMultiCommunity) {
+                    const taskStatuses = getTaskStatuses(selectedApplication);
+                    const bothFormsCompleted = taskStatuses.inspection === 'completed' && taskStatuses.resale === 'completed';
+                    const emailCanBeSent = bothFormsCompleted && taskStatuses.pdf === 'completed';
+                    
+                    return (
+                      <div className='bg-blue-50 border border-blue-200 rounded-lg p-6 mb-6'>
+                        <h3 className='text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2'>
+                          <Building className='w-5 h-5 text-blue-600' />
+                          Actions
+                        </h3>
+                        <div className='grid grid-cols-1 md:grid-cols-3 gap-4'>
+                          {/* Generate PDF Button */}
+                          <button
+                            onClick={() => handleGeneratePDF(selectedApplication.forms.resaleCertificate.form_data, selectedApplication.id)}
+                            disabled={generatingPDF}
+                            className='px-4 py-3 bg-white text-gray-800 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2'
+                            title="Generate or regenerate PDF for all properties"
+                          >
+                            {generatingPDF ? (
+                              <RefreshCw className='w-4 h-4 animate-spin' />
+                            ) : (
+                              <FileText className='w-4 h-4' />
+                            )}
+                            {generatingPDF ? 'Generating...' : 
+                              (taskStatuses.pdf === 'completed' || taskStatuses.pdf === 'update_needed' ? 'Regenerate PDF' : 'Generate PDF')
+                            }
+                          </button>
+                          
+                          {/* Send Completion Email Button */}
+                          <button
+                            onClick={() => handleSendApprovalEmail(selectedApplication.id)}
+                            disabled={!emailCanBeSent || sendingEmail || taskStatuses.pdf === 'update_needed'}
+                            className='px-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2'
+                            title={
+                              !bothFormsCompleted 
+                                ? 'Both forms must be completed first' 
+                                : taskStatuses.pdf !== 'completed' 
+                                  ? 'PDF must be generated first' 
+                                  : taskStatuses.pdf === 'update_needed'
+                                    ? 'PDF needs to be regenerated after form updates'
+                                    : 'Send completion email to applicant'
+                            }
+                          >
+                            {sendingEmail ? (
+                              <RefreshCw className='w-4 h-4 animate-spin' />
+                            ) : (
+                              <Mail className='w-4 h-4' />
+                            )}
+                            {sendingEmail ? 'Sending...' : 'Send Completion Email'}
+                          </button>
+                          
+                          {/* Send Email Button */}
+                          <button
+                            onClick={() => setShowAttachmentModal(true)}
+                            className='px-4 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-sm font-medium flex items-center justify-center gap-2'
+                            title="Send custom email with attachments"
+                          >
+                            <Mail className='w-4 h-4' />
+                            Send Email
+                          </button>
+                        </div>
+                        
+                        {/* Additional Info */}
+                        <div className='mt-4 p-3 bg-white rounded-lg border border-blue-100'>
+                          <p className='text-sm text-gray-600'>
+                            <strong>Multi-Community Application:</strong> These actions will apply to all properties in this application. 
+                            Use individual property management for specific property operations.
+                          </p>
+                        </div>
+                      </div>
+                    );
+                  }
+                  return null;
+                })()}
 
                 {/* Close Button */}
                 <div className='flex justify-center pt-6 border-t'>

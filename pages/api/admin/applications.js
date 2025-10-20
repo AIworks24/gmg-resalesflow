@@ -70,7 +70,9 @@ export default async function handler(req, res) {
         notifications(id, notification_type, status, sent_at),
         application_property_groups(
           id,
+          is_primary,
           property_name,
+          property_location,
           status,
           created_at,
           hoa_properties(id, name, location)
@@ -148,8 +150,8 @@ export default async function handler(req, res) {
       totalPages: Math.ceil((count || 0) / limitNum)
     };
 
-    // Store in cache with 5-minute TTL
-    await setCache(cacheKey, responseData, 300);
+    // Store in cache with short TTL (30s) to reduce staleness after submissions
+    await setCache(cacheKey, responseData, 30);
 
     return res.status(200).json({ 
       ...responseData,

@@ -17,10 +17,11 @@ export default async function handler(req, res) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
+    // Use email lookup to match other admin endpoints and avoid profile id mismatches
     const { data: profile } = await supabase
       .from('profiles')
       .select('role')
-      .eq('id', session.user.id)
+      .eq('email', session.user.email)
       .single();
 
     if (profile?.role !== 'admin' && profile?.role !== 'staff') {
