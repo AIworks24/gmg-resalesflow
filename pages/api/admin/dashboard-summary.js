@@ -21,10 +21,10 @@ export default async function handler(req, res) {
     const { data: profile } = await supabase
       .from('profiles')
       .select('role')
-      .eq('email', user.email)
+      .eq('id', user.id)
       .single();
 
-    if (!profile || !['admin', 'staff'].includes(profile.role)) {
+    if (!profile || !['admin', 'staff', 'accounting'].includes(profile.role)) {
       return res.status(403).json({ error: 'Forbidden - Admin access required' });
     }
 
@@ -32,7 +32,8 @@ export default async function handler(req, res) {
     const bypassCache = req.query.bypass === 'true';
 
     // Try to get from cache first (unless bypassed)
-    const cacheKey = 'admin:dashboard:summary';
+    // Include user ID to prevent cache collisions between concurrent users
+    const cacheKey = `admin:dashboard:summary:${user.id}`;
     
     if (!bypassCache) {
       const cachedData = await getCache(cacheKey);
@@ -52,7 +53,7 @@ export default async function handler(req, res) {
     console.log('❌ Dashboard cache MISS - fetching from database');
 
     // Cache miss - fetch from database
-    const { data: applications, error: queryError } = await supabase
+    let query = supabase
       .from('applications')
       .select(`
         *,
@@ -61,6 +62,15 @@ export default async function handler(req, res) {
       `)
       .neq('status', 'draft');
 
+    // Apply role-based filtering
+    if (profile.role === 'accounting') {
+      // Accounting users can only see settlement applications
+      query = query.or('submitter_type.eq.settlement,application_type.like.settlement%');
+    }
+    // Admin and staff users can see all applications (no additional filtering)
+
+    const { data: applications, error: queryError } = await query;
+
     if (queryError) {
       console.error('Database query error:', queryError);
       throw queryError;
@@ -68,9 +78,12 @@ export default async function handler(req, res) {
 
     // Calculate metrics
     const total = applications.length;
-    const completed = applications.filter(app => 
-      app.notifications?.some(n => n.notification_type === 'application_approved')
-    ).length;
+    const completed = applications.filter(app => {
+      // Check both notification and application status
+      const hasApprovalEmail = app.notifications?.some(n => n.notification_type === 'application_approved');
+      const isCompletedStatus = app.status === 'completed';
+      return hasApprovalEmail || isCompletedStatus;
+    }).length;
     const pending = total - completed;
 
     // Today's submissions
@@ -88,7 +101,9 @@ export default async function handler(req, res) {
 
     applications.forEach(app => {
       // Skip completed applications
-      if (app.notifications?.some(n => n.notification_type === 'application_approved')) {
+      const hasApprovalEmail = app.notifications?.some(n => n.notification_type === 'application_approved');
+      const isCompletedStatus = app.status === 'completed';
+      if (hasApprovalEmail || isCompletedStatus) {
         return;
       }
 
@@ -115,9 +130,11 @@ export default async function handler(req, res) {
     const formsCompleted = allForms.filter(form => form.status === 'completed').length;
 
     // Emails sent
-    const emailsSent = applications.filter(app => 
-      app.notifications?.some(n => n.notification_type === 'application_approved')
-    ).length;
+    const emailsSent = applications.filter(app => {
+      const hasApprovalEmail = app.notifications?.some(n => n.notification_type === 'application_approved');
+      const isCompletedStatus = app.status === 'completed';
+      return hasApprovalEmail || isCompletedStatus;
+    }).length;
 
     // Helper function to determine workflow step
     const getWorkflowStep = (application) => {
@@ -174,8 +191,9 @@ export default async function handler(req, res) {
       { 
         name: 'Send Email', 
         count: applications.filter(app => {
-          const hasEmail = app.notifications?.some(n => n.notification_type === 'application_approved');
-          return app.pdf_url && !hasEmail;
+          const hasApprovalEmail = app.notifications?.some(n => n.notification_type === 'application_approved');
+          const isCompletedStatus = app.status === 'completed';
+          return app.pdf_url && !hasApprovalEmail && !isCompletedStatus;
         }).length,
         color: 'bg-purple-500'
       },

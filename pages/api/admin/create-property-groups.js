@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
+import { createPagesServerClient } from '@supabase/auth-helpers-nextjs';
 import { createPropertyGroups } from '../../../lib/groupingService';
 
 const supabase = createClient(
@@ -12,6 +13,25 @@ export default async function handler(req, res) {
   }
 
   try {
+    // Verify user is authenticated and has admin role
+    const supabaseAuth = createPagesServerClient({ req, res });
+    const { data: { user }, error: authError } = await supabaseAuth.auth.getUser();
+    
+    if (authError || !user) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    // Check if user has admin, staff, or accounting role
+    const { data: profile } = await supabaseAuth
+      .from('profiles')
+      .select('role')
+      .eq('id', user.id)
+      .single();
+
+    if (!profile || !['admin', 'staff', 'accounting'].includes(profile.role)) {
+      return res.status(403).json({ error: 'Forbidden - Admin access required' });
+    }
+
     const { applicationId } = req.body;
 
     if (!applicationId) {
@@ -43,9 +63,9 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Application is not multi-community' });
     }
 
-    // Get linked properties
+    // Get linked properties - use the service role client for server-side access
     const { getLinkedProperties } = require('../../../lib/multiCommunityUtils');
-    const linkedProperties = await getLinkedProperties(application.hoa_property_id);
+    const linkedProperties = await getLinkedProperties(application.hoa_property_id, supabase);
 
     if (!linkedProperties || linkedProperties.length === 0) {
       return res.status(400).json({ error: 'No linked properties found' });

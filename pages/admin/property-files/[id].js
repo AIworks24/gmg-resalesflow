@@ -1,6 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect } from 'react';
 import { useRouter } from 'next/router';
-import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
 import { useSupabaseQuerySingle } from '../../../hooks/useSupabaseQuery';
 import AdminLayout from '../../../components/admin/AdminLayout';
 import PropertyFileManagement from '../../../components/admin/PropertyFileManagement';
@@ -9,11 +8,14 @@ import { ArrowLeft, Building, AlertTriangle, RefreshCw } from 'lucide-react';
 const PropertyFilesPage = () => {
   const router = useRouter();
   const { id } = router.query;
-  const [userRole, setUserRole] = useState('');
   
-  const supabase = createClientComponentClient();
-
-  // Fetch property using the new hook
+  // Fetch property using the new hook - only when id is available
+  const shouldFetch = id && router.isReady;
+  const queryOptions = id ? { eq: { id } } : {};
+  
+  // Add timestamp to cache key to force refetch on page reload after being away
+  const cacheKeySuffix = shouldFetch ? `_${Date.now()}` : '';
+  
   const { 
     data: property, 
     error: propertyError, 
@@ -22,45 +24,39 @@ const PropertyFilesPage = () => {
   } = useSupabaseQuerySingle(
     'hoa_properties',
     '*',
-    { eq: { id } },
+    queryOptions,
     { 
       revalidateOnMount: true,
+      revalidateOnFocus: true, // Refetch when tab comes back into focus
       // Only fetch if we have an ID
-      isPaused: () => !id
+      isPaused: () => !shouldFetch
     }
   );
 
   useEffect(() => {
-    checkAuth();
-  }, []);
+    console.log('PropertyFiles: router state', { isReady: router.isReady, id, shouldFetch, isLoading, hasProperty: !!property, propertyId: property?.id, propertyObject: property });
+  }, [router.isReady, id, shouldFetch, isLoading, property]);
 
-  const checkAuth = async () => {
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) {
-        router.push('/admin');
-        return;
-      }
-
-      const { data: userData } = await supabase
-        .from('users')
-        .select('role')
-        .eq('id', session.user.id)
-        .single();
-
-      if (userData) {
-        setUserRole(userData.role);
-      }
-    } catch (error) {
-      console.error('Error checking auth:', error);
-      router.push('/admin');
-    }
-  };
+  // Show loading state if router is not ready
+  if (!router.isReady || !id) {
+    return (
+      <AdminLayout>
+        <div className="container mx-auto px-4 py-8">
+          <div className="flex items-center justify-center py-12">
+            <div className="flex items-center gap-3 text-gray-600">
+              <RefreshCw className="w-8 h-8 animate-spin" />
+              <span>Loading...</span>
+            </div>
+          </div>
+        </div>
+      </AdminLayout>
+    );
+  }
 
   // Handle error state
   if (propertyError) {
     return (
-      <AdminLayout userRole={userRole}>
+      <AdminLayout>
         <div className="container mx-auto px-4 py-8">
           <button
             onClick={() => router.push('/admin/properties')}
@@ -88,7 +84,7 @@ const PropertyFilesPage = () => {
   }
 
   return (
-    <AdminLayout userRole={userRole}>
+    <AdminLayout>
       <div className="container mx-auto px-4 py-8">
         {/* Header */}
         <div className="mb-6">
@@ -111,18 +107,51 @@ const PropertyFilesPage = () => {
         </div>
 
         {/* File Management Component */}
-        {!isLoading && property && (
-          <PropertyFileManagement 
-            propertyId={property.id} 
-            propertyName={property.name}
-          />
-        )}
-
-        {isLoading && (
+        {isLoading ? (
           <div className="flex items-center justify-center py-12">
             <div className="flex items-center gap-3 text-gray-600">
               <RefreshCw className="w-8 h-8 animate-spin" />
               <span>Loading property...</span>
+            </div>
+          </div>
+        ) : property && property.id ? (
+          <>
+            {console.log('Rendering PropertyFileManagement with:', { id: property.id, name: property.name, fullProperty: property })}
+            <PropertyFileManagement 
+              key={`property-${property.id}`}
+              propertyId={property.id} 
+              propertyName={property.name}
+            />
+          </>
+        ) : property ? (
+          <>
+            {console.error('Property loaded but missing id:', { property, keys: Object.keys(property) })}
+            <div className="flex items-center justify-center py-12">
+              <div className="text-center">
+                <AlertTriangle className="w-12 h-12 text-red-500 mx-auto mb-4" />
+                <h3 className="text-lg font-semibold text-gray-900 mb-2">Property data error</h3>
+                <p className="text-gray-600 mb-4">Property loaded but missing ID field</p>
+                <button
+                  onClick={() => mutate()}
+                  className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700"
+                >
+                  Retry
+                </button>
+              </div>
+            </div>
+          </>
+        ) : (
+          <div className="flex items-center justify-center py-12">
+            <div className="text-center">
+              <AlertTriangle className="w-12 h-12 text-yellow-500 mx-auto mb-4" />
+              <h3 className="text-lg font-semibold text-gray-900 mb-2">No property found</h3>
+              <p className="text-gray-600 mb-4">Could not load property data</p>
+              <button
+                onClick={() => mutate()}
+                className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700"
+              >
+                Retry
+              </button>
             </div>
           </div>
         )}

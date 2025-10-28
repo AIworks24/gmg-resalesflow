@@ -19,11 +19,34 @@ const useApplicantAuthStore = create((set, get) => ({
       
       if (user) {
         // Get user profile
-        const { data: profile } = await supabase
+        let { data: profile, error: profileError } = await supabase
           .from('profiles')
-          .select('*')
+          .select('id, email, first_name, last_name, role, created_at, updated_at')
           .eq('id', user.id)
           .single();
+        
+        // If profile doesn't exist, create it
+        if (profileError && profileError.code === 'PGRST116') {
+          const { data: newProfile, error: createError } = await supabase
+            .from('profiles')
+            .insert([{
+              id: user.id,
+              email: user.email,
+              role: 'external',
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString()
+            }])
+            .select('id, email, first_name, last_name, role, created_at, updated_at')
+            .single();
+          
+          if (createError) {
+            console.error('Error creating profile:', createError);
+          } else {
+            profile = newProfile;
+          }
+        } else if (profileError) {
+          console.error('Error loading profile:', profileError);
+        }
         
         // Allow applicant roles: external, realtor, user, or no role
         if (!profile?.role || ['user', 'external', 'realtor'].includes(profile.role)) {
@@ -118,11 +141,34 @@ const useApplicantAuthStore = create((set, get) => ({
 
       if (data.user) {
         // Check if user is not admin/staff
-        const { data: profile } = await supabase
+        let { data: profile, error: profileError } = await supabase
           .from('profiles')
-          .select('*')
+          .select('id, email, first_name, last_name, role, created_at, updated_at')
           .eq('id', data.user.id)
           .single();
+        
+        // If profile doesn't exist, create it
+        if (profileError && profileError.code === 'PGRST116') {
+          const { data: newProfile, error: createError } = await supabase
+            .from('profiles')
+            .insert([{
+              id: data.user.id,
+              email: data.user.email,
+              role: 'external',
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString()
+            }])
+            .select('id, email, first_name, last_name, role, created_at, updated_at')
+            .single();
+          
+          if (createError) {
+            console.error('Error creating profile during sign in:', createError);
+          } else {
+            profile = newProfile;
+          }
+        } else if (profileError) {
+          console.error('Error loading profile during sign in:', profileError);
+        }
 
         if (profile?.role === 'admin' || profile?.role === 'staff') {
           // Admin/staff users should use admin portal
@@ -161,21 +207,27 @@ const useApplicantAuthStore = create((set, get) => ({
     const supabase = createClientComponentClient();
     
     try {
+      // Try to sign out, but ignore if there's no session
       const { error } = await supabase.auth.signOut();
-      if (error) throw error;
-      
+      if (error && error.message !== 'Auth session missing!') {
+        throw error;
+      }
+    } catch (error) {
+      // If it's not a session missing error, log it
+      if (error.message !== 'Auth session missing!' && error.message !== 'AuthSessionMissingError: Auth session missing!') {
+        console.error('Applicant sign out error:', error);
+      }
+    } finally {
+      // Always clear local state regardless of signOut result
       set({
         user: null,
         profile: null,
         applications: [],
         isLoading: false,
       });
-      
-      return { success: true };
-    } catch (error) {
-      console.error('Applicant sign out error:', error);
-      return { success: false, error: error.message };
     }
+    
+    return { success: true };
   },
 
   resetPassword: async (email) => {

@@ -88,7 +88,7 @@ const useAdminAuthStore = create(
             .eq('id', session.user.id)
             .single();
           
-          if (profile?.role === 'admin' || profile?.role === 'staff') {
+          if (profile?.role === 'admin' || profile?.role === 'staff' || profile?.role === 'accounting') {
             set({
               user: session.user,
               profile,
@@ -97,7 +97,7 @@ const useAdminAuthStore = create(
               isInitialized: true,
             });
           } else {
-            // User exists but not admin/staff
+            // User exists but not admin/staff/accounting
             await supabase.auth.signOut();
           }
         } catch (error) {

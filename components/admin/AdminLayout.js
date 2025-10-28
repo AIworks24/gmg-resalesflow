@@ -44,8 +44,8 @@ const AdminLayout = ({ children, onStartTour }) => {
   const navigationItems = [
     { href: '/admin/dashboard', label: 'Dashboard', roles: ['admin', 'staff', 'accounting'] },
     { href: '/admin/applications', label: 'Applications', roles: ['admin', 'staff', 'accounting'] },
-    { href: '/admin/properties', label: 'Properties', roles: ['admin', 'staff'] },
-    { href: '/admin/reports', label: 'Reports', roles: ['admin', 'staff'] },
+    { href: '/admin/properties', label: 'Properties', roles: ['admin', 'staff', 'accounting'] },
+    { href: '/admin/reports', label: 'Reports', roles: ['admin', 'staff', 'accounting'] },
     { href: '/admin/users', label: 'Users', roles: ['admin'] },
   ];
 

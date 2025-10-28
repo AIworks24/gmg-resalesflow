@@ -60,9 +60,7 @@ export default async function handler(req, res) {
           id,
           name,
           property_owner_email,
-          property_owner_name,
-          management_contact,
-          email
+          property_owner_name
         )
       `)
       .gte('expiration_date', today)
@@ -103,13 +101,10 @@ export default async function handler(req, res) {
     for (const propertyData of Object.values(propertiesWithExpiringDocs)) {
       const { property, documents } = propertyData;
       
-      // Determine recipient emails
+      // Determine recipient emails (owner only as management fields removed)
       const recipients = [];
       if (property.property_owner_email) {
         recipients.push(property.property_owner_email);
-      }
-      if (property.email && property.email !== property.property_owner_email) {
-        recipients.push(property.email);
       }
       
       if (recipients.length === 0) continue;

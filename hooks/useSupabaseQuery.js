@@ -1,5 +1,7 @@
 import useSWR from 'swr';
 import crypto from 'crypto';
+import React from 'react';
+import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
 
 /**
  * Custom hook for Supabase queries with automatic caching and error handling
@@ -25,44 +27,82 @@ import crypto from 'crypto';
  */
 export function useSupabaseQuery(table, select, options = {}, swrOptions = {}) {
   // Generate unique cache key for this query
+  // Add timestamp to force refetch after auth state changes
   const cacheKeyData = { table, select, options };
   const cacheKeyHash = crypto
     .createHash('md5')
     .update(JSON.stringify(cacheKeyData))
     .digest('hex');
-  const cacheKey = `supabase:${table}:${cacheKeyHash}`;
+  
+  // Add a version to force cache invalidation on auth changes
+  const [authVersion, setAuthVersion] = React.useState(0);
+  
+  // Listen for auth state changes
+  React.useEffect(() => {
+    const supabase = createClientComponentClient();
+    const subscription = supabase.auth.onAuthStateChange(() => {
+      console.log(`[useSupabaseQuery] Auth state changed, incrementing cache version for ${table}`);
+      setAuthVersion(v => v + 1);
+    });
+    
+    return () => {
+      subscription.data?.subscription?.unsubscribe();
+    };
+  }, [table]);
+  
+  const cacheKey = `supabase:${table}:${cacheKeyHash}:v${authVersion}`;
 
   // Fetcher function that calls our generic API route
   const fetcher = async () => {
-    const res = await fetch('/api/query', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        table,
-        select,
-        options,
-      }),
-    });
+    console.log(`[useSupabaseQuery] Fetching ${table}...`);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+    
+    try {
+      const res = await fetch('/api/query', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          table,
+          select,
+          options,
+        }),
+        signal: controller.signal,
+      });
 
-    if (!res.ok) {
-      const errorData = await res.json();
-      const error = new Error(errorData.error || 'Failed to fetch data');
-      error.status = res.status;
-      error.info = errorData;
-      throw error;
+      clearTimeout(timeoutId);
+
+      if (!res.ok) {
+        const errorData = await res.json();
+        console.error(`[useSupabaseQuery] Error fetching ${table}:`, errorData);
+        const error = new Error(errorData.error || 'Failed to fetch data');
+        error.status = res.status;
+        error.info = errorData;
+        throw error;
+      }
+
+      const result = await res.json();
+      console.log(`[useSupabaseQuery] Successfully fetched ${table}`);
+      return result.data;
+    } catch (err) {
+      clearTimeout(timeoutId);
+      if (err.name === 'AbortError') {
+        console.error(`[useSupabaseQuery] Request timeout for ${table}`);
+        throw new Error('Request timeout. Please check your connection.');
+      }
+      throw err;
     }
-
-    const result = await res.json();
-    return result.data;
   };
 
   // Default SWR options
   const defaultSwrOptions = {
     refreshInterval: 0, // No auto-refresh by default
-    revalidateOnFocus: false, // Don't refetch on window focus
-    dedupingInterval: 5000, // Prevent duplicate requests within 5 seconds
+    revalidateOnFocus: true, // Refetch when window regains focus
+    revalidateOnMount: true, // Always refetch on mount
+    revalidateOnReconnect: true, // CRITICAL: Refetch when browser reconnects after being away
+    dedupingInterval: 0, // No deduping - always fetch fresh data
     ...swrOptions,
   };
 

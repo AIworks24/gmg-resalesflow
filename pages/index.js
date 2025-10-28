@@ -71,7 +71,7 @@ const calculateTotal = (formData, stripePrices, hoaProperties) => {
   if (formData.submitterType === 'builder' && formData.publicOffering) {
     let total = 200.0;
     if (formData.packageType === 'rush') total += 70.66;
-    if (formData.paymentMethod === 'credit_card') total += 9.95;
+    if (formData.paymentMethod === 'credit_card' && total > 0) total += 9.95;
     return Math.round(total * 100) / 100; // Round to 2 decimal places
   }
   if (formData.submitterType === 'settlement') {
@@ -95,6 +95,7 @@ const calculateTotal = (formData, stripePrices, hoaProperties) => {
       if (location.includes('VA') || location.includes('VIRGINIA')) {
         // Virginia: FREE standard, $70.66 rush
         let total = isRush ? 70.66 : 0;
+        // Only add credit card fee if total > 0 (not for free transactions)
         if (formData.paymentMethod === 'credit_card' && total > 0) {
           total += 9.95; // Credit card fee
         }
@@ -121,7 +122,7 @@ const calculateTotal = (formData, stripePrices, hoaProperties) => {
     // Fallback to hardcoded prices if Stripe prices not loaded yet
     let total = basePrice;
     if (formData.packageType === 'rush') total += 70.66;
-    if (formData.paymentMethod === 'credit_card') total += 9.95;
+    if (formData.paymentMethod === 'credit_card' && total > 0) total += 9.95;
     return Math.round(total * 100) / 100; // Round to 2 decimal places
   }
 
@@ -130,7 +131,7 @@ const calculateTotal = (formData, stripePrices, hoaProperties) => {
   if (formData.packageType === 'rush') {
     total += stripePrices.rush.rushFeeDisplay;
   }
-  if (formData.paymentMethod === 'credit_card') {
+  if (formData.paymentMethod === 'credit_card' && total > 0) {
     total += stripePrices.convenienceFee.display;
   }
   return Math.round(total * 100) / 100; // Round to 2 decimal places
@@ -153,8 +154,8 @@ const calculateTotalDatabase = async (formData, hoaProperties, applicationType) 
           applicationType
         );
         
-        // Add convenience fee if credit card
-        const convenienceFee = formData.paymentMethod === 'credit_card' ? 9.95 : 0;
+        // Add convenience fee if credit card and total > 0
+        const convenienceFee = (formData.paymentMethod === 'credit_card' && pricing.total > 0) ? 9.95 : 0;
         return pricing.total + convenienceFee;
       }
     }
@@ -736,6 +737,9 @@ const PackagePaymentStep = ({
   setShowAuthModal,
   stripePrices,
   applicationType,
+  setSnackbarData,
+  setShowSnackbar,
+  loadApplications,
 }) => {
   const [isProcessing, setIsProcessing] = useState(false);
   const [paymentError, setPaymentError] = useState(null);
@@ -865,7 +869,7 @@ const PackagePaymentStep = ({
             payment_method: formData.paymentMethod,
             total_amount: totalAmount,
             status: 'under_review',
-            payment_status: 'not_required',
+            payment_status: 'pending',
             submitted_at: new Date().toISOString(),
             updated_at: new Date().toISOString(),
             expected_completion_date: new Date(
@@ -913,7 +917,7 @@ const PackagePaymentStep = ({
             payment_method: formData.paymentMethod,
             total_amount: totalAmount,
             status: 'under_review',
-            payment_status: 'not_required',
+            payment_status: 'pending',
             submitted_at: new Date().toISOString(),
             expected_completion_date: new Date(
               Date.now() +
@@ -935,12 +939,8 @@ const PackagePaymentStep = ({
           setApplicationId(createdApplicationId);
         }
 
-        // CREATE THE PROPERTY OWNER FORMS for free transactions
-        await createPropertyOwnerForms(createdApplicationId, {
-          id: createdApplicationId,
-          submitter_type: formData.submitterType,
-          application_type: applicationType
-        });
+        // Forms are created automatically by the API for free transactions
+        // No need to call createPropertyOwnerForms here
 
         // Send confirmation email
         try {
@@ -1430,9 +1430,11 @@ const PackagePaymentStep = ({
                   <span className='text-sm font-medium text-gray-700'>
                     Credit/Debit Card
                   </span>
-                  <span className='text-sm text-gray-500'>
-                    + ${stripePrices ? stripePrices.convenienceFee.display.toFixed(2) : '9.95'} convenience fee
-                  </span>
+                  {calculateTotal(formData, stripePrices, hoaProperties) > 0 && (
+                    <span className='text-sm text-gray-500'>
+                      + ${stripePrices ? stripePrices.convenienceFee.display.toFixed(2) : '9.95'} convenience fee
+                    </span>
+                  )}
                 </div>
                 <p className='text-xs text-gray-500'>
                   Secure checkout powered by Stripe
@@ -1544,7 +1546,7 @@ const PackagePaymentStep = ({
                     <span>+${stripePrices ? stripePrices.rush.rushFeeDisplay.toFixed(2) : '70.66'}</span>
                   </div>
                 )}
-                {formData.paymentMethod === 'credit_card' && (
+                {formData.paymentMethod === 'credit_card' && calculateTotal(formData, stripePrices, hoaProperties) > 0 && (
                   <div className='flex justify-between'>
                     <span>Convenience Fee:</span>
                     <span>+${stripePrices ? stripePrices.convenienceFee.display.toFixed(2) : '9.95'}</span>
@@ -2245,7 +2247,7 @@ export default function GMGResaleFlow() {
     } catch (error) {
       console.error('Error in loadApplications:', error);
     }
-  }, [user, userRole]);
+  }, [user, userRole, supabase]);
 
   // Load existing draft application
   const loadDraftApplication = React.useCallback(async (appId) => {
@@ -2272,7 +2274,7 @@ export default function GMGResaleFlow() {
         propertyAddress: data.property_address || '',
         unitNumber: data.unit_number || '',
         submitterType: data.submitter_type || '',
-        publicOffering: data.application_type === 'public_offering_statement',
+        publicOffering: data.application_type === 'public_offering',
         submitterName: data.submitter_name || '',
         submitterEmail: data.submitter_email || '',
         submitterPhone: data.submitter_phone || '',
@@ -2408,10 +2410,7 @@ export default function GMGResaleFlow() {
     if (formData.submitterType && formData.hoaProperty && hoaProperties) {
       const selectedProperty = hoaProperties.find(prop => prop.name === formData.hoaProperty);
       if (selectedProperty) {
-        let newApplicationType = determineApplicationType(formData.submitterType, selectedProperty);
-        if (formData.submitterType === 'builder' && formData.publicOffering) {
-          newApplicationType = 'public_offering_statement';
-        }
+        let newApplicationType = determineApplicationType(formData.submitterType, selectedProperty, formData.publicOffering);
         if (newApplicationType !== applicationType) {
           setApplicationType(newApplicationType);
           setFieldRequirements(getFieldRequirements(newApplicationType));
@@ -2612,10 +2611,16 @@ export default function GMGResaleFlow() {
 
   // Load applications when user or role changes
   useEffect(() => {
-    if (user && userRole) {
+    if (user) {
+      console.log('📋 Loading applications for user:', user.id, 'role:', userRole);
       loadApplications();
     }
-  }, [user, userRole]);
+  }, [user, userRole, loadApplications]);
+  
+  // Debug: log applications count
+  useEffect(() => {
+    console.log('📊 Applications state:', applications.length, 'items');
+  }, [applications]);
 
   // Add this function to your application submission process
   // This should be called after an application is successfully created
@@ -2628,7 +2633,7 @@ export default function GMGResaleFlow() {
       );
 
       // Get application type to determine required forms
-      const applicationTypeToUse = applicationData.application_type || applicationType || 'standard';
+        const applicationTypeToUse = applicationData.application_type || applicationType || 'single_property';
       
       // Import the getApplicationTypeData function
       const { getApplicationTypeData } = await import('../lib/applicationTypes');
@@ -3011,7 +3016,7 @@ export default function GMGResaleFlow() {
           </div>
 
           {/* Recent Applications - Only show if user has any */}
-          {applications.length > 0 && (
+          {applications.length > 0 ? (
             <div className='bg-white rounded-lg shadow-sm border border-gray-200'>
               <div className='px-6 py-4 border-b border-gray-200'>
                 <h3 className='text-lg font-medium text-gray-900'>
@@ -3092,6 +3097,10 @@ export default function GMGResaleFlow() {
                   );
                 })}
               </div>
+            </div>
+          ) : (
+            <div className='bg-white rounded-lg shadow-sm border border-gray-200 p-6 text-center'>
+              <p className='text-gray-600'>No applications yet. Start a new application to get started!</p>
             </div>
           )}
 
@@ -3432,6 +3441,9 @@ export default function GMGResaleFlow() {
             setShowAuthModal={setShowAuthModal}
             stripePrices={stripePrices}
             applicationType={applicationType}
+            setSnackbarData={setSnackbarData}
+            setShowSnackbar={setShowSnackbar}
+            loadApplications={loadApplications}
           />
         );
       case 5:

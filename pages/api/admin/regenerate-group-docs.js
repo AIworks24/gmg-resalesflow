@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
+import { createPagesServerClient } from '@supabase/auth-helpers-nextjs';
 import { generateMultiCommunityDocuments } from '../../../lib/settlementPdfService';
 
 const supabase = createClient(
@@ -12,6 +13,25 @@ export default async function handler(req, res) {
   }
 
   try {
+    // Verify user is authenticated and has admin role
+    const supabaseAuth = createPagesServerClient({ req, res });
+    const { data: { user }, error: authError } = await supabaseAuth.auth.getUser();
+    
+    if (authError || !user) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    // Check if user has admin, staff, or accounting role
+    const { data: profile } = await supabaseAuth
+      .from('profiles')
+      .select('role')
+      .eq('id', user.id)
+      .single();
+
+    if (!profile || !['admin', 'staff', 'accounting'].includes(profile.role)) {
+      return res.status(403).json({ error: 'Forbidden - Admin access required' });
+    }
+
     const { groupId, applicationId } = req.body;
 
     if (!groupId || !applicationId) {

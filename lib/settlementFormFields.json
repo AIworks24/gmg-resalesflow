@@ -1,0 +1,781 @@
+{
+  "description": "Settlement Form Field Definitions for VA and NC",
+  "forms": {
+  "VA": {
+    "name": "Settlement Form",
+    "description": "Virginia settlement form for dues and escrow instructions",
+      "sections": [
+        {
+          "section": "Property Information",
+          "autoFill": true,
+          "editable": true,
+          "fields": [
+            {
+              "key": "propertyAddress",
+              "label": "Property Address",
+              "type": "text",
+              "required": false
+            },
+            {
+              "key": "associationName",
+              "label": "Association Name",
+              "type": "text",
+              "required": false
+            }
+          ]
+        },
+        {
+          "section": "Seller Information",
+          "autoFill": true,
+          "editable": true,
+          "fields": [
+            {
+              "key": "sellerName",
+              "label": "Seller Name",
+              "type": "text",
+              "required": false
+            }
+          ]
+        },
+        {
+          "section": "Buyer Information",
+          "autoFill": true,
+          "editable": true,
+          "fields": [
+            {
+              "key": "buyerName",
+              "label": "Buyer Name",
+              "type": "text",
+              "required": false
+            },
+            {
+              "key": "estimatedClosingDate",
+              "label": "Estimated Closing Date",
+              "type": "date",
+              "required": false
+            }
+          ]
+        },
+        {
+          "section": "Requestor Information",
+          "autoFill": true,
+          "editable": true,
+          "fields": [
+            {
+              "key": "requestorName",
+              "label": "Requestor Name",
+              "type": "text",
+              "required": false
+            },
+            {
+              "key": "requestorCompany",
+              "label": "Requestor Company",
+              "type": "text",
+              "required": false
+            },
+            {
+              "key": "requestorPhone",
+              "label": "Requestor Phone",
+              "type": "tel",
+              "required": false
+            }
+          ]
+        },
+        {
+          "section": "Community Manager Information",
+          "autoFill": true,
+          "editable": true,
+          "fields": [
+            {
+              "key": "managerName",
+              "label": "Manager Name",
+              "type": "text",
+              "required": false
+            },
+            {
+              "key": "managerTitle",
+              "label": "Manager Title",
+              "type": "text",
+              "required": false
+            },
+            {
+              "key": "managerCompany",
+              "label": "Company",
+              "type": "text",
+              "required": false
+            },
+            {
+              "key": "managerPhone",
+              "label": "Manager Phone",
+              "type": "tel",
+              "required": false
+            },
+            {
+              "key": "managerEmail",
+              "label": "Manager Email",
+              "type": "email",
+              "required": false
+            },
+            {
+              "key": "managerAddress",
+              "label": "Manager Address",
+              "type": "text",
+              "required": false
+            }
+          ]
+        },
+        {
+          "section": "Assessment Information",
+          "autoFill": false,
+          "editable": true,
+          "fields": [
+            {
+              "key": "regularAssessmentAmount",
+              "label": "Current Regular Assessment",
+              "type": "text",
+              "required": false,
+              "placeholder": "$0.00"
+            },
+            {
+              "key": "assessmentFrequency",
+              "label": "Assessment Frequency",
+              "type": "select",
+              "required": false,
+              "options": ["Monthly", "Quarterly", "Semi-Annual", "Annual"]
+            },
+            {
+              "key": "paidThroughDate",
+              "label": "Regular Assessment Paid Through",
+              "type": "date",
+              "required": false
+            },
+            {
+              "key": "nextDueDate",
+              "label": "Regular Assessment Next Due",
+              "type": "date",
+              "required": false
+            },
+            {
+              "key": "dayOfMonthDue",
+              "label": "Day of Month Assessments Due",
+              "type": "number",
+              "required": false
+            },
+            {
+              "key": "ownerCurrentBalance",
+              "label": "Owner's Current Balance Due",
+              "type": "text",
+              "required": false,
+              "placeholder": "$0.00"
+            },
+            {
+              "key": "transferFee",
+              "label": "Transfer Fee",
+              "type": "text",
+              "required": false,
+              "placeholder": "$0.00"
+            },
+            {
+              "key": "resaleCertificateFee",
+              "label": "Resale Certificate Fee",
+              "type": "text",
+              "required": false,
+              "placeholder": "$0.00"
+            },
+            {
+              "key": "capitalContribution",
+              "label": "Capital Contribution Fee",
+              "type": "text",
+              "required": false,
+              "placeholder": "$0.00"
+            },
+            {
+              "key": "prepaidAssessments",
+              "label": "Prepaid Assessments",
+              "type": "text",
+              "required": false,
+              "placeholder": "$0.00"
+            },
+            {
+              "key": "adminFee",
+              "label": "Admin Fee",
+              "type": "text",
+              "required": false,
+              "placeholder": "$0.00"
+            },
+            {
+              "key": "totalAmountDue",
+              "label": "Total Amount Due",
+              "type": "text",
+              "required": false,
+              "placeholder": "$0.00"
+            },
+            {
+              "key": "datePrepared",
+              "label": "Date Prepared",
+              "type": "date",
+              "required": false,
+              "autoGenerated": true
+            },
+            {
+              "key": "preparerName",
+              "label": "Preparer Name",
+              "type": "text",
+              "required": false,
+              "autoGenerated": true
+            },
+            {
+              "key": "preparerSignature",
+              "label": "Preparer Signature",
+              "type": "text",
+              "required": false,
+              "autoGenerated": true
+            }
+          ]
+        },
+        {
+          "section": "Delinquency Information",
+          "autoFill": false,
+          "editable": true,
+          "fields": [
+            {
+              "key": "accountInCollections",
+              "label": "Is this account in collections?",
+              "type": "select",
+              "required": false,
+              "options": ["Yes", "No"]
+            },
+            {
+              "key": "daysDelinquent",
+              "label": "Days After Due Date Considered Delinquent",
+              "type": "number",
+              "required": false
+            },
+            {
+              "key": "delinquencyPenalty",
+              "label": "Penalty for Delinquent Assessments",
+              "type": "text",
+              "required": false,
+              "placeholder": "$0.00"
+            }
+          ]
+        },
+        {
+          "section": "Violations and Litigation",
+          "autoFill": false,
+          "editable": true,
+          "fields": [
+            {
+              "key": "violations",
+              "label": "Are there any violations against this unit?",
+              "type": "textarea",
+              "required": false
+            },
+            {
+              "key": "litigation",
+              "label": "Is the association involved in any current or pending litigation?",
+              "type": "select",
+              "required": false,
+              "options": ["Yes", "No"]
+            }
+          ]
+        },
+        {
+          "section": "Insurance Information",
+          "autoFill": false,
+          "editable": true,
+          "fields": [
+            {
+              "key": "insuranceCompanyName",
+              "label": "Insurance Company Name",
+              "type": "text",
+              "required": false
+            },
+            {
+              "key": "insuranceAgentName",
+              "label": "Insurance Agent Name",
+              "type": "text",
+              "required": false
+            },
+            {
+              "key": "insuranceAgentPhone",
+              "label": "Insurance Agent Phone",
+              "type": "tel",
+              "required": false
+            },
+            {
+              "key": "insuranceAgentEmail",
+              "label": "Insurance Agent Email",
+              "type": "email",
+              "required": false
+            }
+          ]
+        },
+        {
+          "section": "Closing Information",
+          "autoFill": false,
+          "editable": true,
+          "fields": [
+            {
+              "key": "fileEscrowNumber",
+              "label": "File/Escrow Number",
+              "type": "text",
+              "required": false
+            },
+            {
+              "key": "salesPrice",
+              "label": "Sales Price",
+              "type": "text",
+              "required": false,
+              "placeholder": "$0.00"
+            },
+            {
+              "key": "buyerOccupant",
+              "label": "Is buyer occupant?",
+              "type": "select",
+              "required": false,
+              "options": ["Yes", "No"]
+            }
+          ]
+        },
+        {
+          "section": "Status Information",
+          "autoFill": false,
+          "editable": true,
+          "fields": [
+            {
+              "key": "dateOfOrder",
+              "label": "Date of Order",
+              "type": "date",
+              "required": false
+            },
+            {
+              "key": "orderCompletionDate",
+              "label": "Order Completion Date",
+              "type": "date",
+              "required": false
+            },
+            {
+              "key": "datePaid",
+              "label": "Date Paid",
+              "type": "date",
+              "required": false
+            }
+          ]
+        },
+        {
+          "section": "Comments",
+          "autoFill": false,
+          "editable": true,
+          "fields": [
+            {
+              "key": "assessmentComments",
+              "label": "Assessment Comments",
+              "type": "textarea",
+              "required": false
+            },
+            {
+              "key": "feeComments",
+              "label": "Fee Comments",
+              "type": "textarea",
+              "required": false
+            },
+            {
+              "key": "goodThroughDate",
+              "label": "This information is good through",
+              "type": "date",
+              "required": false
+            }
+          ]
+        }
+      ]
+    },
+  "NC": {
+    "name": "Settlement Form",
+    "description": "North Carolina settlement form for unpaid assessments",
+      "sections": [
+        {
+          "section": "Property Information",
+          "autoFill": true,
+          "editable": true,
+          "fields": [
+            {
+              "key": "propertyAddress",
+              "label": "Property Address",
+              "type": "text",
+              "required": false
+            },
+            {
+              "key": "associationName",
+              "label": "Association Name",
+              "type": "text",
+              "required": false
+            },
+            {
+              "key": "parcelId",
+              "label": "Parcel ID",
+              "type": "text",
+              "required": false
+            }
+          ]
+        },
+        {
+          "section": "Seller Information",
+          "autoFill": true,
+          "editable": true,
+          "fields": [
+            {
+              "key": "sellerName",
+              "label": "Seller Name",
+              "type": "text",
+              "required": false
+            }
+          ]
+        },
+        {
+          "section": "Buyer Information",
+          "autoFill": true,
+          "editable": true,
+          "fields": [
+            {
+              "key": "currentOwner",
+              "label": "Current Owner",
+              "type": "text",
+              "required": false
+            },
+            {
+              "key": "buyerName",
+              "label": "Buyer Name",
+              "type": "text",
+              "required": false
+            },
+            {
+              "key": "estimatedClosingDate",
+              "label": "Estimated Closing Date",
+              "type": "date",
+              "required": false
+            }
+          ]
+        },
+        {
+          "section": "Requestor Information",
+          "autoFill": true,
+          "editable": true,
+          "fields": [
+            {
+              "key": "requestorName",
+              "label": "Requestor Name",
+              "type": "text",
+              "required": false
+            },
+            {
+              "key": "requestorCompany",
+              "label": "Requestor Company",
+              "type": "text",
+              "required": false
+            },
+            {
+              "key": "requestorPhone",
+              "label": "Requestor Phone",
+              "type": "tel",
+              "required": false
+            }
+          ]
+        },
+        {
+          "section": "Community Manager Information",
+          "autoFill": true,
+          "editable": true,
+          "fields": [
+            {
+              "key": "managerName",
+              "label": "Manager Name",
+              "type": "text",
+              "required": false
+            },
+            {
+              "key": "managerTitle",
+              "label": "Manager Title",
+              "type": "text",
+              "required": false
+            },
+            {
+              "key": "managerCompany",
+              "label": "Company",
+              "type": "text",
+              "required": false
+            },
+            {
+              "key": "managerPhone",
+              "label": "Manager Phone",
+              "type": "tel",
+              "required": false
+            },
+            {
+              "key": "managerEmail",
+              "label": "Manager Email",
+              "type": "email",
+              "required": false
+            },
+            {
+              "key": "managerAddress",
+              "label": "Manager Address",
+              "type": "text",
+              "required": false
+            }
+          ]
+        },
+        {
+          "section": "Assessment Information",
+          "autoFill": false,
+          "editable": true,
+          "fields": [
+            {
+              "key": "regularAssessmentAmount",
+              "label": "Regular Assessment Amount",
+              "type": "text",
+              "required": false,
+              "placeholder": "$0.00"
+            },
+            {
+              "key": "assessmentFrequency",
+              "label": "Assessment Frequency",
+              "type": "select",
+              "required": false,
+              "options": ["Monthly", "Quarterly", "Semi-Annual", "Annual"]
+            },
+            {
+              "key": "paidThroughDate",
+              "label": "Regular Assessment Paid Through",
+              "type": "date",
+              "required": false
+            },
+            {
+              "key": "nextDueDate",
+              "label": "Regular Assessment Next Due",
+              "type": "date",
+              "required": false
+            },
+            {
+              "key": "dayOfMonthDue",
+              "label": "Day of Month Assessments Due",
+              "type": "number",
+              "required": false
+            },
+            {
+              "key": "unpaidRegularAssessments",
+              "label": "Unpaid Regular Assessments",
+              "type": "text",
+              "required": false,
+              "placeholder": "$0.00"
+            },
+            {
+              "key": "specialAssessmentAmount",
+              "label": "Special Assessment Amount",
+              "type": "text",
+              "required": false,
+              "placeholder": "$0.00"
+            },
+            {
+              "key": "unpaidSpecialAssessments",
+              "label": "Unpaid Special Assessments",
+              "type": "text",
+              "required": false,
+              "placeholder": "$0.00"
+            },
+            {
+              "key": "lateFees",
+              "label": "Late Fees",
+              "type": "text",
+              "required": false,
+              "placeholder": "$0.00"
+            },
+            {
+              "key": "interestCharges",
+              "label": "Interest Charges",
+              "type": "text",
+              "required": false,
+              "placeholder": "$0.00"
+            },
+            {
+              "key": "attorneyFees",
+              "label": "Attorney Fees",
+              "type": "text",
+              "required": false,
+              "placeholder": "$0.00"
+            },
+            {
+              "key": "otherCharges",
+              "label": "Other Charges",
+              "type": "text",
+              "required": false,
+              "placeholder": "$0.00"
+            },
+            {
+              "key": "totalAmountDue",
+              "label": "Total Amount Due",
+              "type": "text",
+              "required": false,
+              "placeholder": "$0.00"
+            }
+          ]
+        },
+        {
+          "section": "Delinquency Information",
+          "autoFill": false,
+          "editable": true,
+          "fields": [
+            {
+              "key": "accountInCollections",
+              "label": "Is this account in collections?",
+              "type": "select",
+              "required": false,
+              "options": ["Yes", "No"]
+            },
+            {
+              "key": "daysDelinquent",
+              "label": "Days After Due Date Considered Delinquent",
+              "type": "number",
+              "required": false
+            },
+            {
+              "key": "delinquencyPenalty",
+              "label": "Penalty for Delinquent Assessments",
+              "type": "text",
+              "required": false,
+              "placeholder": "$0.00"
+            }
+          ]
+        },
+        {
+          "section": "Violations and Litigation",
+          "autoFill": false,
+          "editable": true,
+          "fields": [
+            {
+              "key": "violations",
+              "label": "Are there any violations against this unit?",
+              "type": "textarea",
+              "required": false
+            },
+            {
+              "key": "litigation",
+              "label": "Is the association involved in any current or pending litigation?",
+              "type": "select",
+              "required": false,
+              "options": ["Yes", "No"]
+            }
+          ]
+        },
+        {
+          "section": "Insurance Information",
+          "autoFill": false,
+          "editable": true,
+          "fields": [
+            {
+              "key": "insuranceCompanyName",
+              "label": "Insurance Company Name",
+              "type": "text",
+              "required": false
+            },
+            {
+              "key": "insuranceAgentName",
+              "label": "Insurance Agent Name",
+              "type": "text",
+              "required": false
+            },
+            {
+              "key": "insuranceAgentPhone",
+              "label": "Insurance Agent Phone",
+              "type": "tel",
+              "required": false
+            },
+            {
+              "key": "insuranceAgentEmail",
+              "label": "Insurance Agent Email",
+              "type": "email",
+              "required": false
+            }
+          ]
+        },
+        {
+          "section": "Closing Information",
+          "autoFill": false,
+          "editable": true,
+          "fields": [
+            {
+              "key": "fileEscrowNumber",
+              "label": "File/Escrow Number",
+              "type": "text",
+              "required": false
+            },
+            {
+              "key": "salesPrice",
+              "label": "Sales Price",
+              "type": "text",
+              "required": false,
+              "placeholder": "$0.00"
+            },
+            {
+              "key": "buyerOccupant",
+              "label": "Is buyer occupant?",
+              "type": "select",
+              "required": false,
+              "options": ["Yes", "No"]
+            }
+          ]
+        },
+        {
+          "section": "Status Information",
+          "autoFill": false,
+          "editable": true,
+          "fields": [
+            {
+              "key": "dateOfOrder",
+              "label": "Date of Order",
+              "type": "date",
+              "required": false
+            },
+            {
+              "key": "orderCompletionDate",
+              "label": "Order Completion Date",
+              "type": "date",
+              "required": false
+            },
+            {
+              "key": "datePaid",
+              "label": "Date Paid",
+              "type": "date",
+              "required": false
+            }
+          ]
+        },
+        {
+          "section": "Comments",
+          "autoFill": false,
+          "editable": true,
+          "fields": [
+            {
+              "key": "assessmentComments",
+              "label": "Assessment Comments",
+              "type": "textarea",
+              "required": false
+            },
+            {
+              "key": "feeComments",
+              "label": "Fee Comments",
+              "type": "textarea",
+              "required": false
+            },
+            {
+              "key": "goodThroughDate",
+              "label": "This information is good through",
+              "type": "date",
+              "required": false
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

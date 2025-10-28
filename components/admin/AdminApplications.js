@@ -29,6 +29,7 @@ import { useRouter } from 'next/router';
 import { mapFormDataToPDFFields } from '../../lib/pdfService';
 import AdminPropertyInspectionForm from './AdminPropertyInspectionForm';
 import AdminResaleCertificateForm from './AdminResaleCertificateForm';
+import AdminSettlementForm from './AdminSettlementForm';
 import AdminLayout from './AdminLayout';
 
 const AdminApplications = ({ userRole }) => {
@@ -47,6 +48,8 @@ const AdminApplications = ({ userRole }) => {
   const [selectedApplication, setSelectedApplication] = useState(null);
   const [sendingEmail, setSendingEmail] = useState(false);
   const [generatingPDF, setGeneratingPDF] = useState(false);
+  const [generatingPDFForProperty, setGeneratingPDFForProperty] = useState(null); // Track which property is generating PDF
+  const [sendingEmailForProperty, setSendingEmailForProperty] = useState(null); // Track which property is sending email
   const [dateFilter, setDateFilter] = useState('all'); // 'all', 'today', 'week', 'month', 'custom'
   const [customDateRange, setCustomDateRange] = useState({
     startDate: '',
@@ -65,6 +68,8 @@ const AdminApplications = ({ userRole }) => {
   const [assigningApplication, setAssigningApplication] = useState(null);
   const [showInspectionFormModal, setShowInspectionFormModal] = useState(false);
   const [showResaleFormModal, setShowResaleFormModal] = useState(false);
+  const [showSettlementFormModal, setShowSettlementFormModal] = useState(false);
+  const [selectedApplicationForSettlement, setSelectedApplicationForSettlement] = useState(null);
   const [showPropertyFilesModal, setShowPropertyFilesModal] = useState(false);
   const [selectedFilesForUpload, setSelectedFilesForUpload] = useState([]);
   const [inspectionFormData, setInspectionFormData] = useState(null);
@@ -241,15 +246,9 @@ const AdminApplications = ({ userRole }) => {
 
   // Load property files when attachment modal opens
   useEffect(() => {
-    console.log('Attachment modal useEffect triggered:', { 
-      showAttachmentModal, 
-      propertyId: selectedApplication?.hoa_property_id,
-      applicationId: selectedApplication?.id 
-    });
     if (showAttachmentModal && selectedApplication?.hoa_property_id) {
       loadPropertyFiles(selectedApplication.hoa_property_id);
     } else if (showAttachmentModal && !selectedApplication?.hoa_property_id) {
-      console.log('Attachment modal is open but no hoa_property_id found');
       setLoadingPropertyFiles(false);
       setPropertyFiles([]);
     }
@@ -260,7 +259,15 @@ const AdminApplications = ({ userRole }) => {
     if (selectedApplication?.id) {
       // Use property groups from API response if available (faster, no extra query)
       if (selectedApplication.application_property_groups) {
-        setPropertyGroups(selectedApplication.application_property_groups);
+        // Sort property groups to ensure primary is always first
+        const sortedGroups = selectedApplication.application_property_groups.sort((a, b) => {
+          // Primary property always comes first
+          if (a.is_primary && !b.is_primary) return -1;
+          if (!a.is_primary && b.is_primary) return 1;
+          // If both are primary or both are secondary, sort by name
+          return (a.property_name || '').localeCompare(b.property_name || '');
+        });
+        setPropertyGroups(sortedGroups);
         setLoadingGroups(false);
       } else {
         // Fallback to separate query if not in API response
@@ -279,7 +286,6 @@ const AdminApplications = ({ userRole }) => {
         selectedApplication.application_property_groups && 
         selectedApplication.application_property_groups.length > 0 &&
         propertyGroups.length === 0) {
-      console.log('Property groups in API response, loading immediately...');
       setPropertyGroups(selectedApplication.application_property_groups);
       return;
     }
@@ -291,12 +297,9 @@ const AdminApplications = ({ userRole }) => {
           !loadingGroups && 
           propertyGroups.length === 0) {
         
-        console.log('Multi-community application detected, checking for property groups...');
-        
         // Check if groups are already in the API response (preferred)
         if (selectedApplication.application_property_groups && 
             selectedApplication.application_property_groups.length > 0) {
-          console.log('Property groups already in API response, using them...');
           setPropertyGroups(selectedApplication.application_property_groups);
           return;
         }
@@ -315,12 +318,9 @@ const AdminApplications = ({ userRole }) => {
 
           if (existingGroups && existingGroups.length > 0) {
             // Groups already exist, just load them
-            console.log('Property groups already exist, loading them...');
             setPropertyGroups(existingGroups);
           } else {
             // No groups exist, create them
-            console.log('No property groups found, creating them...');
-            
             const response = await fetch('/api/admin/create-property-groups', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -328,7 +328,6 @@ const AdminApplications = ({ userRole }) => {
             });
             
             if (response.ok) {
-              console.log('Property groups created successfully');
               // Reload the groups
               loadPropertyGroups(selectedApplication.id);
             } else {
@@ -363,6 +362,16 @@ const AdminApplications = ({ userRole }) => {
     }
 
     let filtered = [...swrData.data];
+
+    // Apply role-based filtering (backup to server-side filtering)
+    if (userRole === 'accounting') {
+      // Accounting users can only see settlement applications
+      filtered = filtered.filter(app => 
+        app.submitter_type === 'settlement' || 
+        app.application_type?.startsWith('settlement')
+      );
+    }
+    // Admin and staff users can see all applications (no additional filtering)
 
     // Apply date filter
     const dateRange = getDateRange();
@@ -423,7 +432,7 @@ const AdminApplications = ({ userRole }) => {
     const paginated = filtered.slice(startIndex, startIndex + itemsPerPage);
 
     return { applications: paginated, totalCount: count };
-  }, [swrData, dateFilter, customDateRange, selectedStatus, selectedApplicationType, searchTerm, assignedToMe, userEmail, currentPage, itemsPerPage]);
+  }, [swrData, dateFilter, customDateRange, selectedStatus, selectedApplicationType, searchTerm, assignedToMe, userEmail, currentPage, itemsPerPage, userRole]);
 
 
   const handleAssignApplication = async (applicationId, assignedTo) => {
@@ -473,7 +482,11 @@ const AdminApplications = ({ userRole }) => {
         showSnackbar(`${taskName.replace('_', ' ')} task completed`, 'success');
         
         // Update the selected application if it's open in the modal
-        await refreshSelectedApplication(applicationId);
+        try {
+          await refreshSelectedApplication(applicationId);
+        } catch (refreshError) {
+          console.warn('Failed to refresh selected application after task completion:', refreshError);
+        }
         
          // Refresh applications list immediately
          await mutate();
@@ -500,7 +513,11 @@ const AdminApplications = ({ userRole }) => {
         showSnackbar('Comments saved successfully', 'success');
         
         // Update the selected application if it's open in the modal
-        await refreshSelectedApplication(applicationId);
+        try {
+          await refreshSelectedApplication(applicationId);
+        } catch (refreshError) {
+          console.warn('Failed to refresh selected application after saving comments:', refreshError);
+        }
         
          // Refresh applications list immediately so dashboard reflects new state
          await mutate();
@@ -515,8 +532,46 @@ const AdminApplications = ({ userRole }) => {
 
 
   const getWorkflowStep = (application) => {
-    const inspectionStatus = application.forms.inspectionForm.status;
-    const resaleStatus = application.forms.resaleCertificate.status;
+    // Check if this is a settlement application
+    const isSettlementApp = application.submitter_type === 'settlement' || 
+                            application.application_type?.startsWith('settlement');
+
+    if (isSettlementApp) {
+      // Settlement workflow - 3 tasks (Form + PDF + Email)
+      const settlementForm = application.property_owner_forms?.find(form => form.form_type === 'settlement_form');
+      const settlementFormStatus = settlementForm?.status || 'not_started';
+      const hasPDF = application.pdf_url;
+      const hasNotificationSent = application.notifications?.some(n => n.notification_type === 'application_approved');
+
+      if (settlementFormStatus === 'not_started' || settlementFormStatus === 'not_created') {
+        return { step: 1, text: 'Form Required', color: 'bg-yellow-100 text-yellow-800' };
+      }
+      
+      if (!hasPDF) {
+        return { step: 2, text: 'Generate PDF', color: 'bg-orange-100 text-orange-800' };
+      }
+      
+      if (!hasNotificationSent) {
+        return { step: 3, text: 'Send Email', color: 'bg-purple-100 text-purple-800' };
+      }
+      
+      return { step: 4, text: 'Completed', color: 'bg-green-100 text-green-800' };
+    }
+
+    // Check if this is a multi-community application
+    const isMultiCommunity = application.hoa_properties?.is_multi_community && 
+                            application.application_property_groups && 
+                            application.application_property_groups.length > 1;
+
+    if (isMultiCommunity) {
+      return getMultiCommunityWorkflowStep(application);
+    }
+
+    // Standard single property workflow
+    const inspectionForm = application.property_owner_forms?.find(form => form.form_type === 'inspection_form');
+    const resaleForm = application.property_owner_forms?.find(form => form.form_type === 'resale_certificate');
+    const inspectionStatus = inspectionForm?.status || 'not_started';
+    const resaleStatus = resaleForm?.status || 'not_started';
     const hasPDF = application.pdf_url;
     const hasNotificationSent = application.notifications?.some(n => n.notification_type === 'application_approved');
 
@@ -538,6 +593,77 @@ const AdminApplications = ({ userRole }) => {
     }
     
     return { step: 5, text: 'Completed', color: 'bg-green-100 text-green-800' };
+  };
+
+  const getMultiCommunityWorkflowStep = (application) => {
+    const propertyGroups = application.application_property_groups || [];
+    
+    if (propertyGroups.length === 0) {
+      return { step: 1, text: 'Forms Required', color: 'bg-yellow-100 text-yellow-800' };
+    }
+
+    // Track progress for each property group
+    let totalProperties = propertyGroups.length;
+    let completedProperties = 0;
+    let formsInProgress = 0;
+    let pdfsGenerated = 0;
+    let emailsSent = 0;
+
+    propertyGroups.forEach((group, index) => {
+      const isPrimary = group.is_primary;
+      
+      // Check form completion based on property type
+      let formsCompleted = false;
+      if (isPrimary) {
+        // Primary property needs both inspection and resale forms
+        const inspectionForm = application.property_owner_forms?.find(form => form.form_type === 'inspection_form');
+        const inspectionStatus = inspectionForm?.status || 'not_started';
+        const resaleStatus = group.status === 'completed';
+        formsCompleted = inspectionStatus === 'completed' && resaleStatus;
+      } else {
+        // Secondary properties only need resale form
+        formsCompleted = group.status === 'completed';
+      }
+
+      if (formsCompleted) {
+        // Check PDF generation
+        if (group.pdf_status === 'completed' || group.pdf_url) {
+          pdfsGenerated++;
+          
+          // Check email sending
+          if (group.email_status === 'completed' || group.email_completed_at) {
+            emailsSent++;
+            completedProperties++;
+          }
+        }
+      } else {
+        // Check if forms are in progress
+        const inspectionForm = application.property_owner_forms?.find(form => form.form_type === 'inspection_form');
+        if (group.status === 'in_progress' || 
+            (isPrimary && inspectionForm?.status === 'in_progress')) {
+          formsInProgress++;
+        }
+      }
+    });
+
+    // Determine workflow step based on progress
+    if (completedProperties === totalProperties) {
+      return { step: 5, text: 'Completed', color: 'bg-green-100 text-green-800' };
+    }
+    
+    if (emailsSent > 0 && emailsSent < totalProperties) {
+      return { step: 4, text: 'Send Email', color: 'bg-purple-100 text-purple-800' };
+    }
+    
+    if (pdfsGenerated > 0 && pdfsGenerated < totalProperties) {
+      return { step: 3, text: 'Generate PDF', color: 'bg-orange-100 text-orange-800' };
+    }
+    
+    if (formsInProgress > 0 || (formsInProgress === 0 && pdfsGenerated === 0)) {
+      return { step: 2, text: 'Forms In Progress', color: 'bg-blue-100 text-blue-800' };
+    }
+    
+    return { step: 1, text: 'Forms Required', color: 'bg-yellow-100 text-yellow-800' };
   };
 
   // Helper functions for modal
@@ -597,32 +723,86 @@ const AdminApplications = ({ userRole }) => {
   };
 
   const getTaskStatuses = (application) => {
-    const inspectionFormStatus = application.forms.inspectionForm.status;
-    const resaleFormStatus = application.forms.resaleCertificate.status;
+    const isSettlementApp = application.submitter_type === 'settlement' || 
+                           application.application_type?.startsWith('settlement');
     
-    // Derive PDF status from existing fields
-    let pdfStatus = 'not_started';
-    if (application.pdf_url) {
-      // Check if forms were updated after PDF generation
-      const pdfGeneratedAt = new Date(application.pdf_generated_at || 0);
-      const formsUpdatedAt = new Date(application.forms_updated_at || application.updated_at || 0);
+    if (isSettlementApp) {
+      // Settlement application
+      const settlementForm = application.property_owner_forms?.find(form => form.form_type === 'settlement_form');
       
-      // If forms were updated after PDF generation, mark as needing update
-      if (formsUpdatedAt > pdfGeneratedAt) {
-        pdfStatus = 'update_needed';
-      } else {
-        pdfStatus = 'completed';
+      // Check settlement form status - use settlement_form_completed_at if available, otherwise check form status
+      let settlementFormStatus = 'not_started';
+      if (application.settlement_form_completed_at) {
+        settlementFormStatus = 'completed';
+      } else if (settlementForm?.status === 'completed') {
+        settlementFormStatus = 'completed';
+      } else if (settlementForm?.status === 'in_progress') {
+        settlementFormStatus = 'in_progress';
       }
-    }
-    
-    const hasNotificationSent = application.notifications?.some(n => n.notification_type === 'application_approved');
+      
+      const hasNotificationSent = application.notifications?.some(n => n.notification_type === 'application_approved');
+      const hasEmailCompletedAt = application.email_completed_at;
 
-    return {
-      inspection: inspectionFormStatus,
-      resale: resaleFormStatus,
-      pdf: pdfStatus,
-      email: hasNotificationSent ? 'completed' : 'not_started'
-    };
+      // Derive PDF status from settlement PDF URL
+      let pdfStatus = 'not_started';
+      if (application.pdf_url && application.pdf_generated_at) {
+        // Check if settlement form was updated after PDF generation
+        const pdfGeneratedAt = new Date(application.pdf_generated_at || 0);
+        
+        // Only use settlement form's updated_at if it exists, don't compare with application.updated_at
+        // because application.updated_at changes when we set pdf_generated_at
+        if (settlementForm?.updated_at) {
+          const formUpdatedAt = new Date(settlementForm.updated_at || 0);
+          
+          // If form was updated after PDF generation, mark as needing update
+          if (formUpdatedAt > pdfGeneratedAt) {
+            pdfStatus = 'update_needed';
+          } else {
+            pdfStatus = 'completed';
+          }
+        } else {
+          // If no settlement form found, but PDF exists, it's completed
+          pdfStatus = 'completed';
+        }
+      }
+
+      return {
+        settlement: settlementFormStatus,
+        pdf: pdfStatus,
+        email: (hasNotificationSent || hasEmailCompletedAt) ? 'completed' : 'not_started'
+      };
+    } else {
+      // Standard application
+      const inspectionForm = application.property_owner_forms?.find(form => form.form_type === 'inspection_form');
+      const resaleForm = application.property_owner_forms?.find(form => form.form_type === 'resale_certificate');
+      const inspectionFormStatus = inspectionForm?.status || 'not_started';
+      const resaleFormStatus = resaleForm?.status || 'not_started';
+      
+      // Derive PDF status from existing fields
+      let pdfStatus = 'not_started';
+      if (application.pdf_url && application.pdf_completed_at) {
+        // Check if forms were updated after PDF generation
+        const pdfGeneratedAt = new Date(application.pdf_generated_at || 0);
+        const formsUpdatedAt = new Date(application.forms_updated_at || application.updated_at || 0);
+        
+        // If forms were updated after PDF generation, mark as needing update
+        if (formsUpdatedAt > pdfGeneratedAt) {
+          pdfStatus = 'update_needed';
+        } else {
+          pdfStatus = 'completed';
+        }
+      }
+      
+      const hasNotificationSent = application.notifications?.some(n => n.notification_type === 'application_approved');
+      const hasEmailCompletedAt = application.email_completed_at;
+
+      return {
+        inspection: inspectionFormStatus,
+        resale: resaleFormStatus,
+        pdf: pdfStatus,
+        email: (hasNotificationSent || hasEmailCompletedAt) ? 'completed' : 'not_started'
+      };
+    }
   };
 
   const getFormButtonText = (status) => {
@@ -637,22 +817,108 @@ const AdminApplications = ({ userRole }) => {
     }
   };
 
+  const handleApplicationClick = async (application) => {
+    try {
+      setSelectedApplication(null); // Clear previous selection first
+      setLoadingFormData(true);
+      
+      // Add a small delay to ensure state is cleared
+      await new Promise(resolve => setTimeout(resolve, 100));
+      
+      const { data: appData, error: appError } = await supabase
+        .from('applications')
+        .select(`
+          *,
+          hoa_properties(name, property_owner_email, property_owner_name, is_multi_community),
+          property_owner_forms(id, form_type, status, completed_at, form_data, response_data),
+          notifications(id, notification_type, status, sent_at),
+          application_property_groups(
+            id,
+            property_name,
+            property_location,
+            is_primary,
+            status,
+            pdf_url,
+            pdf_status,
+            pdf_completed_at,
+            email_status,
+            email_completed_at,
+            form_data
+          )
+        `)
+        .eq('id', application.id)
+        .single();
+
+      if (appError) {
+        console.error('❌ Error loading application:', appError);
+        throw appError;
+      }
+
+      if (!appData) {
+        console.error('❌ No application data found for ID:', application.id);
+        throw new Error('Application not found');
+      }
+
+      // Process the data to match the expected format
+      const inspectionForm = appData.property_owner_forms?.find(
+        (f) => f.form_type === 'inspection_form'
+      );
+      const resaleCertificate = appData.property_owner_forms?.find(
+        (f) => f.form_type === 'resale_certificate'
+      );
+
+      const processedApp = {
+        ...appData,
+        forms: {
+          inspectionForm: inspectionForm || { status: 'not_created', id: null },
+          resaleCertificate: resaleCertificate || { status: 'not_created', id: null },
+        },
+        notifications: appData.notifications || [],
+        application_property_groups: appData.application_property_groups || []
+      };
+
+      setSelectedApplication(processedApp);
+      
+    } catch (error) {
+      console.error('❌ Failed to load application:', error);
+      showSnackbar('Failed to load application details: ' + error.message, 'error');
+      setSelectedApplication(null);
+    } finally {
+      setLoadingFormData(false);
+    }
+  };
+
   const handleCompleteForm = async (applicationId, formType, group) => {
     setLoadingFormData(true);
     setLoadingFormKey(`${formType}:${group?.id || 'app'}`);
     setCurrentFormType(formType);
     setCurrentGroupId(group?.id || null);
+    
+    // Set a timeout to prevent infinite loading
+    const timeoutId = setTimeout(() => {
+      setLoadingFormData(false);
+      setLoadingFormKey(null);
+      showSnackbar('Form loading timed out. Please try again.', 'error');
+    }, 10000); // 10 second timeout
+    
     try {
       const newFormId = await loadFormData(applicationId, formType, group);
       if (newFormId) setCurrentFormId(newFormId);
+      
       if (formType === 'inspection') {
         setShowInspectionFormModal(true);
       } else if (formType === 'resale') {
         setShowResaleFormModal(true);
+      } else if (formType === 'settlement') {
+        // Open settlement form modal
+        setShowSettlementFormModal(true);
+        setSelectedApplicationForSettlement(selectedApplication);
       }
     } catch (error) {
+      console.error(`Failed to load form data for ${formType} form:`, error);
       showSnackbar('Failed to load form data: ' + error.message, 'error');
     } finally {
+      clearTimeout(timeoutId);
       setLoadingFormData(false);
       setLoadingFormKey(null);
     }
@@ -665,7 +931,7 @@ const AdminApplications = ({ userRole }) => {
         .from('applications')
         .select(`
           *,
-          hoa_properties(name, property_owner_email, property_owner_name)
+          hoa_properties(name, property_owner_email, property_owner_name, is_multi_community)
         `)
         .eq('id', applicationId)
         .single();
@@ -747,19 +1013,24 @@ const AdminApplications = ({ userRole }) => {
   const refreshSelectedApplication = async (applicationId) => {
     if (selectedApplication && selectedApplication.id === applicationId) {
       // Refetch the specific application with updated data
-      const { data: updatedApp } = await supabase
+      const { data: updatedApp, error: queryError } = await supabase
         .from('applications')
         .select(`
           *,
-          hoa_properties(name, property_owner_email, property_owner_name),
+          hoa_properties(name, property_owner_email, property_owner_name, is_multi_community),
           property_owner_forms(id, form_type, status, completed_at, form_data, response_data),
           notifications(id, notification_type, status, sent_at),
-          application_property_groups(id, property_id, property_name, property_location, is_primary, status, generated_docs,
+          application_property_groups(id, property_id, property_name, property_location, is_primary, status,
             hoa_properties(id, name, location)
           )
         `)
         .eq('id', applicationId)
-        .single();
+        .maybeSingle();
+      
+      if (queryError) {
+        console.error('Error refreshing application:', queryError);
+        throw queryError;
+      }
       
       if (updatedApp) {
         // Process the data to match the format
@@ -792,7 +1063,11 @@ const AdminApplications = ({ userRole }) => {
   const handleFormComplete = async () => {
     // Only refresh the selected application if open (not all applications)
     if (selectedApplication) {
-      await refreshSelectedApplication(selectedApplication.id);
+      try {
+        await refreshSelectedApplication(selectedApplication.id);
+      } catch (refreshError) {
+        console.warn('Failed to refresh selected application after form completion:', refreshError);
+      }
     }
     
     setShowInspectionFormModal(false);
@@ -829,7 +1104,11 @@ const AdminApplications = ({ userRole }) => {
               }
             }
           } : prev);
-          await refreshSelectedApplication(selectedApplication.id);
+          try {
+            await refreshSelectedApplication(selectedApplication.id);
+          } catch (refreshError) {
+            console.warn('Failed to refresh selected application after inspection form completion:', refreshError);
+          }
         } else if (currentFormType === 'resale') {
           // Per-property: mark the specific group's status as completed
           if (currentGroupId) {
@@ -845,7 +1124,11 @@ const AdminApplications = ({ userRole }) => {
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ applicationId: selectedApplication.id, taskName: 'resale_certificate' })
             });
+            try {
             await refreshSelectedApplication(selectedApplication.id);
+          } catch (refreshError) {
+            console.warn('Failed to refresh selected application after inspection form completion:', refreshError);
+          }
           }
           // Optionally also set application-level when primary completes via UI button
         }
@@ -863,9 +1146,14 @@ const AdminApplications = ({ userRole }) => {
   };
 
   const handleGeneratePDF = async (formData, applicationId) => {
+    const startTime = Date.now();
+    console.log('🚀 Starting PDF generation for application:', applicationId);
+    setGeneratingPDF(true);
+    
+    let pdfGeneratedSuccessfully = false;
+    let pdfUrl = null;
+    
     try {
-      setGeneratingPDF(true);
-
       const response = await fetch('/api/regenerate-pdf', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -876,15 +1164,106 @@ const AdminApplications = ({ userRole }) => {
       });
       
       const result = await response.json();
+      console.log('📄 PDF API response:', result);
+      
       if (!result.success) throw new Error(result.error || 'Failed to generate PDF');
       
-      // Update the selected application if it's open in the modal
-      await refreshSelectedApplication(applicationId);
+      // Mark PDF as generated successfully
+      pdfGeneratedSuccessfully = true;
+      pdfUrl = result.pdfUrl;
+      console.log('✅ PDF generated successfully!');
       
-     // Refresh applications list immediately
-     await mutate();
     } catch (error) {
-      console.error('Failed to generate PDF:', error);
+      console.error('❌ Failed to generate PDF:', error);
+      showSnackbar('Failed to generate PDF. Please try again.', 'error');
+    }
+    
+    // Always clear the generating state first, regardless of what happened
+    console.log('🔄 Clearing generatingPDF state');
+    setGeneratingPDF(false);
+    
+    // If PDF was generated successfully, do the post-processing
+    if (pdfGeneratedSuccessfully && pdfUrl) {
+      try {
+        // PRIMARY: Immediately update the selected application's PDF status
+        // This ensures the UI updates instantly and consistently
+        if (selectedApplication && selectedApplication.id === applicationId) {
+          console.log('🔄 Immediately updating selected application PDF status');
+          setSelectedApplication(prev => ({
+            ...prev,
+            pdf_url: pdfUrl,
+            pdf_completed_at: new Date().toISOString(),
+            pdf_generated_at: new Date().toISOString()
+          }));
+        }
+        
+        // SECONDARY: Try to refresh from database (optional, runs in background)
+        try {
+          await refreshSelectedApplication(applicationId);
+          console.log('✅ Successfully refreshed selected application from database');
+        } catch (refreshError) {
+          console.warn('Database refresh failed, but UI was already updated:', refreshError);
+        }
+        
+        // Refresh applications list immediately (with error handling)
+        try {
+          await mutate();
+        } catch (mutateError) {
+          console.warn('Failed to refresh applications list:', mutateError);
+          // Don't throw - PDF was generated successfully
+        }
+        
+        console.log('✅ Showing success message');
+        showSnackbar('PDF generated successfully!', 'success');
+        
+      } catch (postProcessingError) {
+        console.warn('Post-processing failed, but PDF was generated successfully:', postProcessingError);
+        showSnackbar('PDF generated successfully!', 'success');
+      }
+    }
+  };
+
+  const handleGenerateSettlementPDF = async (applicationId) => {
+    try {
+      setGeneratingPDF(true);
+
+      // Get settlement form data
+      const settlementForm = selectedApplication.property_owner_forms?.find(
+        form => form.form_type === 'settlement_form'
+      );
+
+      if (!settlementForm) {
+        showSnackbar('Settlement form not found', 'error');
+        return;
+      }
+
+      // Call the settlement PDF generation API
+      const response = await fetch('/api/generate-settlement-pdf', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          applicationId,
+          formData: settlementForm.form_data || settlementForm.response_data,
+        }),
+      });
+      
+      const result = await response.json();
+      if (!result.success) throw new Error(result.error || 'Failed to generate PDF');
+      
+      // Refresh applications list
+      await mutate();
+      
+      // Update the selected application if it's open in the modal
+      if (selectedApplication && selectedApplication.id === applicationId) {
+        const updatedApp = await refreshSelectedApplication(applicationId);
+        if (updatedApp) {
+          setSelectedApplication(updatedApp);
+        }
+      }
+      
+      showSnackbar('PDF generated successfully!', 'success');
+    } catch (error) {
+      console.error('Failed to generate settlement PDF:', error);
       showSnackbar('Failed to generate PDF. Please try again.', 'error');
     } finally {
       setGeneratingPDF(false);
@@ -892,7 +1271,11 @@ const AdminApplications = ({ userRole }) => {
   };
 
   const handleSendApprovalEmail = async (applicationId) => {
+    console.log('🚀 Starting email send for application:', applicationId);
     setSendingEmail(true);
+    
+    let emailSentSuccessfully = false;
+    
     try {
       // Include temporary attachments in the email request
       const response = await fetch('/api/send-approval-email', {
@@ -906,23 +1289,18 @@ const AdminApplications = ({ userRole }) => {
       });
 
       const data = await response.json();
+      console.log('📧 Email API response:', data);
 
       if (!response.ok) {
         throw new Error(data.error || 'Failed to send approval email');
       }
 
-      // Clear temporary attachments after successful send
-      setTemporaryAttachments([]);
+      // Mark email as sent successfully
+      emailSentSuccessfully = true;
+      console.log('✅ Email sent successfully!');
       
-      // Update the selected application if it's open in the modal
-      await refreshSelectedApplication(applicationId);
-      
-       // Refresh applications list immediately
-       await mutate();
-      
-      showSnackbar('Email sent successfully!', 'success');
     } catch (error) {
-      console.error('Failed to send approval email:', error);
+      console.error('❌ Failed to send approval email:', error);
       
       // Handle specific PDF validation errors with helpful messages
       if (error.message.includes('PDF has not been generated')) {
@@ -930,8 +1308,67 @@ const AdminApplications = ({ userRole }) => {
       } else {
         showSnackbar('Failed to send email. Please try again.', 'error');
       }
-    } finally {
-      setSendingEmail(false);
+    }
+    
+    // Always clear the sending state first, regardless of what happened
+    console.log('🔄 Clearing sendingEmail state');
+    setSendingEmail(false);
+    
+    // If email was sent successfully, do the post-processing
+    if (emailSentSuccessfully) {
+      try {
+        // Clear temporary attachments after successful send
+        setTemporaryAttachments([]);
+        
+        // PRIMARY: Immediately update the selected application's email status
+        // This ensures the UI updates instantly and consistently
+        if (selectedApplication && selectedApplication.id === applicationId) {
+          console.log('🔄 Immediately updating selected application email status');
+          setSelectedApplication(prev => ({
+            ...prev,
+            // Update email completion fields
+            email_completed_at: new Date().toISOString(),
+            status: 'approved',
+            updated_at: new Date().toISOString(),
+            // Add notification record to indicate email was sent
+            notifications: [
+              ...(prev.notifications || []),
+              {
+                id: Date.now(), // Temporary ID
+                application_id: applicationId,
+                notification_type: 'application_approved',
+                status: 'sent',
+                sent_at: new Date().toISOString(),
+                subject: `Resale Certificate Ready - ${prev.property_address}`,
+                message: `Your Resale Certificate for ${prev.property_address} is now ready.`
+              }
+            ]
+          }));
+        }
+        
+        // SECONDARY: Try to refresh from database (optional, runs in background)
+        try {
+          await refreshSelectedApplication(applicationId);
+          console.log('✅ Successfully refreshed selected application from database after email send');
+        } catch (refreshError) {
+          console.warn('Database refresh failed after email send, but UI was already updated:', refreshError);
+        }
+        
+        // Refresh applications list immediately (with error handling)
+        try {
+          await mutate();
+        } catch (mutateError) {
+          console.warn('Failed to refresh applications list:', mutateError);
+          // Don't throw - email was sent successfully
+        }
+        
+        console.log('✅ Showing success message');
+        showSnackbar('Email sent successfully!', 'success');
+        
+      } catch (postProcessingError) {
+        console.warn('Post-processing failed, but email was sent successfully:', postProcessingError);
+        showSnackbar('Email sent successfully!', 'success');
+      }
     }
   };
 
@@ -1136,6 +1573,7 @@ const AdminApplications = ({ userRole }) => {
     
     setLoadingGroups(true);
     try {
+      console.log(`🔄 Loading property groups for application ${applicationId}`);
       const { data, error } = await supabase
         .from('application_property_groups')
         .select('*')
@@ -1144,7 +1582,26 @@ const AdminApplications = ({ userRole }) => {
         .order('created_at', { ascending: true });
 
       if (error) throw error;
-      setPropertyGroups(data || []);
+      
+      console.log(`📊 Property groups loaded:`, data?.map(g => ({
+        id: g.id,
+        name: g.property_name,
+        email_status: g.email_status,
+        email_completed_at: g.email_completed_at,
+        pdf_status: g.pdf_status
+      })));
+      
+      // Sort property groups to ensure primary is always first
+      const sortedGroups = (data || []).sort((a, b) => {
+        // Primary property always comes first
+        if (a.is_primary && !b.is_primary) return -1;
+        if (!a.is_primary && b.is_primary) return 1;
+        // If both are primary or both are secondary, sort by name
+        return (a.property_name || '').localeCompare(b.property_name || '');
+      });
+      
+      setPropertyGroups(sortedGroups);
+      console.log(`✅ Property groups state updated`);
     } catch (error) {
       console.error('Error loading property groups:', error);
       setSnackbar({ show: true, message: 'Error loading property groups: ' + error.message, type: 'error' });
@@ -1409,6 +1866,170 @@ const AdminApplications = ({ userRole }) => {
     );
   };
 
+  // Helper functions for multi-community property tasks
+  const canGeneratePDFForProperty = (group) => {
+    // Check if both forms are completed for this property
+    const isPrimary = !!group.is_primary;
+    const taskStatuses = getTaskStatuses(selectedApplication);
+    
+    // For primary property: both inspection and resale must be completed
+    if (isPrimary) {
+      return taskStatuses.inspection === 'completed' && group.status === 'completed';
+    }
+    
+    // For secondary properties: only resale form needs to be completed
+    return group.status === 'completed';
+  };
+
+  const canSendEmailForProperty = (group) => {
+    // Email can be sent if PDF is generated for this property
+    return group.pdf_status === 'completed' || group.pdf_url;
+  };
+
+  const handleGeneratePDFForProperty = async (applicationId, group) => {
+    setGeneratingPDFForProperty(group.id); // Set specific property as generating
+    
+    try {
+      // Get the form data for this specific property
+      // First try to get property-specific form data, then fall back to application-level
+      let formData = group.form_data;
+      
+      if (!formData) {
+        // If no property-specific form data, get the application-level resale certificate form data
+        const resaleForm = selectedApplication.property_owner_forms?.find(f => f.form_type === 'resale_certificate');
+        formData = resaleForm?.form_data || resaleForm?.response_data;
+      }
+      
+      if (!formData) {
+        throw new Error('No form data available for this property');
+      }
+
+      console.log(`🚀 Generating PDF for property: ${group.property_name} (ID: ${group.id})`);
+      console.log(`📋 Using form data:`, formData ? 'Found' : 'Not found');
+
+      const response = await fetch('/api/regenerate-pdf', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          formData,
+          applicationId,
+          propertyGroupId: group.id, // Pass the property group ID
+          propertyName: group.property_name
+        }),
+      });
+      
+      const result = await response.json();
+      
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to generate PDF');
+      }
+      
+      console.log(`✅ PDF generated successfully for property: ${group.property_name}`);
+      
+      // Update the property group with PDF information
+      await supabase
+        .from('application_property_groups')
+        .update({
+          pdf_url: result.pdfUrl,
+          pdf_status: 'completed',
+          pdf_completed_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', group.id);
+      
+      // Refresh the property groups with timeout protection
+      const loadGroupsWithTimeout = () => Promise.race([
+        loadPropertyGroups(applicationId),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout loading property groups')), 10000))
+      ]);
+      
+      try {
+        await loadGroupsWithTimeout();
+      } catch (loadError) {
+        console.error('Error or timeout loading property groups:', loadError);
+        // Force loading state to false
+        setLoadingGroups(false);
+        // Manually update the specific group's PDF status
+        setPropertyGroups(prev => prev.map(g => 
+          g.id === group.id 
+            ? { ...g, pdf_url: result.pdfUrl, pdf_status: 'completed', pdf_completed_at: new Date().toISOString() }
+            : g
+        ));
+      }
+      
+      showSnackbar(`PDF generated successfully for ${group.property_name}!`, 'success');
+      
+    } catch (error) {
+      console.error(`❌ Failed to generate PDF for property ${group.property_name}:`, error);
+      showSnackbar(`Failed to generate PDF for ${group.property_name}. Please try again.`, 'error');
+    } finally {
+      setGeneratingPDFForProperty(null); // Clear the generating state for this property
+    }
+  };
+
+  const handleSendEmailForProperty = async (applicationId, group) => {
+    setSendingEmailForProperty(group.id); // Set specific property as sending email
+    
+    try {
+      if (!group.pdf_url) {
+        throw new Error('PDF must be generated first');
+      }
+
+      console.log(`📧 Sending email for property: ${group.property_name} (ID: ${group.id})`);
+
+      const response = await fetch('/api/send-approval-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          applicationId,
+          propertyGroupId: group.id,
+          propertyName: group.property_name,
+          pdfUrl: group.pdf_url
+        }),
+      });
+      
+      const result = await response.json();
+      
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to send email');
+      }
+      
+      console.log(`✅ Email sent successfully for property: ${group.property_name}`);
+      console.log(`📧 API Response:`, result);
+
+      // Refresh the property groups to get updated status
+      console.log(`🔄 Refreshing property groups after email send...`);
+      
+      // Add timeout protection
+      const loadGroupsWithTimeout = () => Promise.race([
+        loadPropertyGroups(applicationId),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout loading property groups')), 10000))
+      ]);
+      
+      try {
+        await loadGroupsWithTimeout();
+      } catch (loadError) {
+        console.error('Error or timeout loading property groups:', loadError);
+        // Force loading state to false
+        setLoadingGroups(false);
+        // Manually update the specific group's status
+        setPropertyGroups(prev => prev.map(g => 
+          g.id === group.id 
+            ? { ...g, email_status: 'completed', email_completed_at: new Date().toISOString() }
+            : g
+        ));
+      }
+
+      showSnackbar(`Email sent successfully for ${group.property_name}!`, 'success');
+      
+    } catch (error) {
+      console.error(`❌ Failed to send email for property ${group.property_name}:`, error);
+      showSnackbar(`Failed to send email for ${group.property_name}. Please try again.`, 'error');
+    } finally {
+      setSendingEmailForProperty(null); // Clear the sending state for this property
+    }
+  };
+
   // Show error state if SWR encountered an error
   if (swrError) {
     return (
@@ -1634,8 +2255,8 @@ const AdminApplications = ({ userRole }) => {
                       <td className='px-6 py-4 whitespace-nowrap'>
                         <div className='text-sm text-gray-900'>
                           {(() => {
-                            const appType = app.application_type || 'standard';
-                            if (appType === 'settlement_agent_va') {
+                            const appType = app.application_type || 'single_property';
+                            if (appType === 'settlement_va') {
                               return (
                                 <div className='flex items-center gap-2'>
                                   <span className='inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800'>
@@ -1644,16 +2265,28 @@ const AdminApplications = ({ userRole }) => {
                                   <span className='text-xs text-gray-500'>FREE</span>
                                 </div>
                               );
-                            } else if (appType === 'settlement_agent_nc') {
+                            } else if (appType === 'settlement_nc') {
                               return (
                                 <span className='inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800'>
                                   Settlement - NC
                                 </span>
                               );
+                            } else if (appType === 'public_offering') {
+                              return (
+                                <span className='inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-purple-100 text-purple-800'>
+                                  Public Offering
+                                </span>
+                              );
+                            } else if (appType === 'multi_community') {
+                              return (
+                                <span className='inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-orange-100 text-orange-800'>
+                                  Multi-Community
+                                </span>
+                              );
                             } else {
                               return (
                                 <span className='inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-800'>
-                                  Standard
+                                  Single Property
                                 </span>
                               );
                             }
@@ -1713,7 +2346,7 @@ const AdminApplications = ({ userRole }) => {
 
                       <td className='px-6 py-4 whitespace-nowrap text-sm font-medium action-buttons'>
                         <button
-                          onClick={() => setSelectedApplication(app)}
+                          onClick={() => handleApplicationClick(app)}
                           className='px-3 py-1 text-sm bg-blue-100 text-blue-800 rounded-md hover:bg-blue-200 flex items-center space-x-1'
                         >
                           <Eye className='w-4 h-4' />
@@ -1839,21 +2472,56 @@ const AdminApplications = ({ userRole }) => {
         {selectedApplication && (
           <div className='fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50'>
             <div className='bg-white rounded-lg max-w-4xl w-full max-h-[90vh] overflow-y-auto p-6'>
+              {/* Loading overlay for modal content */}
+              {loadingFormData && (
+                <div className='absolute inset-0 bg-white bg-opacity-75 flex items-center justify-center z-10 rounded-lg'>
+                  <div className='flex items-center space-x-2'>
+                    <div className='animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600'></div>
+                    <span className='text-sm text-gray-600'>Loading application details...</span>
+                  </div>
+                </div>
+              )}
               <div className='p-6 border-b'>
                 <div className='flex justify-between items-center'>
                   <h2 className='text-xl font-bold text-gray-900'>
                     Application #{selectedApplication.id} Details
                   </h2>
-                  <button
-                    onClick={() => setSelectedApplication(null)}
-                    className='text-gray-400 hover:text-gray-600'
-                  >
-                    <X className='w-6 h-6' />
-                  </button>
+                  <div className='flex items-center space-x-2'>
+                    <button
+                      onClick={() => handleApplicationClick(selectedApplication)}
+                      className='text-blue-400 hover:text-blue-600'
+                      title='Refresh application data'
+                    >
+                      <RefreshCw className='w-5 h-5' />
+                    </button>
+                    <button
+                      onClick={() => setSelectedApplication(null)}
+                      className='text-gray-400 hover:text-gray-600'
+                    >
+                      <X className='w-6 h-6' />
+                    </button>
+                  </div>
                 </div>
               </div>
 
               <div className='p-6 space-y-6'>
+                {/* Error boundary for modal content */}
+                {!selectedApplication.id && (
+                  <div className='bg-red-50 border border-red-200 rounded-lg p-4 mb-6'>
+                    <div className='flex items-center'>
+                      <div className='text-red-600 mr-2'>⚠️</div>
+                      <div>
+                        <h3 className='text-sm font-semibold text-red-800'>
+                          Application Data Error
+                        </h3>
+                        <p className='text-sm text-red-600 mt-1'>
+                          Unable to load application details. Please try refreshing the page.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 {/* Multi-Community Indicator */}
                 {selectedApplication.hoa_properties?.is_multi_community && (
                   <div className='bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6'>
@@ -1888,17 +2556,17 @@ const AdminApplications = ({ userRole }) => {
                       </div>
                       <div>
                         <strong>HOA:</strong>{' '}
-                        {selectedApplication.hoa_properties?.name}
+                        {selectedApplication.hoa_properties?.name || 'N/A'}
                       </div>
                       <div>
-                        <strong>Buyer:</strong> {selectedApplication.buyer_name}
+                        <strong>Buyer:</strong> {selectedApplication.buyer_name || 'N/A'}
                       </div>
                       <div>
-                        <strong>Seller:</strong> {selectedApplication.seller_name}
+                        <strong>Seller:</strong> {selectedApplication.seller_name || 'N/A'}
                       </div>
                       <div>
                         <strong>Sale Price:</strong> $
-                        {selectedApplication.sale_price?.toLocaleString()}
+                        {selectedApplication.sale_price?.toLocaleString() || 'N/A'}
                       </div>
                       <div>
                         <strong>Closing Date:</strong>{' '}
@@ -1918,29 +2586,29 @@ const AdminApplications = ({ userRole }) => {
                     <div className='space-y-2 text-sm'>
                       <div>
                         <strong>Submitted by:</strong>{' '}
-                        {selectedApplication.submitter_name}
+                        {selectedApplication.submitter_name || 'N/A'}
                       </div>
                       <div>
                         <strong>Email:</strong>{' '}
-                        {selectedApplication.submitter_email}
+                        {selectedApplication.submitter_email || 'N/A'}
                       </div>
                       <div>
                         <strong>Phone:</strong>{' '}
-                        {selectedApplication.submitter_phone}
+                        {selectedApplication.submitter_phone || 'N/A'}
                       </div>
                       <div>
-                        <strong>Type:</strong> {selectedApplication.submitter_type}
+                        <strong>Type:</strong> {selectedApplication.submitter_type || 'N/A'}
                       </div>
                       <div>
                         <strong>License:</strong>{' '}
                         {selectedApplication.realtor_license || 'N/A'}
                       </div>
                       <div>
-                        <strong>Package:</strong> {selectedApplication.package_type}
+                        <strong>Package:</strong> {selectedApplication.package_type || 'N/A'}
                       </div>
                       <div>
                         <strong>Total Amount:</strong> $
-                        {selectedApplication.total_amount?.toFixed(2)}
+                        {selectedApplication.total_amount?.toFixed(2) || '0.00'}
                       </div>
                     </div>
                   </div>
@@ -2001,7 +2669,15 @@ const AdminApplications = ({ userRole }) => {
                               <span className='ml-2 text-gray-600'>Loading property groups...</span>
                             </div>
                           ) : (
-                            propertyGroups.map((group) => (
+                            propertyGroups
+                              .sort((a, b) => {
+                                // Primary property always comes first
+                                if (a.is_primary && !b.is_primary) return -1;
+                                if (!a.is_primary && b.is_primary) return 1;
+                                // If both are primary or both are secondary, sort by name
+                                return (a.property_name || '').localeCompare(b.property_name || '');
+                              })
+                              .map((group) => (
                               <div key={group.id} className='bg-gray-50 rounded-lg p-4 border border-gray-200'>
                                 <div className='flex items-center justify-between mb-3'>
                                   <div className='flex items-center gap-3'>
@@ -2134,7 +2810,7 @@ const AdminApplications = ({ userRole }) => {
                                               disabled={loadingFormData}
                                               className='px-3 py-1 text-xs bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity font-medium disabled:opacity-50 disabled:cursor-not-allowed'
                                             >
-                                              {loadingFormKey === `resale:${group.id}` ? 'Loading...' : 'Fill Form'}
+                                              {loadingFormKey === `resale:${group.id}` ? 'Loading...' : getFormButtonText(group.status === 'completed' ? 'completed' : 'not_started')}
                                             </button>
                                             {isPrimary && !selectedApplication.resale_certificate_completed_at && (
                                               <button
@@ -2149,7 +2825,66 @@ const AdminApplications = ({ userRole }) => {
                                         </div>
                                       </div>
 
-                                      {/* Per-property send/regenerate controls removed per request */}
+                                      {/* Task C: Generate PDF (All properties) */}
+                                      <div className={`border rounded-lg p-3 ${getTaskStatusColor(group.pdf_status || 'not_started')}`}>
+                                        <div className='flex items-center justify-between'>
+                                          <div className='flex items-center gap-3'>
+                                            <div className='flex items-center justify-center w-6 h-6 rounded-full bg-white border-2 border-current'>
+                                              <span className='text-xs font-bold'>3</span>
+                                            </div>
+                                            {getTaskStatusIcon(group.pdf_status || 'not_started')}
+                                            <div>
+                                              <h5 className='font-medium text-sm'>Generate PDF</h5>
+                                              <p className='text-xs opacity-75'>{getTaskStatusText(group.pdf_status || 'not_started')}</p>
+                                            </div>
+                                          </div>
+                                          <div className='flex gap-2'>
+                                            <button
+                                              onClick={() => handleGeneratePDFForProperty(selectedApplication.id, group)}
+                                              disabled={generatingPDFForProperty === group.id || !canGeneratePDFForProperty(group)}
+                                              className='px-3 py-1 text-xs bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity font-medium disabled:opacity-50 disabled:cursor-not-allowed'
+                                              title={!canGeneratePDFForProperty(group) ? 'Both forms must be completed first' : 'Generate PDF for this property'}
+                                            >
+                                              {generatingPDFForProperty === group.id ? 'Generating...' : 'Generate PDF'}
+                                            </button>
+                                            {group.pdf_url && (
+                                              <button
+                                                onClick={() => window.open(group.pdf_url, '_blank')}
+                                                className='px-2 py-1 text-xs bg-gray-100 text-gray-700 border border-gray-300 rounded-md hover:bg-gray-200 transition-colors font-medium'
+                                                title='View PDF'
+                                              >
+                                                View
+                                              </button>
+                                            )}
+                                          </div>
+                                        </div>
+                                      </div>
+
+                                      {/* Task D: Send Email (All properties) */}
+                                      <div className={`border rounded-lg p-3 ${getTaskStatusColor(group.email_status || 'not_started')}`}>
+                                        <div className='flex items-center justify-between'>
+                                          <div className='flex items-center gap-3'>
+                                            <div className='flex items-center justify-center w-6 h-6 rounded-full bg-white border-2 border-current'>
+                                              <span className='text-xs font-bold'>4</span>
+                                            </div>
+                                            {getTaskStatusIcon(group.email_status || 'not_started')}
+                                            <div>
+                                              <h5 className='font-medium text-sm'>Send Email</h5>
+                                              <p className='text-xs opacity-75'>{getTaskStatusText(group.email_status || 'not_started')}</p>
+                                            </div>
+                                          </div>
+                                          <div className='flex gap-2'>
+                                            <button
+                                              onClick={() => handleSendEmailForProperty(selectedApplication.id, group)}
+                                              disabled={sendingEmailForProperty === group.id || !canSendEmailForProperty(group)}
+                                              className='px-3 py-1 text-xs bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity font-medium disabled:opacity-50 disabled:cursor-not-allowed'
+                                              title={!canSendEmailForProperty(group) ? 'PDF must be generated first' : 'Send email for this property'}
+                                            >
+                                              {sendingEmailForProperty === group.id ? 'Sending...' : 'Send Email'}
+                                            </button>
+                                          </div>
+                                        </div>
+                                      </div>
                                     </>
                                   );
                                 })()}
@@ -2220,9 +2955,147 @@ const AdminApplications = ({ userRole }) => {
                     <div className='space-y-4'>
                     {(() => {
                       const taskStatuses = getTaskStatuses(selectedApplication);
-                      const bothFormsCompleted = taskStatuses.inspection === 'completed' && taskStatuses.resale === 'completed';
-                      const pdfCanBeGenerated = bothFormsCompleted && (taskStatuses.pdf === 'not_started' || taskStatuses.pdf === 'update_needed');
-                      const emailCanBeSent = bothFormsCompleted && taskStatuses.pdf === 'completed';
+                      const isSettlementApp = selectedApplication.submitter_type === 'settlement' || 
+                                             selectedApplication.application_type?.startsWith('settlement');
+                      
+                      if (isSettlementApp) {
+                        // Settlement application workflow - 3 tasks (Form + PDF + Email)
+                        const settlementFormCompleted = taskStatuses.settlement === 'completed';
+                        const pdfCanBeGenerated = settlementFormCompleted && (taskStatuses.pdf === 'not_started' || taskStatuses.pdf === 'update_needed');
+                        const emailCanBeSent = taskStatuses.pdf === 'completed';
+
+                        return (
+                          <>
+                            {/* Task 1: Settlement Form */}
+                            <div className={`border rounded-lg p-4 ${getTaskStatusColor(taskStatuses.settlement)}`}>
+                              <div className='flex items-center justify-between'>
+                                <div className='flex items-center gap-3'>
+                                  <div className='flex items-center justify-center w-8 h-8 rounded-full bg-white border-2 border-current'>
+                                    <span className='text-sm font-bold'>1</span>
+                                  </div>
+                                  {getTaskStatusIcon(taskStatuses.settlement)}
+                                  <div>
+                                    <h4 className='font-medium'>Settlement Form</h4>
+                                    <p className='text-sm opacity-75'>{getTaskStatusText(taskStatuses.settlement)}</p>
+                                    <p className='text-xs opacity-60 mt-1'>Complete the settlement form with assessment details and community manager information</p>
+                                  </div>
+                                </div>
+                                <div className='flex gap-2'>
+                                  <button
+                                    onClick={() => handleCompleteForm(selectedApplication.id, 'settlement')}
+                                    disabled={loadingFormData}
+                                    className='px-4 py-2 bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed'
+                                  >
+                                    {loadingFormData ? 'Loading...' : getFormButtonText(taskStatuses.settlement)}
+                                  </button>
+                                  {!selectedApplication.settlement_form_completed_at && (
+                                    <button
+                                      onClick={() => handleCompleteTask(selectedApplication.id, 'settlement_form')}
+                                      className='px-3 py-2 bg-green-100 text-green-800 border border-green-300 rounded-md hover:bg-green-200 transition-colors text-sm font-medium'
+                                      title='Mark this task as completed'
+                                    >
+                                      Mark Complete
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                              <div className='mt-2 space-y-1'>
+                                {selectedApplication.settlement_form_completed_at && (
+                                  <div className='text-sm opacity-75'>
+                                    Task Completed: {new Date(selectedApplication.settlement_form_completed_at).toLocaleString()}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Task 2: Generate PDF */}
+                            <div className={`border rounded-lg p-4 ${getTaskStatusColor(taskStatuses.pdf)}`}>
+                              <div className='flex items-center justify-between'>
+                                <div className='flex items-center gap-3'>
+                                  <div className='flex items-center justify-center w-8 h-8 rounded-full bg-white border-2 border-current'>
+                                    <span className='text-sm font-bold'>2</span>
+                                  </div>
+                                  {getTaskStatusIcon(taskStatuses.pdf, generatingPDF)}
+                                  <div>
+                                    <h4 className='font-medium'>Generate PDF</h4>
+                                    <p className='text-sm opacity-75'>
+                                      {generatingPDF ? 'Generating...' : getTaskStatusText(taskStatuses.pdf)}
+                                    </p>
+                                    <p className='text-xs opacity-60 mt-1'>Generate the settlement form as a PDF document</p>
+                                  </div>
+                                </div>
+                                <div className='flex gap-2'>
+                                  <button
+                                    onClick={() => handleGenerateSettlementPDF(selectedApplication.id)}
+                                    disabled={!pdfCanBeGenerated || generatingPDF}
+                                    className='px-4 py-2 bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed'
+                                    title={!settlementFormCompleted ? 'Settlement form must be completed first' : ''}
+                                  >
+                                    {generatingPDF ? 'Generating...' : 
+                                      (taskStatuses.pdf === 'completed' || taskStatuses.pdf === 'update_needed' ? 'Regenerate' : 'Generate PDF')
+                                    }
+                                  </button>
+                                  {selectedApplication.pdf_url && (
+                                    <button
+                                      onClick={() => window.open(selectedApplication.pdf_url, '_blank')}
+                                      className='px-3 py-2 bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity text-sm font-medium flex items-center gap-1'
+                                      title='View PDF'
+                                    >
+                                      <Eye className='w-4 h-4' />
+                                      View
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                              <div className='mt-2 space-y-1'>
+                                {selectedApplication.pdf_completed_at && (
+                                  <div className='text-sm opacity-75'>
+                                    Task Completed: {new Date(selectedApplication.pdf_completed_at).toLocaleString()}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Task 3: Send Settlement Email */}
+                            <div className={`border rounded-lg p-4 ${getTaskStatusColor(taskStatuses.email)}`}>
+                              <div className='flex items-center justify-between'>
+                                <div className='flex items-center gap-3'>
+                                  <div className='flex items-center justify-center w-8 h-8 rounded-full bg-white border-2 border-current'>
+                                    <span className='text-sm font-bold'>3</span>
+                                  </div>
+                                  {getTaskStatusIcon(taskStatuses.email, sendingEmail)}
+                                  <div>
+                                    <h4 className='font-medium'>Send Settlement Email</h4>
+                                    <p className='text-sm opacity-75'>
+                                      {sendingEmail ? 'Sending...' : getTaskStatusText(taskStatuses.email)}
+                                    </p>
+                                    <p className='text-xs opacity-60 mt-1'>Send the completed settlement form details to the settlement agent</p>
+                                  </div>
+                                </div>
+                                <button
+                                  onClick={() => handleSendApprovalEmail(selectedApplication.id)}
+                                  disabled={!emailCanBeSent || sendingEmail}
+                                  className='px-4 py-2 bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed'
+                                  title={!settlementFormCompleted ? 'Settlement form must be completed first' : ''}
+                                >
+                                  {sendingEmail ? 'Sending...' : 'Send Email'}
+                                </button>
+                              </div>
+                              <div className='mt-2 space-y-1'>
+                                {selectedApplication.notifications?.find(n => n.notification_type === 'application_approved')?.sent_at && (
+                                  <div className='text-sm opacity-75'>
+                                    Task Completed: {new Date(selectedApplication.notifications.find(n => n.notification_type === 'application_approved').sent_at).toLocaleString()}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          </>
+                        );
+                      } else {
+                        // Standard application workflow - 4 tasks
+                        const bothFormsCompleted = taskStatuses.inspection === 'completed' && taskStatuses.resale === 'completed';
+                        const pdfCanBeGenerated = bothFormsCompleted && (taskStatuses.pdf === 'not_started' || taskStatuses.pdf === 'update_needed');
+                        const emailCanBeSent = bothFormsCompleted && taskStatuses.pdf === 'completed';
 
                       return (
                         <>
@@ -2328,7 +3201,15 @@ const AdminApplications = ({ userRole }) => {
                                     </div>
                                     <div className='flex gap-2'>
                                       <button
-                                        onClick={() => handleGeneratePDF(selectedApplication.forms.resaleCertificate.form_data, selectedApplication.id)}
+                                        onClick={() => {
+                                          const inspectionForm = selectedApplication.property_owner_forms?.find(form => form.form_type === 'inspection_form');
+                                          const resaleForm = selectedApplication.property_owner_forms?.find(form => form.form_type === 'resale_certificate');
+                                          const formsData = {
+                                            inspectionForm: inspectionForm?.form_data,
+                                            resaleCertificate: resaleForm?.form_data
+                                          };
+                                          handleGeneratePDF(formsData, selectedApplication.id);
+                                        }}
                                         disabled={generatingPDF}
                                         className='px-4 py-2 bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed'
                                         title="Generate or regenerate PDF."
@@ -2419,91 +3300,13 @@ const AdminApplications = ({ userRole }) => {
                                 </div>
                         </>
                       );
+                      }
                     })()}
                   </div>
                 </div>
 
                 )}
 
-                {/* Actions Panel for Multi-Community Applications */}
-                {(() => {
-                  const isMultiCommunity = selectedApplication.hoa_properties?.is_multi_community && propertyGroups.length > 1;
-                  
-                  if (isMultiCommunity) {
-                    const taskStatuses = getTaskStatuses(selectedApplication);
-                    const bothFormsCompleted = taskStatuses.inspection === 'completed' && taskStatuses.resale === 'completed';
-                    const emailCanBeSent = bothFormsCompleted && taskStatuses.pdf === 'completed';
-                    
-                    return (
-                      <div className='bg-blue-50 border border-blue-200 rounded-lg p-6 mb-6'>
-                        <h3 className='text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2'>
-                          <Building className='w-5 h-5 text-blue-600' />
-                          Actions
-                        </h3>
-                        <div className='grid grid-cols-1 md:grid-cols-3 gap-4'>
-                          {/* Generate PDF Button */}
-                          <button
-                            onClick={() => handleGeneratePDF(selectedApplication.forms.resaleCertificate.form_data, selectedApplication.id)}
-                            disabled={generatingPDF}
-                            className='px-4 py-3 bg-white text-gray-800 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2'
-                            title="Generate or regenerate PDF for all properties"
-                          >
-                            {generatingPDF ? (
-                              <RefreshCw className='w-4 h-4 animate-spin' />
-                            ) : (
-                              <FileText className='w-4 h-4' />
-                            )}
-                            {generatingPDF ? 'Generating...' : 
-                              (taskStatuses.pdf === 'completed' || taskStatuses.pdf === 'update_needed' ? 'Regenerate PDF' : 'Generate PDF')
-                            }
-                          </button>
-                          
-                          {/* Send Completion Email Button */}
-                          <button
-                            onClick={() => handleSendApprovalEmail(selectedApplication.id)}
-                            disabled={!emailCanBeSent || sendingEmail || taskStatuses.pdf === 'update_needed'}
-                            className='px-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2'
-                            title={
-                              !bothFormsCompleted 
-                                ? 'Both forms must be completed first' 
-                                : taskStatuses.pdf !== 'completed' 
-                                  ? 'PDF must be generated first' 
-                                  : taskStatuses.pdf === 'update_needed'
-                                    ? 'PDF needs to be regenerated after form updates'
-                                    : 'Send completion email to applicant'
-                            }
-                          >
-                            {sendingEmail ? (
-                              <RefreshCw className='w-4 h-4 animate-spin' />
-                            ) : (
-                              <Mail className='w-4 h-4' />
-                            )}
-                            {sendingEmail ? 'Sending...' : 'Send Completion Email'}
-                          </button>
-                          
-                          {/* Send Email Button */}
-                          <button
-                            onClick={() => setShowAttachmentModal(true)}
-                            className='px-4 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-sm font-medium flex items-center justify-center gap-2'
-                            title="Send custom email with attachments"
-                          >
-                            <Mail className='w-4 h-4' />
-                            Send Email
-                          </button>
-                        </div>
-                        
-                        {/* Additional Info */}
-                        <div className='mt-4 p-3 bg-white rounded-lg border border-blue-100'>
-                          <p className='text-sm text-gray-600'>
-                            <strong>Multi-Community Application:</strong> These actions will apply to all properties in this application. 
-                            Use individual property management for specific property operations.
-                          </p>
-                        </div>
-                      </div>
-                    );
-                  }
-                  return null;
-                })()}
 
                 {/* Close Button */}
                 <div className='flex justify-center pt-6 border-t'>
@@ -2570,6 +3373,44 @@ const AdminApplications = ({ userRole }) => {
                   applicationData={inspectionFormData}
                   formId={inspectionFormData.property_owner_forms[0]?.id}
                   onComplete={handleFormComplete}
+                  isModal={true}
+                />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Settlement Form Modal */}
+        {showSettlementFormModal && selectedApplicationForSettlement && (
+          <div className='fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-[60]'>
+            <div className='bg-white rounded-lg max-w-6xl w-full max-h-[95vh] flex flex-col'>
+              <div className='p-4 border-b flex justify-between items-center'>
+                <h2 className='text-xl font-bold text-gray-900'>
+                  Settlement Form - Application #{selectedApplicationForSettlement.id}
+                </h2>
+                <button
+                  onClick={() => {
+                    setShowSettlementFormModal(false);
+                    setSelectedApplicationForSettlement(null);
+                  }}
+                  className='text-gray-400 hover:text-gray-600'
+                >
+                  <X className='w-6 h-6' />
+                </button>
+              </div>
+              <div className='flex-1 overflow-auto max-h-[calc(95vh-80px)]'>
+                <AdminSettlementForm
+                  applicationId={selectedApplicationForSettlement.id}
+                  applicationData={{
+                    id: selectedApplicationForSettlement.id,
+                    ...selectedApplicationForSettlement,
+                    hoa_properties: selectedApplicationForSettlement.hoa_properties || { name: selectedApplicationForSettlement.hoa_property || 'N/A' },
+                    property_owner_forms: []
+                  }}
+                  onClose={() => {
+                    setShowSettlementFormModal(false);
+                    setSelectedApplicationForSettlement(null);
+                  }}
                   isModal={true}
                 />
               </div>

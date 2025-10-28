@@ -21,10 +21,10 @@ export default async function handler(req, res) {
     const { data: profile } = await supabase
       .from('profiles')
       .select('role')
-      .eq('email', user.email)
+      .eq('id', user.id)
       .single();
 
-    if (!profile || !['admin', 'staff'].includes(profile.role)) {
+    if (!profile || !['admin', 'staff', 'accounting'].includes(profile.role)) {
       return res.status(403).json({ error: 'Forbidden - Admin access required' });
     }
 
@@ -33,8 +33,8 @@ export default async function handler(req, res) {
     const pageSize = parseInt(req.query.pageSize) || 10;
     const search = req.query.search || '';
 
-    // Try to get from cache first (cache key includes pagination params)
-    const cacheKey = `admin:hoa_properties:page:${page}:size:${pageSize}:search:${search}`;
+    // Try to get from cache first (cache key includes pagination params and user ID to prevent collisions)
+    const cacheKey = `admin:hoa_properties:${user.id}:page:${page}:size:${pageSize}:search:${search}`;
     const cachedData = await getCache(cacheKey);
 
     if (cachedData) {

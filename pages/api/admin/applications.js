@@ -21,10 +21,10 @@ export default async function handler(req, res) {
     const { data: profile } = await supabase
       .from('profiles')
       .select('role')
-      .eq('email', user.email)
+      .eq('id', user.id)
       .single();
 
-    if (!profile || !['admin', 'staff'].includes(profile.role)) {
+    if (!profile || !['admin', 'staff', 'accounting'].includes(profile.role)) {
       return res.status(403).json({ error: 'Forbidden - Admin access required' });
     }
 
@@ -43,8 +43,8 @@ export default async function handler(req, res) {
     const pageNum = parseInt(page);
     const limitNum = parseInt(limit);
 
-    // Generate dynamic cache key based on filters (including sort parameters)
-    const cacheKey = `admin:applications:${status}:${search}:${dateStart || 'null'}:${dateEnd || 'null'}:${sortBy}:${sortOrder}:${pageNum}:${limitNum}`;
+    // Generate dynamic cache key based on filters (including sort parameters and user ID to prevent collisions)
+    const cacheKey = `admin:applications:${user.id}:${status}:${search}:${dateStart || 'null'}:${dateEnd || 'null'}:${sortBy}:${sortOrder}:${pageNum}:${limitNum}`;
     
     // Try to get from cache first
     const cachedData = await getCache(cacheKey);
@@ -75,10 +75,23 @@ export default async function handler(req, res) {
           property_location,
           status,
           created_at,
+          pdf_url,
+          pdf_status,
+          pdf_completed_at,
+          email_status,
+          email_completed_at,
+          form_data,
           hoa_properties(id, name, location)
         )
       `, { count: 'exact' })
       .neq('status', 'draft');
+
+    // Apply role-based filtering
+    if (profile.role === 'accounting') {
+      // Accounting users can only see settlement applications
+      query = query.or('submitter_type.eq.settlement,application_type.like.settlement%');
+    }
+    // Admin and staff users can see all applications (no additional filtering)
 
     // Apply status filter
     if (status !== 'all') {

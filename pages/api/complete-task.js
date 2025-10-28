@@ -21,10 +21,10 @@ export default async function handler(req, res) {
     const { data: profile } = await supabase
       .from('profiles')
       .select('role')
-      .eq('email', session.user.email)
+      .eq('id', session.user.id)
       .single();
 
-    if (profile?.role !== 'admin' && profile?.role !== 'staff') {
+    if (profile?.role !== 'admin' && profile?.role !== 'staff' && profile?.role !== 'accounting') {
       return res.status(403).json({ error: 'Forbidden' });
     }
 
@@ -35,7 +35,7 @@ export default async function handler(req, res) {
     }
 
     // Validate task name
-    const validTasks = ['inspection_form', 'resale_certificate', 'pdf', 'email'];
+    const validTasks = ['inspection_form', 'resale_certificate', 'pdf', 'email', 'settlement_form'];
     if (!validTasks.includes(taskName)) {
       return res.status(400).json({ error: 'Invalid task name' });
     }

@@ -203,6 +203,13 @@ const AdminDashboard = ({ userRole }) => {
         .from('applications')
         .select('*', { count: 'exact', head: true });
 
+      // Apply role-based filtering
+      if (userRole === 'accounting') {
+        // Accounting users can only see settlement applications
+        countQuery = countQuery.or('submitter_type.eq.settlement,application_type.like.settlement%');
+      }
+      // Admin and staff users can see all applications (no additional filtering)
+
       // Apply filters to count query
       const dateRange = getDateRange();
       if (dateRange) {
@@ -230,11 +237,18 @@ const AdminDashboard = ({ userRole }) => {
         .select(
           `
           *,
-          hoa_properties(name, property_owner_email, property_owner_name),
+          hoa_properties(name, property_owner_email, property_owner_name, is_multi_community),
           property_owner_forms(id, form_type, status, completed_at, form_data, response_data),
           notifications(id, notification_type, status, sent_at)
         `
         );
+
+      // Apply role-based filtering
+      if (userRole === 'accounting') {
+        // Accounting users can only see settlement applications
+        query = query.or('submitter_type.eq.settlement,application_type.like.settlement%');
+      }
+      // Admin and staff users can see all applications (no additional filtering)
 
       // Apply all filters to data query
       if (dateRange) {
@@ -387,32 +401,78 @@ const AdminDashboard = ({ userRole }) => {
   };
 
   const getTaskStatuses = (application) => {
-    const inspectionFormStatus = application.forms.inspectionForm.status;
-    const resaleFormStatus = application.forms.resaleCertificate.status;
+    const isSettlementApp = application.submitter_type === 'settlement' || 
+                           application.application_type?.startsWith('settlement');
     
-    // Derive PDF status from existing fields
-    let pdfStatus = 'not_started';
-    if (application.pdf_url) {
-      // Check if forms were updated after PDF generation
-      const pdfGeneratedAt = new Date(application.pdf_generated_at || 0);
-      const formsUpdatedAt = new Date(application.forms_updated_at || application.updated_at || 0);
+    if (isSettlementApp) {
+      // Settlement application - only settlement form
+      // Find settlement form from property_owner_forms array
+      const settlementForm = application.property_owner_forms?.find(form => form.form_type === 'settlement_form');
       
-      // If forms were updated after PDF generation, mark as needing update
-      if (formsUpdatedAt > pdfGeneratedAt) {
-        pdfStatus = 'update_needed';
-      } else {
-        pdfStatus = 'completed';
+      // Check settlement form status - use settlement_form_completed_at if available, otherwise check form status
+      let settlementFormStatus = 'not_started';
+      if (application.settlement_form_completed_at) {
+        settlementFormStatus = 'completed';
+      } else if (settlementForm?.status === 'completed') {
+        settlementFormStatus = 'completed';
+      } else if (settlementForm?.status === 'in_progress') {
+        settlementFormStatus = 'in_progress';
       }
-    }
-    
-    const hasNotificationSent = application.notifications?.some(n => n.notification_type === 'application_approved');
+      
+      // Derive PDF status from settlement PDF URL
+      let pdfStatus = 'not_started';
+      if (application.settlement_pdf_url && application.pdf_generated_at) {
+        // Check if settlement form was updated after PDF generation
+        const pdfGeneratedAt = new Date(application.pdf_generated_at || 0);
+        const formUpdatedAt = new Date(settlementForm?.updated_at || application.updated_at || 0);
+        
+        // If form was updated after PDF generation, mark as needing update
+        if (formUpdatedAt > pdfGeneratedAt) {
+          pdfStatus = 'update_needed';
+        } else {
+          pdfStatus = 'completed';
+        }
+      }
+      
+      const hasNotificationSent = application.notifications?.some(n => n.notification_type === 'application_approved');
 
-    return {
-      inspection: inspectionFormStatus,
-      resale: resaleFormStatus,
-      pdf: pdfStatus,
-      email: hasNotificationSent ? 'completed' : 'not_started'
-    };
+      return {
+        settlement: settlementFormStatus,
+        pdf: pdfStatus,
+        email: hasNotificationSent ? 'completed' : 'not_started'
+      };
+    } else {
+      // Standard application - inspection and resale forms
+      const inspectionForm = application.property_owner_forms?.find(form => form.form_type === 'inspection_form');
+      const resaleForm = application.property_owner_forms?.find(form => form.form_type === 'resale_certificate');
+      
+      const inspectionFormStatus = inspectionForm?.status || 'not_started';
+      const resaleFormStatus = resaleForm?.status || 'not_started';
+      
+      // Derive PDF status from existing fields
+      let pdfStatus = 'not_started';
+      if (application.pdf_url && application.pdf_completed_at) {
+        // Check if forms were updated after PDF generation
+        const pdfGeneratedAt = new Date(application.pdf_generated_at || 0);
+        const formsUpdatedAt = new Date(application.forms_updated_at || application.updated_at || 0);
+        
+        // If forms were updated after PDF generation, mark as needing update
+        if (formsUpdatedAt > pdfGeneratedAt) {
+          pdfStatus = 'update_needed';
+        } else {
+          pdfStatus = 'completed';
+        }
+      }
+      
+      const hasNotificationSent = application.notifications?.some(n => n.notification_type === 'application_approved');
+
+      return {
+        inspection: inspectionFormStatus,
+        resale: resaleFormStatus,
+        pdf: pdfStatus,
+        email: hasNotificationSent ? 'completed' : 'not_started'
+      };
+    }
   };
 
   const getFormButtonText = (status) => {
@@ -456,9 +516,18 @@ const AdminDashboard = ({ userRole }) => {
   }, {});
 
   const handleCompleteForm = async (applicationId, formType) => {
-    const form =
-      formType === 'inspection' ? 'inspectionForm' : 'resaleCertificate';
-    const status = selectedApplication.forms[form].status;
+    // Handle different form types
+    let formTypeValue, status;
+    
+    if (formType === 'settlement') {
+      formTypeValue = 'settlement_form';
+      const settlementForm = selectedApplication.property_owner_forms?.find(form => form.form_type === 'settlement_form');
+      status = settlementForm?.status || 'not_started';
+    } else {
+      const form = formType === 'inspection' ? 'inspectionForm' : 'resaleCertificate';
+      formTypeValue = formType === 'inspection' ? 'inspection_form' : 'resale_certificate';
+      status = selectedApplication.forms?.[form]?.status || 'not_started';
+    }
 
     // If the form is not started, update its status to in_progress
     if (status === 'not_started') {
@@ -470,17 +539,15 @@ const AdminDashboard = ({ userRole }) => {
             updated_at: new Date().toISOString(),
           })
           .eq('application_id', applicationId)
-          .eq(
-            'form_type',
-            formType === 'inspection' ? 'inspection_form' : 'resale_certificate'
-          );
+          .eq('form_type', formTypeValue);
       } catch (error) {
         console.error('Error updating form status:', error);
       }
     }
 
     // Update forms timestamp when editing completed forms (for PDF regeneration logic)
-    if (status === 'completed' && selectedApplication.pdf_url) {
+    const pdfUrl = selectedApplication.pdf_url || selectedApplication.settlement_pdf_url;
+    if (status === 'completed' && pdfUrl) {
       try {
         const { error } = await supabase
           .from('applications')
@@ -500,11 +567,14 @@ const AdminDashboard = ({ userRole }) => {
     }
 
     // Navigate to the form page
+    console.log(`🚀 Navigating to /admin/${formType}/${applicationId}`);
     router.push(`/admin/${formType}/${applicationId}`);
   };
 
 
   const handleGeneratePDF = async (formData, applicationId) => {
+    const startTime = Date.now();
+    
     try {
       setGeneratingPDF(true);
 
@@ -525,12 +595,108 @@ const AdminDashboard = ({ userRole }) => {
       
       // Update the selected application if it's open in the modal
       if (selectedApplication && selectedApplication.id === applicationId) {
-        // Refetch the specific application with updated data
+        try {
+          // Refetch the specific application with updated data
+          const { data: updatedApp } = await supabase
+            .from('applications')
+            .select(`
+              *,
+              hoa_properties(name, property_owner_email, property_owner_name, is_multi_community),
+              property_owner_forms(id, form_type, status, completed_at, form_data, response_data),
+              notifications(id, notification_type, status, sent_at)
+            `)
+            .eq('id', applicationId)
+            .single();
+          
+          if (updatedApp) {
+            // Process the data to match the format
+            const inspectionForm = updatedApp.property_owner_forms?.find(
+              (f) => f.form_type === 'inspection_form'
+            );
+            const resaleCertificate = updatedApp.property_owner_forms?.find(
+              (f) => f.form_type === 'resale_certificate'
+            );
+            
+            const processedApp = {
+              ...updatedApp,
+              forms: {
+                inspectionForm: inspectionForm || { status: 'not_created', id: null },
+                resaleCertificate: resaleCertificate || { status: 'not_created', id: null },
+              },
+              notifications: updatedApp.notifications || [],
+            };
+            
+            setSelectedApplication(processedApp);
+            console.log('✅ Successfully refreshed selected application in dashboard');
+          }
+        } catch (refreshError) {
+          console.warn('Failed to refresh selected application in dashboard:', refreshError);
+        }
+        
+        // PRIMARY: Immediately update the selected application's PDF status
+        // This ensures the UI updates instantly and consistently
+        console.log('🔄 Immediately updating selected application PDF status in dashboard');
+        setSelectedApplication(prev => ({
+          ...prev,
+          pdf_url: result.pdfUrl,
+          pdf_completed_at: new Date().toISOString(),
+          pdf_generated_at: new Date().toISOString()
+        }));
+      }
+      
+      // Show success message
+      alert('PDF generated successfully!');
+    } catch (error) {
+      console.error('Failed to generate PDF:', error);
+      alert('Failed to generate PDF. Please try again.');
+    } finally {
+      // Ensure generating state is shown for at least 1 second for better UX
+      const elapsedTime = Date.now() - startTime;
+      const minDisplayTime = 1000; // 1 second
+      const remainingTime = Math.max(0, minDisplayTime - elapsedTime);
+      
+      setTimeout(() => {
+        setGeneratingPDF(false);
+      }, remainingTime);
+    }
+  };
+
+  const handleGenerateSettlementPDF = async (applicationId) => {
+    try {
+      setGeneratingPDF(true);
+
+      // Get settlement form data
+      const settlementForm = selectedApplication.property_owner_forms?.find(
+        form => form.form_type === 'settlement_form'
+      );
+
+      if (!settlementForm) {
+        throw new Error('Settlement form not found');
+      }
+
+      // Call the settlement PDF generation API
+      const response = await fetch('/api/generate-settlement-pdf', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          applicationId,
+          formData: settlementForm.form_data || settlementForm.response_data,
+        }),
+      });
+      
+      const result = await response.json();
+      if (!result.success) throw new Error(result.error || 'Failed to generate PDF');
+      
+      // Refresh applications list to update UI
+      await loadApplications();
+      
+      // Update the selected application if it's open in the modal
+      if (selectedApplication && selectedApplication.id === applicationId) {
         const { data: updatedApp } = await supabase
           .from('applications')
           .select(`
             *,
-            hoa_properties(name, property_owner_email, property_owner_name),
+            hoa_properties(name, property_owner_email, property_owner_name, is_multi_community),
             property_owner_forms(id, form_type, status, completed_at, form_data, response_data),
             notifications(id, notification_type, status, sent_at)
           `)
@@ -538,40 +704,31 @@ const AdminDashboard = ({ userRole }) => {
           .single();
         
         if (updatedApp) {
-          // Process the data to match the format
-          const inspectionForm = updatedApp.property_owner_forms?.find(
-            (f) => f.form_type === 'inspection_form'
-          );
-          const resaleCertificate = updatedApp.property_owner_forms?.find(
-            (f) => f.form_type === 'resale_certificate'
-          );
-          
-          const processedApp = {
-            ...updatedApp,
-            forms: {
-              inspectionForm: inspectionForm || { status: 'not_created', id: null },
-              resaleCertificate: resaleCertificate || { status: 'not_created', id: null },
-            },
-            notifications: updatedApp.notifications || [],
-          };
-          
-          setSelectedApplication(processedApp);
+          setSelectedApplication(updatedApp);
         }
       }
+      
+      showSnackbar('PDF generated successfully!', 'success');
     } catch (error) {
-      console.error('Failed to generate PDF:', error);
-      alert('Failed to generate PDF. Please try again.');
+      console.error('Failed to generate settlement PDF:', error);
+      showSnackbar('Failed to generate PDF. Please try again.', 'error');
     } finally {
       setGeneratingPDF(false);
     }
   };
 
-
   const handleSendApprovalEmail = async (applicationId) => {
     setSendingEmail(true);
     try {
+      // Check if this is a settlement application
+      const isSettlementApp = selectedApplication?.application_type === 'settlement_agent_va' || 
+                              selectedApplication?.application_type === 'settlement_agent_nc';
+      
+      // Use settlement email API for settlement applications
+      const apiEndpoint = isSettlementApp ? '/api/send-settlement-approval-email' : '/api/send-approval-email';
+      
       // Include temporary attachments in the email request
-      const response = await fetch('/api/send-approval-email', {
+      const response = await fetch(apiEndpoint, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -596,8 +753,89 @@ const AdminDashboard = ({ userRole }) => {
       // Clear temporary attachments after successful send
       setTemporaryAttachments([]);
       
+      // Mark Task 2 (Email) as completed with timestamp
+      try {
+        await fetch('/api/complete-task', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            applicationId: applicationId,
+            taskName: 'email'
+          }),
+        });
+      } catch (taskError) {
+        console.error('Failed to mark email task as completed:', taskError);
+        // Don't throw - email was sent successfully
+      }
+      
       // Refresh applications list to update task status
       await loadApplications();
+      
+      // Update the selected application if it's open in the modal
+      if (selectedApplication && selectedApplication.id === applicationId) {
+        try {
+          // Refetch the specific application with updated data
+          const { data: updatedApp } = await supabase
+            .from('applications')
+            .select(`
+              *,
+              hoa_properties(name, property_owner_email, property_owner_name, is_multi_community),
+              property_owner_forms(id, form_type, status, completed_at, form_data, response_data),
+              notifications(id, notification_type, status, sent_at)
+            `)
+            .eq('id', applicationId)
+            .single();
+          
+          if (updatedApp) {
+            // Process the data to match the format
+            const inspectionForm = updatedApp.property_owner_forms?.find(
+              (f) => f.form_type === 'inspection_form'
+            );
+            const resaleCertificate = updatedApp.property_owner_forms?.find(
+              (f) => f.form_type === 'resale_certificate'
+            );
+            
+            const processedApp = {
+              ...updatedApp,
+              forms: {
+                inspectionForm: inspectionForm || { status: 'not_created', id: null },
+                resaleCertificate: resaleCertificate || { status: 'not_created', id: null },
+              },
+              notifications: updatedApp.notifications || [],
+            };
+            
+            setSelectedApplication(processedApp);
+            console.log('✅ Successfully refreshed selected application after email send in dashboard');
+          }
+        } catch (refreshError) {
+          console.warn('Failed to refresh selected application after email send in dashboard:', refreshError);
+        }
+        
+        // PRIMARY: Immediately update the selected application's email status
+        // This ensures the UI updates instantly and consistently
+        console.log('🔄 Immediately updating selected application email status in dashboard');
+        setSelectedApplication(prev => ({
+          ...prev,
+          email_completed_at: new Date().toISOString(),
+          status: 'approved',
+          updated_at: new Date().toISOString(),
+          // Add notification record to indicate email was sent
+          notifications: [
+            ...(prev.notifications || []),
+            {
+              id: Date.now(), // Temporary ID
+              application_id: applicationId,
+              notification_type: 'application_approved',
+              status: 'sent',
+              sent_at: new Date().toISOString(),
+              subject: `Resale Certificate Ready - ${prev.property_address}`,
+              message: `Your Resale Certificate for ${prev.property_address} is now ready.`
+            }
+          ]
+        }));
+      }
       
       showSnackbar('Email sent successfully!', 'success');
     } catch (error) {
@@ -728,162 +966,279 @@ const AdminDashboard = ({ userRole }) => {
               <div className='space-y-4'>
                 {(() => {
                   const taskStatuses = getTaskStatuses(selectedApplication);
-                  const bothFormsCompleted = taskStatuses.inspection === 'completed' && taskStatuses.resale === 'completed';
-                  const pdfCanBeGenerated = bothFormsCompleted && (taskStatuses.pdf === 'not_started' || taskStatuses.pdf === 'update_needed');
-                  const emailCanBeSent = bothFormsCompleted && taskStatuses.pdf === 'completed';
+                  const isSettlementApp = selectedApplication.submitter_type === 'settlement' || 
+                                         selectedApplication.application_type?.startsWith('settlement');
+                  
+                  if (isSettlementApp) {
+                    // Settlement application workflow - 3 tasks (Form + PDF + Email)
+                    const settlementFormCompleted = taskStatuses.settlement === 'completed';
+                    const pdfCanBeGenerated = settlementFormCompleted && (taskStatuses.pdf === 'not_started' || taskStatuses.pdf === 'update_needed');
+                    const emailCanBeSent = taskStatuses.pdf === 'completed';
 
-                  return (
-                    <>
-                      {/* Task 1: Property Inspection Form */}
-                      <div className={`border rounded-lg p-4 ${getTaskStatusColor(taskStatuses.inspection)}`}>
-                        <div className='flex items-center justify-between'>
-                          <div className='flex items-center gap-3'>
-                            <div className='flex items-center justify-center w-8 h-8 rounded-full bg-white border-2 border-current'>
-                              <span className='text-sm font-bold'>1</span>
+                    return (
+                      <>
+                        {/* Task 1: Settlement Form */}
+                        <div className={`border rounded-lg p-4 ${getTaskStatusColor(taskStatuses.settlement)}`}>
+                          <div className='flex items-center justify-between'>
+                            <div className='flex items-center gap-3'>
+                              <div className='flex items-center justify-center w-8 h-8 rounded-full bg-white border-2 border-current'>
+                                <span className='text-sm font-bold'>1</span>
+                              </div>
+                              {getTaskStatusIcon(taskStatuses.settlement)}
+                              <div>
+                                <h4 className='font-medium'>Settlement Form</h4>
+                                <p className='text-sm opacity-75'>{getTaskStatusText(taskStatuses.settlement)}</p>
+                                <p className='text-xs opacity-60 mt-1'>Complete the settlement form with assessment details and community manager information</p>
+                              </div>
                             </div>
-                            {getTaskStatusIcon(taskStatuses.inspection)}
-                            <div>
-                              <h4 className='font-medium'>Property Inspection Form</h4>
-                              <p className='text-sm opacity-75'>{getTaskStatusText(taskStatuses.inspection)}</p>
-                              <p className='text-xs opacity-60 mt-1'>Complete the property inspection checklist and verify compliance requirements</p>
-                            </div>
-                          </div>
-                          <button
-                            onClick={() => handleCompleteForm(selectedApplication.id, 'inspection')}
-                            className='px-4 py-2 bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity text-sm font-medium'
-                          >
-                            {getFormButtonText(taskStatuses.inspection)}
-                          </button>
-                        </div>
-                        {selectedApplication.forms.inspectionForm.completed_at && (
-                          <div className='mt-2 text-sm opacity-75'>
-                            Completed: {new Date(selectedApplication.forms.inspectionForm.completed_at).toLocaleString()}
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Task 2: Virginia Resale Certificate */}
-                      <div className={`border rounded-lg p-4 ${getTaskStatusColor(taskStatuses.resale)}`}>
-                        <div className='flex items-center justify-between'>
-                          <div className='flex items-center gap-3'>
-                            <div className='flex items-center justify-center w-8 h-8 rounded-full bg-white border-2 border-current'>
-                              <span className='text-sm font-bold'>2</span>
-                            </div>
-                            {getTaskStatusIcon(taskStatuses.resale)}
-                            <div>
-                              <h4 className='font-medium'>Virginia Resale Certificate</h4>
-                              <p className='text-sm opacity-75'>{getTaskStatusText(taskStatuses.resale)}</p>
-                              <p className='text-xs opacity-60 mt-1'>Fill out the official Virginia resale disclosure form with property and HOA information</p>
-                            </div>
-                          </div>
-                          <button
-                            onClick={() => handleCompleteForm(selectedApplication.id, 'resale')}
-                            className='px-4 py-2 bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity text-sm font-medium'
-                          >
-                            {getFormButtonText(taskStatuses.resale)}
-                          </button>
-                        </div>
-                        {selectedApplication.forms.resaleCertificate.completed_at && (
-                          <div className='mt-2 text-sm opacity-75'>
-                            Completed: {new Date(selectedApplication.forms.resaleCertificate.completed_at).toLocaleString()}
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Task 3: Generate PDF */}
-                      <div className={`border rounded-lg p-4 ${getTaskStatusColor(taskStatuses.pdf)}`}>
-                        <div className='flex items-center justify-between'>
-                          <div className='flex items-center gap-3'>
-                            <div className='flex items-center justify-center w-8 h-8 rounded-full bg-white border-2 border-current'>
-                              <span className='text-sm font-bold'>3</span>
-                            </div>
-                            {getTaskStatusIcon(taskStatuses.pdf, generatingPDF)}
-                            <div>
-                              <h4 className='font-medium'>Generate PDF</h4>
-                              <p className='text-sm opacity-75'>
-                                {generatingPDF ? 'Generating...' : getTaskStatusText(taskStatuses.pdf)}
-                              </p>
-                              <p className='text-xs opacity-60 mt-1'>Create the final PDF document combining both completed forms for delivery</p>
-                            </div>
-                          </div>
-                          <div className='flex gap-2'>
                             <button
-                              onClick={() => handleGeneratePDF(selectedApplication.forms.resaleCertificate.form_data, selectedApplication.id)}
+                              onClick={() => handleCompleteForm(selectedApplication.id, 'settlement')}
+                              className='px-4 py-2 bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity text-sm font-medium'
+                            >
+                              {getFormButtonText(taskStatuses.settlement)}
+                            </button>
+                          </div>
+                          {(() => {
+                            const settlementForm = selectedApplication.property_owner_forms?.find(form => form.form_type === 'settlement_form');
+                            return settlementForm?.completed_at && (
+                              <div className='mt-2 text-sm opacity-75'>
+                                Completed: {new Date(settlementForm.completed_at).toLocaleString()}
+                              </div>
+                            );
+                          })()}
+                        </div>
+
+                        {/* Task 2: Generate PDF */}
+                        <div className={`border rounded-lg p-4 ${getTaskStatusColor(taskStatuses.pdf)}`}>
+                          <div className='flex items-center justify-between'>
+                            <div className='flex items-center gap-3'>
+                              <div className='flex items-center justify-center w-8 h-8 rounded-full bg-white border-2 border-current'>
+                                <span className='text-sm font-bold'>2</span>
+                              </div>
+                              {getTaskStatusIcon(taskStatuses.pdf)}
+                              <div>
+                                <h4 className='font-medium'>Generate PDF</h4>
+                                <p className='text-sm opacity-75'>{getTaskStatusText(taskStatuses.pdf)}</p>
+                                <p className='text-xs opacity-60 mt-1'>Generate the settlement form as a PDF document</p>
+                              </div>
+                            </div>
+                            <button
+                              onClick={() => handleGenerateSettlementPDF(selectedApplication.id)}
                               disabled={!pdfCanBeGenerated || generatingPDF}
                               className='px-4 py-2 bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed'
-                              title={!bothFormsCompleted ? 'Both forms must be completed first' : ''}
+                              title={!settlementFormCompleted ? 'Settlement form must be completed first' : ''}
                             >
-                              {generatingPDF ? 'Generating...' : (taskStatuses.pdf === 'completed' || taskStatuses.pdf === 'update_needed' ? 'Regenerate' : 'Generate')}
+                              {generatingPDF ? 'Generating...' : 'Generate PDF'}
                             </button>
-                            {selectedApplication.pdf_url && (
-                              <button
-                                onClick={() => window.open(selectedApplication.pdf_url, '_blank')}
-                                className='px-3 py-2 bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity text-sm font-medium flex items-center gap-1'
-                                title='View PDF'
-                              >
-                                <Eye className='w-4 h-4' />
-                                View
-                              </button>
-                            )}
                           </div>
                         </div>
-                        {selectedApplication.pdf_generated_at && (
-                          <div className='mt-2 text-sm opacity-75'>
-                            Generated: {new Date(selectedApplication.pdf_generated_at).toLocaleString()}
-                          </div>
-                        )}
-                      </div>
 
-                      {/* Task 4: Send Completion Email */}
-                      <div className={`border rounded-lg p-4 ${getTaskStatusColor(taskStatuses.email)}`}>
-                        <div className='flex items-center justify-between'>
-                          <div className='flex items-center gap-3'>
-                            <div className='flex items-center justify-center w-8 h-8 rounded-full bg-white border-2 border-current'>
-                              <span className='text-sm font-bold'>4</span>
+                        {/* Task 3: Send Settlement Email */}
+                        <div className={`border rounded-lg p-4 ${getTaskStatusColor(taskStatuses.email)}`}>
+                          <div className='flex items-center justify-between'>
+                            <div className='flex items-center gap-3'>
+                              <div className='flex items-center justify-center w-8 h-8 rounded-full bg-white border-2 border-current'>
+                                <span className='text-sm font-bold'>3</span>
+                              </div>
+                              {getTaskStatusIcon(taskStatuses.email, sendingEmail)}
+                              <div>
+                                <h4 className='font-medium'>Send Settlement Email</h4>
+                                <p className='text-sm opacity-75'>
+                                  {sendingEmail ? 'Sending...' : getTaskStatusText(taskStatuses.email)}
+                                </p>
+                                <p className='text-xs opacity-60 mt-1'>Send the completed settlement form details to the settlement agent</p>
+                              </div>
                             </div>
-                            {getTaskStatusIcon(taskStatuses.email, sendingEmail)}
-                            <div>
-                              <h4 className='font-medium'>Send Completion Email</h4>
-                              <p className='text-sm opacity-75'>
-                                {sendingEmail ? 'Sending...' : getTaskStatusText(taskStatuses.email)}
-                              </p>
-                              <p className='text-xs opacity-60 mt-1'>Send the completed resale certificate PDF and property files to the applicant</p>
-                            </div>
-                          </div>
-                          <div className='flex items-center gap-2'>
-                            <button
-                              onClick={() => setShowAttachmentModal(true)}
-                              className='px-3 py-1.5 bg-gray-100 text-gray-700 border border-gray-300 rounded-md hover:opacity-80 transition-opacity text-xs font-medium'
-                              title="Manage email attachments"
-                            >
-                              Update Attachment
-                            </button>
                             <button
                               onClick={() => handleSendApprovalEmail(selectedApplication.id)}
-                              disabled={!emailCanBeSent || sendingEmail || taskStatuses.pdf === 'update_needed'}
+                              disabled={!emailCanBeSent || sendingEmail}
                               className='px-4 py-2 bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed'
-                              title={
-                                !bothFormsCompleted 
-                                  ? 'Both forms must be completed first' 
-                                  : taskStatuses.pdf !== 'completed' 
-                                    ? 'PDF must be generated first' 
-                                    : taskStatuses.pdf === 'update_needed'
-                                      ? 'PDF needs to be regenerated after form updates'
-                                      : ''
-                              }
+                              title={!settlementFormCompleted ? 'Settlement form must be completed first' : ''}
                             >
                               {sendingEmail ? 'Sending...' : 'Send Email'}
                             </button>
                           </div>
+                          {selectedApplication.notifications?.find(n => n.notification_type === 'application_approved')?.sent_at && (
+                            <div className='mt-2 text-sm opacity-75'>
+                              Sent: {new Date(selectedApplication.notifications.find(n => n.notification_type === 'application_approved').sent_at).toLocaleString()}
+                            </div>
+                          )}
                         </div>
-                        {selectedApplication.notifications?.find(n => n.notification_type === 'application_approved')?.sent_at && (
-                          <div className='mt-2 text-sm opacity-75'>
-                            Sent: {new Date(selectedApplication.notifications.find(n => n.notification_type === 'application_approved').sent_at).toLocaleString()}
+                      </>
+                    );
+                  } else {
+                    // Standard application workflow - 4 tasks
+                    const bothFormsCompleted = taskStatuses.inspection === 'completed' && taskStatuses.resale === 'completed';
+                    const pdfCanBeGenerated = bothFormsCompleted && (taskStatuses.pdf === 'not_started' || taskStatuses.pdf === 'update_needed');
+                    const emailCanBeSent = bothFormsCompleted && taskStatuses.pdf === 'completed';
+
+                    return (
+                      <>
+                        {/* Task 1: Property Inspection Form */}
+                        <div className={`border rounded-lg p-4 ${getTaskStatusColor(taskStatuses.inspection)}`}>
+                          <div className='flex items-center justify-between'>
+                            <div className='flex items-center gap-3'>
+                              <div className='flex items-center justify-center w-8 h-8 rounded-full bg-white border-2 border-current'>
+                                <span className='text-sm font-bold'>1</span>
+                              </div>
+                              {getTaskStatusIcon(taskStatuses.inspection)}
+                              <div>
+                                <h4 className='font-medium'>Property Inspection Form</h4>
+                                <p className='text-sm opacity-75'>{getTaskStatusText(taskStatuses.inspection)}</p>
+                                <p className='text-xs opacity-60 mt-1'>Complete the property inspection checklist and verify compliance requirements</p>
+                              </div>
+                            </div>
+                            <button
+                              onClick={() => handleCompleteForm(selectedApplication.id, 'inspection')}
+                              className='px-4 py-2 bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity text-sm font-medium'
+                            >
+                              {getFormButtonText(taskStatuses.inspection)}
+                            </button>
                           </div>
-                        )}
-                      </div>
-                    </>
-                  );
+                          {(() => {
+                            const inspectionForm = selectedApplication.property_owner_forms?.find(form => form.form_type === 'inspection_form');
+                            return inspectionForm?.completed_at && (
+                              <div className='mt-2 text-sm opacity-75'>
+                                Completed: {new Date(inspectionForm.completed_at).toLocaleString()}
+                              </div>
+                            );
+                          })()}
+                        </div>
+
+                        {/* Task 2: Virginia Resale Certificate */}
+                        <div className={`border rounded-lg p-4 ${getTaskStatusColor(taskStatuses.resale)}`}>
+                          <div className='flex items-center justify-between'>
+                            <div className='flex items-center gap-3'>
+                              <div className='flex items-center justify-center w-8 h-8 rounded-full bg-white border-2 border-current'>
+                                <span className='text-sm font-bold'>2</span>
+                              </div>
+                              {getTaskStatusIcon(taskStatuses.resale)}
+                              <div>
+                                <h4 className='font-medium'>Virginia Resale Certificate</h4>
+                                <p className='text-sm opacity-75'>{getTaskStatusText(taskStatuses.resale)}</p>
+                                <p className='text-xs opacity-60 mt-1'>Fill out the official Virginia resale disclosure form with property and HOA information</p>
+                              </div>
+                            </div>
+                            <button
+                              onClick={() => handleCompleteForm(selectedApplication.id, 'resale')}
+                              className='px-4 py-2 bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity text-sm font-medium'
+                            >
+                              {getFormButtonText(taskStatuses.resale)}
+                            </button>
+                          </div>
+                          {(() => {
+                            const resaleForm = selectedApplication.property_owner_forms?.find(form => form.form_type === 'resale_certificate');
+                            return resaleForm?.completed_at && (
+                              <div className='mt-2 text-sm opacity-75'>
+                                Completed: {new Date(resaleForm.completed_at).toLocaleString()}
+                              </div>
+                            );
+                          })()}
+                        </div>
+
+                        {/* Task 3: Generate PDF (Standard) */}
+                        <div className={`border rounded-lg p-4 ${getTaskStatusColor(taskStatuses.pdf)}`}>
+                          <div className='flex items-center justify-between'>
+                            <div className='flex items-center gap-3'>
+                              <div className='flex items-center justify-center w-8 h-8 rounded-full bg-white border-2 border-current'>
+                                <span className='text-sm font-bold'>3</span>
+                              </div>
+                              {getTaskStatusIcon(taskStatuses.pdf, generatingPDF)}
+                              <div>
+                                <h4 className='font-medium'>Generate PDF</h4>
+                                <p className='text-sm opacity-75'>
+                                  {generatingPDF ? 'Generating...' : getTaskStatusText(taskStatuses.pdf)}
+                                </p>
+                                <p className='text-xs opacity-60 mt-1'>Create the final PDF document combining both completed forms for delivery</p>
+                              </div>
+                            </div>
+                            <div className='flex gap-2'>
+                              <button
+                                onClick={() => {
+                                  const inspectionForm = selectedApplication.property_owner_forms?.find(form => form.form_type === 'inspection_form');
+                                  const resaleForm = selectedApplication.property_owner_forms?.find(form => form.form_type === 'resale_certificate');
+                                  const formsData = {
+                                    inspectionForm: inspectionForm?.form_data,
+                                    resaleCertificate: resaleForm?.form_data
+                                  };
+                                  handleGeneratePDF(formsData, selectedApplication.id);
+                                }}
+                                disabled={!pdfCanBeGenerated || generatingPDF}
+                                className='px-4 py-2 bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed'
+                                title={!bothFormsCompleted ? 'Both forms must be completed first' : ''}
+                              >
+                                {generatingPDF ? 'Generating...' : (taskStatuses.pdf === 'completed' || taskStatuses.pdf === 'update_needed' ? 'Regenerate' : 'Generate')}
+                              </button>
+                              {selectedApplication.pdf_url && (
+                                <button
+                                  onClick={() => window.open(selectedApplication.pdf_url, '_blank')}
+                                  className='px-3 py-2 bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity text-sm font-medium flex items-center gap-1'
+                                  title='View PDF'
+                                >
+                                  <Eye className='w-4 h-4' />
+                                  View
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                          {selectedApplication.pdf_generated_at && (
+                            <div className='mt-2 text-sm opacity-75'>
+                              Generated: {new Date(selectedApplication.pdf_generated_at).toLocaleString()}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Task 4: Send Completion Email (Standard) */}
+                        <div className={`border rounded-lg p-4 ${getTaskStatusColor(taskStatuses.email)}`}>
+                          <div className='flex items-center justify-between'>
+                            <div className='flex items-center gap-3'>
+                              <div className='flex items-center justify-center w-8 h-8 rounded-full bg-white border-2 border-current'>
+                                <span className='text-sm font-bold'>4</span>
+                              </div>
+                              {getTaskStatusIcon(taskStatuses.email, sendingEmail)}
+                              <div>
+                                <h4 className='font-medium'>Send Completion Email</h4>
+                                <p className='text-sm opacity-75'>
+                                  {sendingEmail ? 'Sending...' : getTaskStatusText(taskStatuses.email)}
+                                </p>
+                                <p className='text-xs opacity-60 mt-1'>Send the completed resale certificate PDF and property files to the applicant</p>
+                              </div>
+                            </div>
+                            <div className='flex items-center gap-2'>
+                              <button
+                                onClick={() => setShowAttachmentModal(true)}
+                                className='px-3 py-1.5 bg-gray-100 text-gray-700 border border-gray-300 rounded-md hover:opacity-80 transition-opacity text-xs font-medium'
+                                title="Manage email attachments"
+                              >
+                                Update Attachment
+                              </button>
+                              <button
+                                onClick={() => handleSendApprovalEmail(selectedApplication.id)}
+                                disabled={!emailCanBeSent || sendingEmail || taskStatuses.pdf === 'update_needed'}
+                                className='px-4 py-2 bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed'
+                                title={
+                                  !bothFormsCompleted 
+                                    ? 'Both forms must be completed first' 
+                                    : taskStatuses.pdf !== 'completed' 
+                                      ? 'PDF must be generated first' 
+                                      : taskStatuses.pdf === 'update_needed'
+                                        ? 'PDF needs to be regenerated after form updates'
+                                        : ''
+                                }
+                              >
+                                {sendingEmail ? 'Sending...' : 'Send Email'}
+                              </button>
+                            </div>
+                          </div>
+                          {selectedApplication.notifications?.find(n => n.notification_type === 'application_approved')?.sent_at && (
+                            <div className='mt-2 text-sm opacity-75'>
+                              Sent: {new Date(selectedApplication.notifications.find(n => n.notification_type === 'application_approved').sent_at).toLocaleString()}
+                            </div>
+                          )}
+                        </div>
+                      </>
+                    );
+                  }
                 })()}
               </div>
             </div>
@@ -1449,47 +1804,7 @@ const AdminDashboard = ({ userRole }) => {
             </div>
           </div>
 
-          {/* Management Information */}
-          <div className='border-t pt-4'>
-            <h3 className='text-md font-medium text-gray-900 mb-3'>Management Information</h3>
-            <div className='grid grid-cols-1 md:grid-cols-2 gap-4'>
-              <div>
-                <label className='block text-sm font-medium text-gray-700 mb-1'>
-                  Management Contact
-                </label>
-                <input
-                  type='text'
-                  value={propertyFormData.management_contact}
-                  onChange={(e) => setPropertyFormData({...propertyFormData, management_contact: e.target.value})}
-                  className='w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500'
-                />
-              </div>
-
-              <div>
-                <label className='block text-sm font-medium text-gray-700 mb-1'>
-                  Phone
-                </label>
-                <input
-                  type='tel'
-                  value={propertyFormData.phone}
-                  onChange={(e) => setPropertyFormData({...propertyFormData, phone: e.target.value})}
-                  className='w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500'
-                />
-              </div>
-
-              <div>
-                <label className='block text-sm font-medium text-gray-700 mb-1'>
-                  Email
-                </label>
-                <input
-                  type='email'
-                  value={propertyFormData.email}
-                  onChange={(e) => setPropertyFormData({...propertyFormData, email: e.target.value})}
-                  className='w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500'
-                />
-              </div>
-            </div>
-          </div>
+          {/* Management Information removed per request */}
 
           {/* Special Requirements */}
           <div className='border-t pt-4'>
@@ -1910,54 +2225,88 @@ const AdminDashboard = ({ userRole }) => {
 
                     <td className='px-6 py-4'>
                       <div className='space-y-2'>
-                        <div className='flex items-center justify-between'>
-                          <div className='flex items-center gap-2 text-sm'>
-                            {getFormStatusIcon(app.forms.inspectionForm.status)}
-                            <span className='text-gray-700'>
-                              Inspection Form
-                            </span>
-                          </div>
-                          <span
-                            className={`text-xs px-2 py-0.5 rounded ${
-                              app.forms.inspectionForm.status === 'completed'
-                                ? 'bg-green-100 text-green-800'
-                                : app.forms.inspectionForm.status === 'in_progress'
-                                  ? 'bg-blue-100 text-blue-800'
-                                  : app.forms.inspectionForm.status === 'not_started'
-                                    ? 'bg-yellow-100 text-yellow-800'
-                                    : 'bg-gray-100 text-gray-800'
-                            }`}
-                          >
-                            {getFormStatusText(app.forms.inspectionForm.status)}
-                          </span>
-                        </div>
-                        <div className='flex items-center justify-between'>
-                          <div className='flex items-center gap-2 text-sm'>
-                            {getFormStatusIcon(
-                              app.forms.resaleCertificate.status
-                            )}
-                            <span className='text-gray-700'>
-                              Resale Certificate
-                            </span>
-                          </div>
-                          <span
-                            className={`text-xs px-2 py-0.5 rounded ${
-                              app.forms.resaleCertificate.status === 'completed'
-                                ? 'bg-green-100 text-green-800'
-                                : app.forms.resaleCertificate.status ===
-                                    'in_progress'
-                                  ? 'bg-blue-100 text-blue-800'
-                                  : app.forms.resaleCertificate.status ===
-                                      'not_started'
-                                    ? 'bg-yellow-100 text-yellow-800'
-                                    : 'bg-gray-100 text-gray-800'
-                            }`}
-                          >
-                            {getFormStatusText(
-                              app.forms.resaleCertificate.status
-                            )}
-                          </span>
-                        </div>
+                        {(() => {
+                          const inspectionForm = app.property_owner_forms?.find(form => form.form_type === 'inspection_form');
+                          const resaleForm = app.property_owner_forms?.find(form => form.form_type === 'resale_certificate');
+                          const settlementForm = app.property_owner_forms?.find(form => form.form_type === 'settlement_form');
+                          
+                          const isSettlementApp = app.submitter_type === 'settlement' || app.application_type?.startsWith('settlement');
+                          
+                          if (isSettlementApp) {
+                            // Settlement application - only show settlement form
+                            return (
+                              <div className='flex items-center justify-between'>
+                                <div className='flex items-center gap-2 text-sm'>
+                                  {getFormStatusIcon(settlementForm?.status || 'not_started')}
+                                  <span className='text-gray-700'>
+                                    Settlement Form
+                                  </span>
+                                </div>
+                                <span
+                                  className={`text-xs px-2 py-0.5 rounded ${
+                                    settlementForm?.status === 'completed'
+                                      ? 'bg-green-100 text-green-800'
+                                      : settlementForm?.status === 'in_progress'
+                                        ? 'bg-blue-100 text-blue-800'
+                                        : settlementForm?.status === 'not_started'
+                                          ? 'bg-yellow-100 text-yellow-800'
+                                          : 'bg-gray-100 text-gray-800'
+                                  }`}
+                                >
+                                  {getFormStatusText(settlementForm?.status || 'not_started')}
+                                </span>
+                              </div>
+                            );
+                          } else {
+                            // Standard application - show both forms
+                            return (
+                              <>
+                                <div className='flex items-center justify-between'>
+                                  <div className='flex items-center gap-2 text-sm'>
+                                    {getFormStatusIcon(inspectionForm?.status || 'not_started')}
+                                    <span className='text-gray-700'>
+                                      Inspection Form
+                                    </span>
+                                  </div>
+                                  <span
+                                    className={`text-xs px-2 py-0.5 rounded ${
+                                      inspectionForm?.status === 'completed'
+                                        ? 'bg-green-100 text-green-800'
+                                        : inspectionForm?.status === 'in_progress'
+                                          ? 'bg-blue-100 text-blue-800'
+                                          : inspectionForm?.status === 'not_started'
+                                            ? 'bg-yellow-100 text-yellow-800'
+                                            : 'bg-gray-100 text-gray-800'
+                                    }`}
+                                  >
+                                    {getFormStatusText(inspectionForm?.status || 'not_started')}
+                                  </span>
+                                </div>
+                                <div className='flex items-center justify-between'>
+                                  <div className='flex items-center gap-2 text-sm'>
+                                    {getFormStatusIcon(resaleForm?.status || 'not_started')}
+                                    <span className='text-gray-700'>
+                                      Resale Certificate
+                                    </span>
+                                  </div>
+                                  <span
+                                    className={`text-xs px-2 py-0.5 rounded ${
+                                      resaleForm?.status === 'completed'
+                                        ? 'bg-green-100 text-green-800'
+                                        : resaleForm?.status === 'in_progress'
+                                          ? 'bg-blue-100 text-blue-800'
+                                          : resaleForm?.status === 'not_started'
+                                            ? 'bg-yellow-100 text-yellow-800'
+                                            : 'bg-gray-100 text-gray-800'
+                                    }`}
+                                  >
+                                    {getFormStatusText(resaleForm?.status || 'not_started')}
+                                  </span>
+                                </div>
+                              </>
+                            );
+                          }
+                        })()}
                       </div>
                     </td>
 

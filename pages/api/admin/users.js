@@ -33,20 +33,20 @@ export default async function handler(req, res) {
     const pageNum = parseInt(page);
     const limitNum = parseInt(limit);
 
-    // Generate cache key
-    const cacheKey = `admin:users:list:${pageNum}:${limitNum}`;
+    // Generate cache key - includes user ID to prevent collisions between concurrent users
+    const cacheKey = `admin:users:list:${user.id}:${pageNum}:${limitNum}`;
     
-    // Try to get from cache first
-    const cachedData = await getCache(cacheKey);
+    // TEMPORARILY DISABLED: Try to get from cache first
+    // const cachedData = await getCache(cacheKey);
 
-    if (cachedData) {
-      console.log('✅ Users cache HIT:', cacheKey);
-      return res.status(200).json({ 
-        ...cachedData,
-        cached: true,
-        timestamp: new Date().toISOString()
-      });
-    }
+    // if (cachedData) {
+    //   console.log('✅ Users cache HIT:', cacheKey);
+    //   return res.status(200).json({ 
+    //     ...cachedData,
+    //     cached: true,
+    //     timestamp: new Date().toISOString()
+    //   });
+    // }
 
     console.log('❌ Users cache MISS - fetching from database:', cacheKey);
 
@@ -75,8 +75,8 @@ export default async function handler(req, res) {
       totalPages: Math.ceil((count || 0) / limitNum)
     };
 
-    // Store in cache with 5-minute TTL
-    await setCache(cacheKey, responseData, 300);
+    // TEMPORARILY DISABLED: Store in cache with 5-minute TTL
+    // await setCache(cacheKey, responseData, 300);
 
     return res.status(200).json({ 
       ...responseData,

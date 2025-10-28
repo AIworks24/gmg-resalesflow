@@ -206,7 +206,7 @@ async function createPropertyOwnerForms(applicationId, metadata) {
           status: 'not_started',
           access_token: generateAccessToken(),
           expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(), // 30 days
-          notes: application.application_type.startsWith('settlement_agent') 
+          notes: application.application_type.startsWith('settlement') 
             ? 'Settlement agent request - requires accounting review'
             : null
         });
@@ -260,7 +260,7 @@ async function handleMultiCommunityApplication(applicationId, metadata) {
 
     // Get linked properties for the primary property
     const { getLinkedProperties } = require('../../../lib/multiCommunityUtils');
-    const linkedProperties = await getLinkedProperties(application.hoa_property_id);
+    const linkedProperties = await getLinkedProperties(application.hoa_property_id, supabase);
 
     if (!linkedProperties || linkedProperties.length === 0) {
       console.log('No linked properties found, falling back to single property flow');
@@ -338,7 +338,7 @@ async function createPropertyOwnerFormsForGroups(applicationId, groups) {
             status: 'not_started',
             access_token: generateAccessToken(),
             expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
-            notes: `Multi-community form for ${group.property_name} - ${application.application_type.startsWith('settlement_agent') 
+            notes: `Multi-community form for ${group.property_name} - ${application.application_type.startsWith('settlement') 
               ? 'Settlement agent request - requires accounting review'
               : 'Standard processing'}`
           });

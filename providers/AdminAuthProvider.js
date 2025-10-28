@@ -75,7 +75,7 @@ export function useAdminAuth() {
 // HOC for protecting admin routes
 export function withAdminAuth(Component) {
   return function ProtectedComponent(props) {
-    const { isAuthenticated, isLoading } = useAdminAuth();
+    const { isAuthenticated, isLoading, role } = useAdminAuth();
     const router = useRouter();
 
     useEffect(() => {
@@ -97,6 +97,25 @@ export function withAdminAuth(Component) {
 
     if (!isAuthenticated) {
       return null; // Will redirect in useEffect
+    }
+
+    // Check if user has admin, staff, or accounting role
+    if (role && !['admin', 'staff', 'accounting'].includes(role)) {
+      return (
+        <div className="min-h-screen flex items-center justify-center">
+          <div className="text-center">
+            <div className="text-red-500 text-6xl mb-4">⚠️</div>
+            <h1 className="text-2xl font-bold text-gray-900 mb-2">Access Denied</h1>
+            <p className="text-gray-600 mb-6">You don't have permission to access this page.</p>
+            <button
+              onClick={() => router.push('/admin/dashboard')}
+              className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+            >
+              Back to Dashboard
+            </button>
+          </div>
+        </div>
+      );
     }
 
     return <Component {...props} />;

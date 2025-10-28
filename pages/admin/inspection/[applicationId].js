@@ -55,7 +55,7 @@ const checkAuthAndLoadData = async () => {
       .from('applications')
       .select(`
         *,
-        hoa_properties(name, property_owner_email, property_owner_name)
+        hoa_properties(name, property_owner_email, property_owner_name, is_multi_community)
       `)
       .eq('id', applicationId)
       .single();

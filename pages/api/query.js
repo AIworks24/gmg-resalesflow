@@ -29,32 +29,46 @@ export default async function handler(req, res) {
     // Create server-side Supabase client (handles auth properly)
     const supabase = createPagesServerClient({ req, res });
 
-    // Verify user is authenticated (optional - remove if public queries needed)
-    const { data: { user }, error: authError } = await supabase.auth.getUser();
+    // Verify user is authenticated with timeout
+    let user, authError;
+    try {
+      const result = await Promise.race([
+        supabase.auth.getUser(),
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Auth timeout')), 5000)
+        )
+      ]);
+      user = result.data?.user;
+      authError = result.error;
+    } catch (err) {
+      console.error('Auth check timeout or error:', err);
+      return res.status(401).json({ error: 'Authentication timeout' });
+    }
     
     if (authError || !user) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    // Generate unique cache key based on query parameters
-    const cacheKeyData = { table, select, options };
+    // Generate unique cache key based on query parameters AND user ID
+    // This prevents cache collisions between multiple users
+    const cacheKeyData = { table, select, options, userId: user.id };
     const cacheKeyHash = crypto
       .createHash('md5')
       .update(JSON.stringify(cacheKeyData))
       .digest('hex');
     const cacheKey = `query:${table}:${cacheKeyHash}`;
 
-    // Try to get from cache first
-    const cachedData = await getCache(cacheKey);
+    // TEMPORARILY DISABLED: Try to get from cache first
+    // const cachedData = await getCache(cacheKey);
 
-    if (cachedData) {
-      console.log(`✅ Query cache HIT: ${table}`);
-      return res.status(200).json({ 
-        data: cachedData,
-        cached: true,
-        timestamp: new Date().toISOString()
-      });
-    }
+    // if (cachedData) {
+    //   console.log(`✅ Query cache HIT: ${table}`);
+    //   return res.status(200).json({ 
+    //     data: cachedData,
+    //     cached: true,
+    //     timestamp: new Date().toISOString()
+    //   });
+    // }
 
     console.log(`❌ Query cache MISS: ${table} - fetching from database`);
 
@@ -167,11 +181,11 @@ export default async function handler(req, res) {
       count: count !== undefined ? count : null
     };
 
-    // Store in cache with TTL (default 5 minutes, configurable)
-    const ttl = options.cacheTTL || 300;
-    if (options.cache !== false) {
-      await setCache(cacheKey, response, ttl);
-    }
+    // TEMPORARILY DISABLED: Store in cache with TTL (default 5 minutes, configurable)
+    // const ttl = options.cacheTTL || 300;
+    // if (options.cache !== false) {
+    //   await setCache(cacheKey, response, ttl);
+    // }
 
     return res.status(200).json({ 
       ...response,

@@ -425,13 +425,15 @@ const AdminResaleCertificateForm = ({
         delete templateData.completedAt;
         delete templateData.completedBy;
 
-        // Upsert template data
+        // Upsert template data with proper conflict resolution
         const { error: templateError } = await supabase
           .from('hoa_property_resale_templates')
           .upsert({
             hoa_property_id: applicationData.hoa_property_id,
             template_data: templateData,
             updated_at: new Date().toISOString()
+          }, {
+            onConflict: 'hoa_property_id'
           });
 
         if (templateError) {

@@ -24,7 +24,7 @@ export default async function handler(req, res) {
       .eq('id', session.user.id)
       .single();
 
-    if (profile?.role !== 'admin' && profile?.role !== 'staff') {
+    if (profile?.role !== 'admin' && profile?.role !== 'staff' && profile?.role !== 'accounting') {
       return res.status(403).json({ error: 'Forbidden' });
     }
 

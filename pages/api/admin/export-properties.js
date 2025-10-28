@@ -8,6 +8,24 @@ export default async function handler(req, res) {
   try {
     const supabase = createPagesServerClient({ req, res });
 
+    // Verify user is authenticated and has admin role
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
+    
+    if (authError || !user) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    // Check if user has admin, staff, or accounting role
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('role')
+      .eq('id', user.id)
+      .single();
+
+    if (!profile || !['admin', 'staff', 'accounting'].includes(profile.role)) {
+      return res.status(403).json({ error: 'Forbidden - Admin access required' });
+    }
+
     // Get all properties
     const { data: properties, error } = await supabase
       .from('hoa_properties')
@@ -26,9 +44,6 @@ export default async function handler(req, res) {
       'Property Owner Name',
       'Property Owner Email',
       'Property Owner Phone',
-      'Management Contact',
-      'Phone',
-      'Email',
       'Special Requirements',
       'Documents Folder',
       'Active',
@@ -43,9 +58,6 @@ export default async function handler(req, res) {
       property.property_owner_name || '',
       property.property_owner_email || '',
       property.property_owner_phone || '',
-      property.management_contact || '',
-      property.phone || '',
-      property.email || '',
       property.special_requirements || '',
       property.documents_folder || '',
       property.active ? 'Yes' : 'No',

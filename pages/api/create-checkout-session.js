@@ -49,7 +49,7 @@ export default async function handler(req, res) {
         throw new Error('Could not determine property location');
       }
 
-      applicationType = determineApplicationType(formData.submitterType, hoaProperty);
+      applicationType = determineApplicationType(formData.submitterType, hoaProperty, formData.publicOffering);
       
       // Check if this is a multi-community property
       if (hoaProperty.is_multi_community) {
@@ -57,14 +57,15 @@ export default async function handler(req, res) {
         console.log('Multi-community property detected:', hoaProperty.name);
         
         // Get all properties for this transaction (primary + linked)
-        allProperties = await getAllPropertiesForTransaction(hoaProperty.id);
+        allProperties = await getAllPropertiesForTransaction(hoaProperty.id, supabase);
         console.log('All properties for transaction:', allProperties.map(p => p.name || p.property_name));
         
         // Calculate multi-community pricing
         multiCommunityPricing = await calculateMultiCommunityPricing(
           hoaProperty.id, 
           packageType, 
-          applicationType
+          applicationType,
+          supabase
         );
         console.log('Multi-community pricing:', multiCommunityPricing);
       } else {
@@ -72,7 +73,7 @@ export default async function handler(req, res) {
       }
     } catch (error) {
       console.error('Error determining application type:', error);
-      applicationType = 'standard'; // Fallback to standard
+        applicationType = 'single_property'; // Fallback to single property
       // Try to get the property for fallback
       try {
         const { data: hoaProperty } = await supabase
@@ -143,7 +144,7 @@ export default async function handler(req, res) {
           applicationId: applicationId,
           packageType: 'standard',
           paymentMethod: paymentMethod,
-          specialRequest: 'public_offering_statement',
+          specialRequest: 'public_offering',
         },
         customer_email: formData.submitterEmail,
         billing_address_collection: 'required',
@@ -169,8 +170,11 @@ export default async function handler(req, res) {
     
     if (isMultiCommunity && multiCommunityPricing) {
       // Use multi-community pricing
-      basePrice = multiCommunityPricing.subtotal;
-      totalAmount = multiCommunityPricing.total + (paymentMethod === 'credit_card' ? 9.95 : 0);
+      // For multi-community, basePrice is just for display (not used in Stripe)
+      // totalAmount should be the sum of all associations (base + rush for each property)
+      // PLUS a credit card fee for EACH association if applicable
+      basePrice = multiCommunityPricing.total; // This is sum of all (base + rush) per association
+      totalAmount = multiCommunityPricing.total + (paymentMethod === 'credit_card' ? 9.95 * allProperties.length : 0);
       messaging = getApplicationTypeMessaging(applicationType);
       
       console.log(`Multi-community pricing: Base=${basePrice}, Total=${totalAmount}, Properties=${allProperties.length}`);
@@ -238,43 +242,51 @@ export default async function handler(req, res) {
     
     if (isMultiCommunity && multiCommunityPricing) {
       // Multi-community: Create separate line items for each association
-      const pricePerAssociation = multiCommunityPricing.basePricePerProperty;
-      const pricePerAssociationCents = Math.round(pricePerAssociation * 100);
-      
-      allProperties.forEach((property, index) => {
-        const propertyName = property.name || property.property_name;
-        const isPrimary = index === 0;
+      // Use the associations array which includes rush fees
+      multiCommunityPricing.associations.forEach((association) => {
+        const totalPerAssociation = association.total; // This includes basePrice + rushFee
+        const totalPerAssociationCents = Math.round(totalPerAssociation * 100);
         
-        if (pricePerAssociationCents > 0) {
+        if (totalPerAssociationCents > 0) {
+          // Build description with breakdown
+          let description = `${messaging.formType} for ${association.name}`;
+          if (packageType === 'rush') {
+            description += ` (5 business days)`;
+            if (association.rushFee > 0) {
+              description += ` - Base: $${association.basePrice.toFixed(2)}, Rush: +$${association.rushFee.toFixed(2)}`;
+            }
+          } else {
+            description += ` (10-15 business days)`;
+          }
+          
           lineItems.push({
             price_data: {
               currency: 'usd',
               product_data: {
-                name: `${messaging.formType} - ${propertyName}${isPrimary ? ' (Primary)' : ''}`,
-                description: `${messaging.formType} for ${propertyName} (${packageType === 'rush' ? '5 business days' : '10-15 business days'})`,
+                name: `${messaging.formType} - ${association.name}${association.isPrimary ? ' (Primary)' : ''}`,
+                description: description,
               },
-              unit_amount: pricePerAssociationCents,
+              unit_amount: totalPerAssociationCents,
             },
             quantity: 1,
           });
+
+          // Add credit card processing fee for each association if credit card
+          if (creditCardFeeCents > 0) {
+            lineItems.push({
+              price_data: {
+                currency: 'usd',
+                product_data: {
+                  name: 'Credit Card Processing Fee',
+                  description: `Processing fee for ${association.name}`,
+                },
+                unit_amount: creditCardFeeCents,
+              },
+              quantity: 1,
+            });
+          }
         }
       });
-      
-      // Add transaction fees as separate line items
-      if (multiCommunityPricing.transactionFees > 0) {
-        const transactionFeeCents = Math.round(multiCommunityPricing.transactionFees * 100);
-        lineItems.push({
-          price_data: {
-            currency: 'usd',
-            product_data: {
-              name: 'Transaction Fees',
-              description: `Processing fees for ${allProperties.length} associations`,
-            },
-            unit_amount: transactionFeeCents,
-          },
-          quantity: 1,
-        });
-      }
     } else {
       // Single property: Add base price item
       if (basePriceCents > 0) {
@@ -290,21 +302,21 @@ export default async function handler(req, res) {
           quantity: 1,
         });
       }
-    }
 
-    // Add payment processing fee if credit card
-    if (creditCardFeeCents > 0) {
-      lineItems.push({
-        price_data: {
-          currency: 'usd',
-          product_data: {
-            name: 'Credit Card Processing Fee',
-            description: 'Processing fee for credit card payments',
+      // Add payment processing fee if credit card (single fee for single property)
+      if (creditCardFeeCents > 0) {
+        lineItems.push({
+          price_data: {
+            currency: 'usd',
+            product_data: {
+              name: 'Credit Card Processing Fee',
+              description: 'Processing fee for credit card payments',
+            },
+            unit_amount: creditCardFeeCents,
           },
-          unit_amount: creditCardFeeCents,
-        },
-        quantity: 1,
-      });
+          quantity: 1,
+        });
+      }
     }
 
     // Create checkout session - redirect back to application flow instead of success page
