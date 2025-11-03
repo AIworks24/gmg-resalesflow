@@ -1,4 +1,7 @@
 import { createPagesServerClient } from '@supabase/auth-helpers-nextjs';
+import settlementFormFields from '../../lib/settlementFormFields.json';
+import fs from 'fs';
+import path from 'path';
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -32,27 +35,23 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Application ID is required' });
     }
 
-    // Get application data
+    // Get application data with settlement form
     const { data: application, error: appError } = await supabase
       .from('applications')
       .select(`
         *,
-        hoa_properties(name, location)
+        hoa_properties(name, location),
+        property_owner_forms(id, form_type, form_data)
       `)
       .eq('id', applicationId)
       .single();
 
     if (appError) throw appError;
 
-    // Get settlement form data from database
-    const { data: settlementForm, error: formError } = await supabase
-      .from('property_owner_forms')
-      .select('form_data')
-      .eq('application_id', applicationId)
-      .eq('form_type', 'settlement_form')
-      .maybeSingle();
-
-    if (formError) throw formError;
+    // Get settlement form from nested data
+    const settlementForm = application.property_owner_forms?.find(
+      (f) => f.form_type === 'settlement_form'
+    );
 
     // Use form_data from database if available, otherwise use client formData
     const formData = settlementForm?.form_data || formDataFromClient || {};
@@ -62,9 +61,184 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Settlement form has not been completed yet' });
     }
 
-    // Determine property state
-    const propertyState = application.hoa_properties?.location?.includes('VA') ? 'VA' : 'NC';
-    const documentType = 'Settlement Form';
+    // Determine property state - check for VA/Virginia or NC/North Carolina
+    const location = application.hoa_properties?.location?.toUpperCase() || '';
+    
+    // Debug: Log location to help diagnose issues
+    console.log('PDF Generation - Property Location:', application.hoa_properties?.location);
+    console.log('PDF Generation - Uppercase Location:', location);
+    
+    let propertyState = 'NC'; // Default to NC
+    if (location.includes('VA') || location.includes('VIRGINIA')) {
+      propertyState = 'VA';
+    } else if (location.includes('NC') || location.includes('NORTH CAROLINA')) {
+      propertyState = 'NC';
+    }
+    
+    console.log('PDF Generation - Detected Property State:', propertyState);
+    
+    const documentType = propertyState === 'VA' 
+      ? 'Dues Request - Escrow Instructions' 
+      : 'Statement of Unpaid Assessments';
+    
+    console.log('PDF Generation - Document Type:', documentType);
+
+    // Helper function to format values
+    const formatValue = (value, fieldType) => {
+      if (value === null || value === undefined || value === '') return '';
+      
+      if (fieldType === 'date' && value) {
+        try {
+          const date = new Date(value);
+          if (!isNaN(date.getTime())) {
+            return date.toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit' });
+          }
+        } catch (e) {
+          // If date parsing fails, return as is
+        }
+      }
+      
+      return String(value);
+    };
+
+    // Helper function to format field label
+    const formatLabel = (key, label) => {
+      return label || key.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase()).trim();
+    };
+
+    // Helper function to escape HTML
+    const escapeHtml = (text) => {
+      if (!text) return '';
+      const map = {
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#039;'
+      };
+      return String(text).replace(/[&<>"']/g, m => map[m]);
+    };
+
+    // Define fee fields that should be grouped together (but not in comments)
+    const feeFields = {
+      VA: ['transferFee', 'resaleCertificateFee', 'capitalContribution', 'prepaidAssessments', 'adminFee', 'totalAmountDue'],
+      NC: ['lateFees', 'interestCharges', 'attorneyFees', 'otherCharges', 'totalAmountDue', 'resaleCertificateFee']
+    };
+
+    // Define comment fields that should be at the very bottom
+    const commentFields = ['assessmentComments', 'feeComments', 'goodThroughDate'];
+
+    // Get sections for the property state
+    const sections = settlementFormFields.forms[propertyState]?.sections || [];
+    
+    // Organize fields by section, separating fees and comments
+    const organizedSections = [];
+    const feesSection = { section: 'Fees', fields: [] };
+    const commentsSection = { section: 'Comments', fields: [] };
+    
+    for (const section of sections) {
+      const sectionFields = [];
+      
+      for (const field of section.fields) {
+        const fieldKey = field.key;
+        const fieldValue = formData[fieldKey];
+        
+        // Skip empty/null/undefined values
+        if (!fieldValue && fieldValue !== 0 && fieldValue !== false) continue;
+        
+        // Check if it's a comment field - add to comments section
+        if (commentFields.includes(fieldKey)) {
+          commentsSection.fields.push({
+            key: fieldKey,
+            label: field.label || formatLabel(fieldKey),
+            value: formatValue(fieldValue, field.type),
+            type: field.type
+          });
+          continue;
+        }
+        
+        // Check if it's a fee field - add to fees section
+        if (feeFields[propertyState].includes(fieldKey)) {
+          feesSection.fields.push({
+            key: fieldKey,
+            label: field.label || formatLabel(fieldKey),
+            value: formatValue(fieldValue, field.type),
+            type: field.type
+          });
+          continue;
+        }
+        
+        // Regular field - add to its section
+        sectionFields.push({
+          key: fieldKey,
+          label: field.label || formatLabel(fieldKey),
+          value: formatValue(fieldValue, field.type),
+          type: field.type
+        });
+      }
+      
+      // Only add section if it has fields
+      if (sectionFields.length > 0) {
+        organizedSections.push({
+          section: section.section,
+          fields: sectionFields
+        });
+      }
+    }
+    
+    // Add fees section before comments if it has fields
+    if (feesSection.fields.length > 0) {
+      organizedSections.push(feesSection);
+    }
+    
+    // Add comments section at the very end if it has fields
+    if (commentsSection.fields.length > 0) {
+      organizedSections.push(commentsSection);
+    }
+
+    // Load and encode company logo
+    let logoBase64 = '';
+    try {
+      const logoPath = path.join(process.cwd(), 'assets', 'company_logo.png');
+      if (fs.existsSync(logoPath)) {
+        const logoBuffer = fs.readFileSync(logoPath);
+        logoBase64 = logoBuffer.toString('base64');
+      }
+    } catch (error) {
+      console.warn('Could not load company logo:', error);
+    }
+
+    // Generate HTML sections
+    const sectionsHTML = organizedSections.map(section => {
+      const fieldsHTML = section.fields.map(field => {
+        const escapedLabel = escapeHtml(formatLabel(field.key, field.label));
+        const escapedValue = escapeHtml(field.value);
+        
+        // Handle textarea fields (comments) differently
+        if (field.type === 'textarea') {
+          return `
+            <div class="field textarea-field">
+                <div class="label">${escapedLabel}:</div>
+                <div class="value textarea-value">${escapedValue}</div>
+            </div>
+          `;
+        }
+        return `
+          <div class="field">
+              <span class="label">${escapedLabel}:</span>
+              <span class="value">${escapedValue}</span>
+          </div>
+        `;
+      }).join('');
+      
+      const escapedSectionTitle = escapeHtml(section.section);
+      return `
+        <div class="section">
+            <div class="section-title">${escapedSectionTitle}</div>
+            ${fieldsHTML}
+        </div>
+      `;
+    }).join('');
 
     // Generate HTML content for the PDF
     const htmlContent = `
@@ -74,42 +248,52 @@ export default async function handler(req, res) {
     <title>${documentType} - ${application.property_address}</title>
     <style>
         body { font-family: Arial, sans-serif; margin: 40px; line-height: 1.6; }
-        h1 { color: #166534; border-bottom: 3px solid #166534; padding-bottom: 10px; margin-bottom: 30px; }
+        .company-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 30px; padding-bottom: 20px; border-bottom: 3px solid #166534; }
+        .company-logo { max-height: 80px; max-width: 200px; }
+        .company-info { text-align: right; color: #166534; font-size: 0.9em; }
+        .company-info h2 { margin: 0 0 5px 0; font-size: 1.2em; }
+        .company-info p { margin: 3px 0; }
+        h1 { color: #166534; border-bottom: 3px solid #166534; padding-bottom: 10px; margin: 30px 0; text-align: center; }
         .header-info { background-color: #f9fafb; padding: 20px; border-radius: 5px; margin-bottom: 30px; }
         .section { margin: 20px 0; }
         .section-title { color: #059669; font-size: 1.3em; font-weight: bold; margin: 20px 0 10px 0; border-bottom: 1px solid #059669; padding-bottom: 5px; }
         .field { margin: 8px 0; }
         .label { font-weight: bold; color: #374151; display: inline-block; min-width: 200px; }
         .value { color: #111827; }
-        .footer { margin-top: 40px; padding-top: 20px; border-top: 2px solid #166534; color: #6b7280; font-size: 0.9em; }
+        .textarea-field { margin: 12px 0; }
+        .textarea-field .label { display: block; margin-bottom: 4px; }
+        .textarea-value { white-space: pre-wrap; padding-left: 0; }
+        .fees-divider { margin-top: 20px; padding-top: 20px; border-top: 2px solid #d1d5db; }
+        .footer { margin-top: 40px; padding-top: 20px; border-top: 2px solid #166534; color: #6b7280; font-size: 0.9em; text-align: center; }
     </style>
 </head>
 <body>
-    <h1>${documentType}</h1>
+    ${logoBase64 ? `
+    <div class="company-header">
+        <img src="data:image/png;base64,${logoBase64}" alt="Goodman Management Group" class="company-logo" />
+        <div class="company-info">
+            <h2>Goodman Management Group</h2>
+            <p>Professional HOA Management & Settlement Services</p>
+            <p>Phone: (804) 360-2115</p>
+            <p>Email: resales@gmgva.com</p>
+        </div>
+    </div>
+    ` : ''}
+    
+    <h1>${escapeHtml(documentType)}</h1>
     
     <div class="header-info">
-        <p><strong>Property Address:</strong> ${application.property_address}</p>
-        <p><strong>HOA:</strong> ${application.hoa_properties.name}</p>
+        <p><strong>Property Address:</strong> ${escapeHtml(application.property_address)}</p>
+        <p><strong>HOA:</strong> ${escapeHtml(application.hoa_properties.name)}</p>
         <p><strong>Generated:</strong> ${new Date().toLocaleString()}</p>
     </div>
     
-    ${Object.keys(formData || {})
-      .filter(key => formData[key] && formData[key] !== '' && formData[key] !== null && formData[key] !== undefined)
-      .map((key) => {
-        const value = formData[key];
-        const label = key.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase()).replace(/([a-z])([A-Z])/g, '$1 $2');
-        return `
-          <div class="field">
-              <span class="label">${label}:</span>
-              <span class="value">${value}</span>
-          </div>
-        `;
-      })
-      .join('')}
+    ${sectionsHTML}
     
     <div class="footer">
+        <p><strong>Goodman Management Group</strong></p>
         <p>This document was generated on ${new Date().toLocaleString()}</p>
-        <p>For questions or concerns, please contact Goodman Management Group at resales@gmgva.com</p>
+        <p>For questions or concerns, please contact us at resales@gmgva.com or (804) 360-2115</p>
     </div>
 </body>
 </html>`;
@@ -177,8 +361,10 @@ export default async function handler(req, res) {
       .from('bucket0')
       .getPublicUrl(filePath);
 
-    // Update application with PDF URL and mark task as completed
+    // Update both applications table and property_owner_forms table with PDF URL
     const timestamp = new Date().toISOString();
+    
+    // Update application with PDF URL and mark task as completed
     const { error: updateError } = await supabase
       .from('applications')
       .update({
@@ -190,6 +376,21 @@ export default async function handler(req, res) {
       .eq('id', applicationId);
 
     if (updateError) throw updateError;
+
+    // Also update the settlement form with PDF URL
+    if (settlementForm?.id) {
+      const { error: formUpdateError } = await supabase
+        .from('property_owner_forms')
+        .update({
+          pdf_url: publicUrl,
+        })
+        .eq('id', settlementForm.id);
+
+      if (formUpdateError) {
+        console.warn('Failed to update property_owner_forms with pdf_url:', formUpdateError);
+        // Don't throw - application was updated successfully
+      }
+    }
 
     return res.status(200).json({ 
       success: true, 

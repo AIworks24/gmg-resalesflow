@@ -49,6 +49,14 @@ const stripePromise = (() => {
   }
 })();
 
+// Helper function to get forced price for a property (synchronous check)
+const getForcedPriceSync = (property) => {
+  if (property && property.force_price_enabled && property.force_price_value !== null && property.force_price_value >= 0) {
+    return parseFloat(property.force_price_value);
+  }
+  return null;
+};
+
 // Helper function to calculate total amount
 // Synchronous calculateTotal function for display purposes (approximation only)
 const calculateTotal = (formData, stripePrices, hoaProperties) => {
@@ -57,6 +65,7 @@ const calculateTotal = (formData, stripePrices, hoaProperties) => {
     const selectedProperty = hoaProperties.find(prop => prop.name === formData.hoaProperty);
     if (selectedProperty && selectedProperty.is_multi_community) {
       // Multi-community pricing: 3 properties × base price + rush fees + convenience fee
+      // Note: Forced prices for multi-community are handled in calculateTotalDatabase
       const basePricePerProperty = 317.95;
       const propertyCount = 3; // Primary + 2 linked properties
       const rushFeePerProperty = formData.packageType === 'rush' ? 70.66 : 0;
@@ -115,6 +124,25 @@ const calculateTotal = (formData, stripePrices, hoaProperties) => {
     return 200.00;
   }
   
+  // Check for forced price override (single property)
+  if (formData.hoaProperty && hoaProperties) {
+    const selectedProperty = hoaProperties.find(prop => prop.name === formData.hoaProperty);
+    if (selectedProperty) {
+      const forcedPrice = getForcedPriceSync(selectedProperty);
+      if (forcedPrice !== null) {
+        // Forced price overrides base price, but rush fees still apply
+        let total = forcedPrice;
+        if (formData.packageType === 'rush') {
+          total += stripePrices ? stripePrices.rush.rushFeeDisplay : 70.66;
+        }
+        if (formData.paymentMethod === 'credit_card' && total > 0) {
+          total += stripePrices ? stripePrices.convenienceFee.display : 9.95;
+        }
+        return Math.round(total * 100) / 100;
+      }
+    }
+  }
+  
   // Regular pricing for non-settlement submitters
   const basePrice = 317.95;
   
@@ -147,7 +175,7 @@ const calculateTotalDatabase = async (formData, hoaProperties, applicationType) 
         // Import multi-community utilities
         const { calculateMultiCommunityPricing } = await import('../lib/multiCommunityUtils');
         
-        // Calculate multi-community pricing
+        // Calculate multi-community pricing (includes forced price checks per property)
         const pricing = await calculateMultiCommunityPricing(
           selectedProperty.id,
           formData.packageType,
@@ -160,7 +188,29 @@ const calculateTotalDatabase = async (formData, hoaProperties, applicationType) 
       }
     }
     
-    // Single property pricing
+    // Single property pricing - check for forced price first
+    if (formData.hoaProperty && hoaProperties) {
+      const selectedProperty = hoaProperties.find(prop => prop.name === formData.hoaProperty);
+      if (selectedProperty) {
+        const forcedPrice = getForcedPriceSync(selectedProperty);
+        if (forcedPrice !== null) {
+          // Forced price overrides base price, but rush fees still apply
+          let total = forcedPrice;
+          if (formData.packageType === 'rush') {
+            // Add rush fee (70.66 for standard, 100 for NC settlement)
+            const { getPricing } = await import('../lib/pricingConfig');
+            const pricing = getPricing(applicationType, true);
+            total += pricing.rushFee / 100; // Convert cents to dollars
+          }
+          if (formData.paymentMethod === 'credit_card' && total > 0) {
+            total += 9.95;
+          }
+          return total;
+        }
+      }
+    }
+    
+    // Single property pricing - standard logic
     const { calculateTotalAmount } = await import('../lib/applicationTypes');
     
     // Calculate total using database-driven pricing
@@ -475,68 +525,92 @@ const HOASelectionStep = React.memo(
   }
 );
 
-const SubmitterInfoStep = React.memo(({ formData, handleInputChange }) => (
-  <div className='space-y-6'>
-    <div className='text-center mb-8'>
-      <h3 className='text-2xl font-bold text-green-900 mb-2'>
-        Who is Submitting?
-      </h3>
-      <p className='text-gray-600'>
-        Tell us about yourself and your role in this transaction
-      </p>
-    </div>
+const SubmitterInfoStep = React.memo(({ formData, handleInputChange, hoaProperties }) => {
+  // Check if the selected property allows public offering statements
+  const selectedProperty = formData.hoaProperty && hoaProperties
+    ? hoaProperties.find(prop => prop.name === formData.hoaProperty)
+    : null;
+  
+  const canShowPublicOffering = selectedProperty?.allow_public_offering === true;
 
-    <div className='bg-white p-6 rounded-lg border border-green-200'>
-      <label className='block text-sm font-medium text-gray-700 mb-3'>
-        I am the: *
-      </label>
-      <div className='grid grid-cols-2 md:grid-cols-5 gap-4'>
-        {[
-          { value: 'seller', label: 'Property Owner/Seller', icon: User },
-          { value: 'realtor', label: 'Licensed Realtor', icon: FileText },
-          { value: 'builder', label: 'Builder/Developer', icon: Building2 },
-          { value: 'admin', label: 'GMG Staff', icon: CheckCircle },
-          { value: 'settlement', label: 'Settlement Agent / Closing Attorney', icon: Briefcase },
-        ].map((type) => {
-          const Icon = type.icon;
-          return (
-            <button
-              key={type.value}
-              onClick={() => handleInputChange('submitterType', type.value)}
-              className={`p-4 rounded-lg border-2 transition-all ${
-                formData.submitterType === type.value
-                  ? 'border-green-500 bg-green-50 text-green-900'
-                  : 'border-gray-200 hover:border-green-300'
-              }`}
-            >
-              <Icon className='h-8 w-8 mx-auto mb-2' />
-              <div className='text-sm font-medium'>{type.label}</div>
-            </button>
-          );
-        })}
+  // Debug logging
+  React.useEffect(() => {
+    if (formData.hoaProperty) {
+      console.log('Selected property:', selectedProperty);
+      console.log('Allow public offering:', selectedProperty?.allow_public_offering);
+      console.log('Can show public offering:', canShowPublicOffering);
+    }
+  }, [formData.hoaProperty, selectedProperty, canShowPublicOffering]);
+
+  // Clear publicOffering flag if property doesn't allow it
+  React.useEffect(() => {
+    if (formData.publicOffering && !canShowPublicOffering) {
+      handleInputChange('publicOffering', false);
+    }
+  }, [canShowPublicOffering, formData.publicOffering, handleInputChange]);
+
+  return (
+    <div className='space-y-6'>
+      <div className='text-center mb-8'>
+        <h3 className='text-2xl font-bold text-green-900 mb-2'>
+          Who is Submitting?
+        </h3>
+        <p className='text-gray-600'>
+          Tell us about yourself and your role in this transaction
+        </p>
       </div>
-      {formData.submitterType === 'builder' && (
-        <div className='mt-6 p-4 border border-amber-300 rounded-md bg-amber-50'>
-          <label className='flex items-start gap-3 cursor-pointer'>
-            <input
-              type='checkbox'
-              checked={!!formData.publicOffering}
-              onChange={(e) => handleInputChange('publicOffering', e.target.checked)}
-              className='mt-1 h-4 w-4 text-green-600 border-gray-300 rounded'
-            />
-            <div>
-              <div className='font-medium text-amber-900'>Request Public Offering Statement</div>
-              <div className='text-sm text-amber-800'>This special request skips other forms and goes straight to payment. Fixed fee: $200.</div>
-            </div>
-          </label>
+
+      <div className='bg-white p-6 rounded-lg border border-green-200'>
+        <label className='block text-sm font-medium text-gray-700 mb-3'>
+          I am the: *
+        </label>
+        <div className='grid grid-cols-2 md:grid-cols-5 gap-4'>
+          {[
+            { value: 'seller', label: 'Property Owner/Seller', icon: User },
+            { value: 'realtor', label: 'Licensed Realtor', icon: FileText },
+            { value: 'builder', label: 'Builder/Developer', icon: Building2 },
+            { value: 'admin', label: 'GMG Staff', icon: CheckCircle },
+            { value: 'settlement', label: 'Settlement Agent / Closing Attorney', icon: Briefcase },
+          ].map((type) => {
+            const Icon = type.icon;
+            return (
+              <button
+                key={type.value}
+                onClick={() => handleInputChange('submitterType', type.value)}
+                className={`p-4 rounded-lg border-2 transition-all ${
+                  formData.submitterType === type.value
+                    ? 'border-green-500 bg-green-50 text-green-900'
+                    : 'border-gray-200 hover:border-green-300'
+                }`}
+              >
+                <Icon className='h-8 w-8 mx-auto mb-2' />
+                <div className='text-sm font-medium'>{type.label}</div>
+              </button>
+            );
+          })}
         </div>
-      )}
-      {formData.submitterType === 'builder' && formData.publicOffering && (
-        <div className='mt-2 text-sm text-green-800 bg-green-50 border border-green-200 rounded p-3'>
-          Public Offering Statement selected — transaction details will be skipped. You will proceed directly to payment.
-        </div>
-      )}
-    </div>
+        {formData.submitterType === 'builder' && canShowPublicOffering && (
+          <div className='mt-6 p-4 border border-amber-300 rounded-md bg-amber-50'>
+            <label className='flex items-start gap-3 cursor-pointer'>
+              <input
+                type='checkbox'
+                checked={!!formData.publicOffering}
+                onChange={(e) => handleInputChange('publicOffering', e.target.checked)}
+                className='mt-1 h-4 w-4 text-green-600 border-gray-300 rounded'
+              />
+              <div>
+                <div className='font-medium text-amber-900'>Request Public Offering Statement</div>
+                <div className='text-sm text-amber-800'>This special request skips other forms and goes straight to payment. Fixed fee: $200.</div>
+              </div>
+            </label>
+          </div>
+        )}
+        {formData.submitterType === 'builder' && formData.publicOffering && canShowPublicOffering && (
+          <div className='mt-2 text-sm text-green-800 bg-green-50 border border-green-200 rounded p-3'>
+            Public Offering Statement selected — transaction details will be skipped. You will proceed directly to payment.
+          </div>
+        )}
+      </div>
 
     <div className='grid grid-cols-1 md:grid-cols-3 gap-6'>
       <div>
@@ -615,7 +689,8 @@ const SubmitterInfoStep = React.memo(({ formData, handleInputChange }) => (
       </div>
     )}
   </div>
-));
+  );
+});
 
 const TransactionDetailsStep = ({ formData, handleInputChange }) => (
   <div className='space-y-6'>
@@ -631,26 +706,26 @@ const TransactionDetailsStep = ({ formData, handleInputChange }) => (
     <div className='bg-blue-50 p-6 rounded-lg border border-blue-200'>
       <h4 className='font-semibold text-blue-900 mb-4 flex items-center'>
         <User className='h-5 w-5 mr-2' />
-        Buyer Information
+        Buyer Information (Optional)
       </h4>
       <div className='grid grid-cols-1 md:grid-cols-3 gap-4'>
         <input
           type='text'
-          placeholder='Buyer Full Name *'
+          placeholder='Buyer Full Name'
           value={formData.buyerName || ''}
           onChange={(e) => handleInputChange('buyerName', e.target.value)}
           className='px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500'
         />
         <input
           type='email'
-          placeholder='Buyer Email *'
+          placeholder='Buyer Email'
           value={formData.buyerEmail || ''}
           onChange={(e) => handleInputChange('buyerEmail', e.target.value)}
           className='px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500'
         />
         <input
           type='tel'
-          placeholder='Buyer Phone *'
+          placeholder='Buyer Phone'
           value={formData.buyerPhone || ''}
           onChange={(e) => handleInputChange('buyerPhone', e.target.value)}
           className='px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500'
@@ -661,26 +736,26 @@ const TransactionDetailsStep = ({ formData, handleInputChange }) => (
     <div className='bg-green-50 p-6 rounded-lg border border-green-200'>
       <h4 className='font-semibold text-green-900 mb-4 flex items-center'>
         <User className='h-5 w-5 mr-2' />
-        Seller Information (Optional)
+        Seller Information
       </h4>
       <div className='grid grid-cols-1 md:grid-cols-3 gap-4'>
         <input
           type='text'
-          placeholder='Seller Full Name'
+          placeholder='Seller Full Name *'
           value={formData.sellerName || ''}
           onChange={(e) => handleInputChange('sellerName', e.target.value)}
           className='px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500'
         />
         <input
           type='email'
-          placeholder='Seller Email'
+          placeholder='Seller Email *'
           value={formData.sellerEmail || ''}
           onChange={(e) => handleInputChange('sellerEmail', e.target.value)}
           className='px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500'
         />
         <input
           type='tel'
-          placeholder='Seller Phone'
+          placeholder='Seller Phone *'
           value={formData.sellerPhone || ''}
           onChange={(e) => handleInputChange('sellerPhone', e.target.value)}
           className='px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500'
@@ -691,12 +766,12 @@ const TransactionDetailsStep = ({ formData, handleInputChange }) => (
     <div className='bg-gray-50 p-6 rounded-lg border border-gray-200'>
       <h4 className='font-semibold text-gray-900 mb-4 flex items-center'>
         <DollarSign className='h-5 w-5 mr-2' />
-        Sale Information
+        Sale Information (Optional)
       </h4>
       <div className='grid grid-cols-1 md:grid-cols-2 gap-6'>
         <div>
           <label className='block text-sm font-medium text-gray-700 mb-2'>
-            Sale Price *
+            Sale Price
           </label>
           <div className='relative'>
             <DollarSign className='absolute left-3 top-3 h-5 w-5 text-gray-400' />
@@ -711,7 +786,7 @@ const TransactionDetailsStep = ({ formData, handleInputChange }) => (
         </div>
         <div>
           <label className='block text-sm font-medium text-gray-700 mb-2'>
-            Expected Closing Date *
+            Expected Closing Date
           </label>
           <input
             type='date'
@@ -1004,7 +1079,7 @@ const PackagePaymentStep = ({
           sellerEmail: '',
           sellerPhone: '',
           salePrice: '',
-          closingDate: new Date().toISOString().split('T')[0],
+          closingDate: '',
           packageType: 'standard',
           paymentMethod: '',
         });
@@ -1239,12 +1314,12 @@ const PackagePaymentStep = ({
               : 'border-gray-200 hover:border-green-300'
           }`}
         >
-          <div className='flex items-start justify-between mb-4'>
-            <div>
+          <div className='flex items-start justify-between mb-4 gap-4 md:gap-8'>
+            <div className='pr-3 md:pr-6 max-w-[70%]'>
               <h4 className='text-lg font-semibold text-gray-900'>
-                Standard Processing
+                {formData.submitterType === 'settlement' ? 'Dues Request - Escrow Instructions' : 'Standard Processing'}
               </h4>
-              <p className='text-sm text-gray-600'>10-15 business days</p>
+              <p className='text-sm text-gray-600'>{formData.submitterType === 'settlement' ? '14 calendar days' : '10-15 business days'}</p>
             </div>
             <div className='text-right'>
               <div className='text-2xl font-bold text-green-600'>
@@ -1255,13 +1330,21 @@ const PackagePaymentStep = ({
                       standardMultiCommunityPricing.totalConvenienceFee : 0;
                     return (baseTotal + convenienceFeeTotal).toFixed(2);
                   }
-                  const total = calculateTotal(formData, stripePrices, hoaProperties);
+                  // Always compute using STANDARD package for display
+                  const selectedProperty = hoaProperties?.find(p => p.name === formData.hoaProperty);
+                  const isVASettlement = formData.submitterType === 'settlement' && 
+                    selectedProperty?.location?.toUpperCase()?.includes('VA');
+                  if (isVASettlement) {
+                    return '0.00';
+                  }
+                  const standardFormData = { ...formData, packageType: 'standard' };
+                  const total = calculateTotal(standardFormData, stripePrices, hoaProperties);
                   return total.toFixed(2);
                 })()}
               </div>
             </div>
           </div>
-          <ul className='text-sm text-gray-600 space-y-1'>
+          <ul className='text-sm text-gray-600 space-y-1 list-disc pl-5'>
             {standardMultiCommunityPricing && standardMultiCommunityPricing.associations && standardMultiCommunityPricing.associations.length > 0 ? (
               // Multi-community breakdown
               <>
@@ -1270,39 +1353,39 @@ const PackagePaymentStep = ({
                     {association.name} {association.isPrimary && '(Primary)'} - ${association.basePrice.toFixed(2)}
                   </li>
                 ))}
-                <li>• Digital & Print Delivery</li>
-                <li>• 10-15 business days processing</li>
+                <li>Digital & Print Delivery</li>
+                <li>10-15 business days processing</li>
               </>
             ) : formData.submitterType === 'settlement' ? (
               <>
+                <li>Standard Processing</li>
                 {(() => {
                   const selectedProperty = hoaProperties?.find(prop => prop.name === formData.hoaProperty);
                   const location = selectedProperty?.location?.toUpperCase() || '';
                   if (location.includes('VA') || location.includes('VIRGINIA')) {
                     return (
                       <>
-                        <li>• Dues Request - Escrow Instructions</li>
-                        <li>• Current HOA dues verification</li>
-                        <li>• Settlement statement preparation</li>
-                        <li>✓ Direct submission to accounting</li>
+                        <li>Current HOA dues verification</li>
+                        <li>Settlement statement preparation</li>
+                        <li>Direct submission to accounting</li>
                       </>
                     );
                   } else if (location.includes('NC') || location.includes('NORTH CAROLINA')) {
                     return (
                       <>
-                        <li>• Statement of Unpaid Assessments</li>
-                        <li>• Current assessment verification</li>
-                        <li>• Settlement documentation</li>
-                        <li>✓ Direct submission to accounting</li>
+                        <li>Statement of Unpaid Assessments</li>
+                        <li>Current assessment verification</li>
+                        <li>Settlement documentation</li>
+                        <li>Direct submission to accounting</li>
                       </>
                     );
                   } else {
                     return (
                       <>
-                        <li>• Settlement documentation</li>
-                        <li>• HOA dues verification</li>
-                        <li>• Escrow instructions</li>
-                        <li>✓ Direct submission to accounting</li>
+                        <li>Settlement documentation</li>
+                        <li>HOA dues verification</li>
+                        <li>Escrow instructions</li>
+                        <li>Direct submission to accounting</li>
                       </>
                     );
                   }
@@ -1310,10 +1393,10 @@ const PackagePaymentStep = ({
               </>
             ) : (
               <>
-                <li>• Complete Virginia Resale Certificate</li>
-                <li>• HOA Documents Package</li>
-                <li>• Compliance Inspection Report</li>
-                <li>• Digital & Print Delivery</li>
+                <li>Complete Virginia Resale Certificate</li>
+                <li>HOA Documents Package</li>
+                <li>Compliance Inspection Report</li>
+                <li>Digital & Print Delivery</li>
               </>
             )}
           </ul>
@@ -1327,37 +1410,49 @@ const PackagePaymentStep = ({
               : 'border-gray-200 hover:border-orange-300'
           }`}
         >
-          <div className='flex items-start justify-between mb-4'>
-            <div>
+          <div className='flex items-start justify-between mb-4 gap-4 md:gap-8'>
+            <div className='pr-3 md:pr-6 max-w-[70%]'>
               <h4 className='text-lg font-semibold text-gray-900 flex items-center'>
-                Rush Processing
+                {formData.submitterType === 'settlement' ? 'Everything in Standard' : 'Rush Processing'}
                 <span className='ml-2 px-2 py-1 bg-orange-100 text-orange-800 text-xs rounded'>
                   PRIORITY
                 </span>
               </h4>
-              <p className='text-sm text-gray-600'>5 business days</p>
+              <p className='text-sm text-gray-600'>{formData.submitterType === 'settlement' ? '3 business days' : '5 business days'}</p>
             </div>
             <div className='text-right'>
               <div className='text-lg text-gray-500'>
-                ${(() => {
+                {(() => {
+                  // Check for forced price first
+                  const selectedProperty = hoaProperties?.find(prop => prop.name === formData.hoaProperty);
+                  let basePrice = '317.95';
+                  
+                  if (selectedProperty) {
+                    const forcedPrice = getForcedPriceSync(selectedProperty);
+                    if (forcedPrice !== null) {
+                      // Show forced price as base (for rush, the +$70.66 will be shown below)
+                      return forcedPrice.toFixed(2);
+                    }
+                  }
+                  
                   // Show base processing fee only (no rush, no credit card fees)
                   if (formData.submitterType === 'builder' && formData.publicOffering) {
-                    return '200.00';
-                  }
-                  if (formData.submitterType === 'settlement') {
-                    const selectedProperty = hoaProperties?.find(prop => prop.name === formData.hoaProperty);
+                    basePrice = '200.00';
+                  } else if (formData.submitterType === 'settlement') {
                     if (selectedProperty?.location) {
                       const location = selectedProperty.location.toUpperCase();
                       if (location.includes('VA') || location.includes('VIRGINIA')) {
-                        return '0.00';
+                        basePrice = '0.00';
                       } else if (location.includes('NC') || location.includes('NORTH CAROLINA')) {
-                        return '450.00';
+                        basePrice = '450.00';
                       }
+                    } else {
+                      basePrice = '200.00'; // Fallback
                     }
-                    return '200.00'; // Fallback
+                  } else if (stripePrices && stripePrices.standard && stripePrices.standard.displayAmount) {
+                    basePrice = stripePrices.standard.displayAmount.toFixed(2);
                   }
-                  // Regular pricing
-                  return stripePrices ? stripePrices.standard.displayAmount.toFixed(2) : '317.95';
+                  return basePrice;
                 })()}
               </div>
               <div className='text-sm text-gray-500'>
@@ -1379,7 +1474,7 @@ const PackagePaymentStep = ({
               </div>
             </div>
           </div>
-          <ul className='text-sm text-gray-600 space-y-1'>
+          <ul className='text-sm text-gray-600 space-y-1 list-disc pl-5'>
             {rushMultiCommunityPricing && rushMultiCommunityPricing.associations && rushMultiCommunityPricing.associations.length > 0 ? (
               // Multi-community breakdown with rush fees
               <>
@@ -1388,23 +1483,23 @@ const PackagePaymentStep = ({
                     {association.name} {association.isPrimary && '(Primary)'} - ${association.basePrice.toFixed(2)} + ${association.rushFee.toFixed(2)} rush
                   </li>
                 ))}
-                <li>• Priority queue processing</li>
-                <li>• Expedited compliance inspection</li>
-                <li>✓ 5-day completion guarantee</li>
+                <li>Priority queue processing</li>
+                <li>Expedited compliance inspection</li>
+                <li>5-day completion guarantee</li>
               </>
             ) : formData.submitterType === 'settlement' ? (
               <>
-                <li>• Everything in Standard</li>
-                <li>• Priority queue processing</li>
-                <li>• Expedited accounting review</li>
-                <li>✓ 3-day completion guarantee</li>
+                <li>Rush Processing</li>
+                <li>Priority queue processing</li>
+                <li>Expedited accounting review</li>
+                <li>3-day completion guarantee</li>
               </>
             ) : (
               <>
-                <li>• Everything in Standard</li>
-                <li>• Priority queue processing</li>
-                <li>• Expedited compliance inspection</li>
-                <li>✓ 5-day completion guarantee</li>
+                <li>Everything in Standard</li>
+                <li>Priority queue processing</li>
+                <li>Expedited compliance inspection</li>
+                <li>5-day completion guarantee</li>
               </>
             )}
           </ul>
@@ -1497,7 +1592,14 @@ const PackagePaymentStep = ({
                     )}
                     <div className='flex justify-between ml-4 font-medium text-green-800'>
                       <span>Subtotal:</span>
-                      <span>${association.total.toFixed(2)}</span>
+                      <span>${(() => {
+                        // Subtotal should include basePrice + rushFee + convenienceFee (if credit card)
+                        let subtotal = association.basePrice + association.rushFee;
+                        if (formData.paymentMethod === 'credit_card') {
+                          subtotal += association.convenienceFee;
+                        }
+                        return subtotal.toFixed(2);
+                      })()}</span>
                     </div>
                   </div>
                 ))}
@@ -1517,12 +1619,20 @@ const PackagePaymentStep = ({
                 <div className='flex justify-between'>
                   <span>Processing Fee:</span>
                   <span>${(() => {
+                    // Check for forced price first
+                    const selectedProperty = hoaProperties?.find(prop => prop.name === formData.hoaProperty);
+                    if (selectedProperty) {
+                      const forcedPrice = getForcedPriceSync(selectedProperty);
+                      if (forcedPrice !== null) {
+                        return forcedPrice.toFixed(2);
+                      }
+                    }
+                    
                     // Calculate base processing fee only (no rush, no credit card fees)
                     if (formData.submitterType === 'builder' && formData.publicOffering) {
                       return '200.00';
                     }
                     if (formData.submitterType === 'settlement') {
-                      const selectedProperty = hoaProperties?.find(prop => prop.name === formData.hoaProperty);
                       if (selectedProperty?.location) {
                         const location = selectedProperty.location.toUpperCase();
                         if (location.includes('VA') || location.includes('VIRGINIA')) {
@@ -2208,7 +2318,7 @@ export default function GMGResaleFlow() {
     sellerEmail: '',
     sellerPhone: '',
     salePrice: '',
-    closingDate: new Date().toISOString().split('T')[0], // Default to today's date
+    closingDate: '', // Optional field - starts empty
     packageType: 'standard',
     paymentMethod: '',
     totalAmount: 317.95,
@@ -2599,7 +2709,7 @@ export default function GMGResaleFlow() {
       sellerEmail: '',
       sellerPhone: '',
       salePrice: '',
-      closingDate: new Date().toISOString().split('T')[0], // Default to today's date
+      closingDate: '', // Optional field - starts empty
       packageType: 'standard',
       paymentMethod: '',
       totalAmount: 317.95,
@@ -2912,7 +3022,7 @@ export default function GMGResaleFlow() {
         sellerEmail: '',
         sellerPhone: '',
         salePrice: '',
-        closingDate: new Date().toISOString().split('T')[0], // Default to today's date
+        closingDate: '', // Optional field - starts empty
         packageType: 'standard',
         paymentMethod: '',
         totalAmount: 317.95,
@@ -3418,6 +3528,7 @@ export default function GMGResaleFlow() {
           <SubmitterInfoStep
             formData={formData}
             handleInputChange={handleInputChange}
+            hoaProperties={hoaProperties}
           />
         );
       case 3:
@@ -3706,8 +3817,9 @@ export default function GMGResaleFlow() {
                     (formData.submitterType === 'settlement' && !formData.closingDate))) ||
                 (currentStep === 3 &&
                   formData.submitterType !== 'settlement' &&
-                  (!formData.buyerName ||
-                    !formData.salePrice))
+                  (!formData.sellerName ||
+                    !formData.sellerEmail ||
+                    !formData.sellerPhone))
               }
               className='px-6 py-3 bg-green-700 text-white rounded-lg hover:bg-green-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2'
             >

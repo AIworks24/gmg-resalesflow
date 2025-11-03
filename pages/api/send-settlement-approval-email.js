@@ -32,14 +32,15 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Application ID is required' });
     }
 
-    // Get application data with settlement form
+    // Get application data with settlement form (including pdf_url from applications table)
     const { data: application, error: appError } = await supabase
       .from('applications')
       .select(
         `
         *,
-        hoa_properties(name, property_owner_email, property_owner_name),
-        property_owner_forms(id, form_type, status, completed_at, form_data, response_data)
+        pdf_url,
+        hoa_properties(name, property_owner_email, property_owner_name, location),
+        property_owner_forms(id, form_type, status, completed_at, form_data, response_data, pdf_url)
       `
       )
       .eq('id', applicationId)
@@ -58,138 +59,53 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Settlement form has not been completed yet' });
     }
 
+    // Check if PDF has already been generated
+    // Try property_owner_forms.pdf_url first, then fallback to applications.pdf_url
+    // This handles cases where PDF was generated before the migration ran
+    let publicUrl = settlementForm.pdf_url || application.pdf_url;
+    
+    if (!publicUrl) {
+      return res.status(400).json({ error: 'PDF has not been generated yet. Please generate the PDF first.' });
+    }
+
+    // If PDF URL exists in applications but not in property_owner_forms, update it for future use
+    if (!settlementForm.pdf_url && application.pdf_url && settlementForm.id) {
+      try {
+        await supabase
+          .from('property_owner_forms')
+          .update({ pdf_url: application.pdf_url })
+          .eq('id', settlementForm.id);
+      } catch (updateError) {
+        // If column doesn't exist yet (migration not run), that's okay - we'll use application.pdf_url
+        console.warn('Could not update property_owner_forms.pdf_url (migration may not be run yet):', updateError);
+      }
+    }
+
     const formData = settlementForm.response_data || settlementForm.form_data;
     
     // Determine document type based on property state
-    const propertyState = application.hoa_properties?.location?.includes('VA') ? 'VA' : 'NC';
-    const documentType = 'Settlement Form';
+    const propertyState = application.hoa_properties?.location?.toUpperCase().includes('VA') ? 'VA' : 'NC';
+    const documentType = propertyState === 'VA' 
+      ? 'Dues Request - Escrow Instructions' 
+      : 'Statement of Unpaid Assessments';
     
-    // Generate HTML content for the PDF
-    const htmlContent = `
-<!DOCTYPE html>
-<html>
-<head>
-    <title>${documentType} - ${application.property_address}</title>
-    <style>
-        body { font-family: Arial, sans-serif; margin: 40px; line-height: 1.6; }
-        h1 { color: #166534; border-bottom: 3px solid #166534; padding-bottom: 10px; margin-bottom: 30px; }
-        .header-info { background-color: #f9fafb; padding: 20px; border-radius: 5px; margin-bottom: 30px; }
-        .section { margin: 20px 0; }
-        .section-title { color: #059669; font-size: 1.3em; font-weight: bold; margin: 20px 0 10px 0; border-bottom: 1px solid #059669; padding-bottom: 5px; }
-        .field { margin: 8px 0; }
-        .label { font-weight: bold; color: #374151; display: inline-block; min-width: 200px; }
-        .value { color: #111827; }
-        .footer { margin-top: 40px; padding-top: 20px; border-top: 2px solid #166534; color: #6b7280; font-size: 0.9em; }
-    </style>
-</head>
-<body>
-    <h1>${documentType}</h1>
+    // Extract filename from URL and clean it up (remove timestamp prefix)
+    const urlParts = publicUrl.split('/');
+    let existingFilename = urlParts[urlParts.length - 1] || `${documentType.replace(/[^a-zA-Z0-9]/g, '_')}_${application.property_address.replace(/[^a-zA-Z0-9]/g, '_')}.pdf`;
     
-    <div class="header-info">
-        <p><strong>Property Address:</strong> ${application.property_address}</p>
-        <p><strong>HOA:</strong> ${application.hoa_properties.name}</p>
-        <p><strong>Generated:</strong> ${new Date().toLocaleString()}</p>
-    </div>
+    // Remove leading timestamp pattern (e.g., "1762187746441-" from filename)
+    // Pattern: digits followed by hyphen at the start
+    existingFilename = existingFilename.replace(/^\d+-/, '');
     
-    ${Object.keys(formData)
-      .filter(key => formData[key] && formData[key] !== '' && formData[key] !== null && formData[key] !== undefined)
-      .map((key) => {
-        const value = formData[key];
-        const label = key.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase()).replace(/([a-z])([A-Z])/g, '$1 $2');
-        return `
-          <div class="field">
-              <span class="label">${label}:</span>
-              <span class="value">${value}</span>
-          </div>
-        `;
-      })
-      .join('')}
-    
-    <div class="footer">
-        <p>This document was generated on ${new Date().toLocaleString()}</p>
-        <p>For questions or concerns, please contact Goodman Management Group at resales@gmgva.com</p>
-    </div>
-</body>
-</html>`;
-
-    // Generate PDF from HTML using PDF.co
-    const filename = `${documentType.replace(/[^a-zA-Z0-9]/g, '_')}_${application.property_address.replace(/[^a-zA-Z0-9]/g, '_')}.pdf`;
-    
-    const pdfResponse = await fetch('https://api.pdf.co/v1/pdf/convert/from/html', {
-      method: 'POST',
-      headers: {
-        'x-api-key': process.env.PDFCO_API_KEY,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        html: htmlContent,
-        name: filename,
-        async: false
-      })
-    });
-
-    if (!pdfResponse.ok) {
-      const errorText = await pdfResponse.text();
-      console.error('PDF.co API error:', errorText);
-      throw new Error(`Failed to generate PDF: ${errorText}`);
-    }
-
-    const pdfData = await pdfResponse.json();
-    
-    // Check if the response has a download URL
-    if (!pdfData.url) {
-      console.error('PDF.co response:', pdfData);
-      throw new Error('PDF.co did not return a download URL');
-    }
-
-    // Download the PDF from PDF.co
-    const pdfDownloadResponse = await fetch(pdfData.url);
-    if (!pdfDownloadResponse.ok) {
-      throw new Error('Failed to download PDF from PDF.co');
-    }
-
-    const pdfBuffer = await pdfDownloadResponse.arrayBuffer();
-    
-    // Validate PDF buffer is not empty
-    if (!pdfBuffer || pdfBuffer.byteLength === 0) {
-      throw new Error('PDF buffer is empty');
-    }
-
-    // Upload PDF to Supabase storage
-    const fileName = `${Date.now()}-${filename}`;
-    const filePath = `settlement-forms/${fileName}`;
-
-    const { data: uploadData, error: uploadError } = await supabase.storage
-      .from('bucket0')
-      .upload(filePath, Buffer.from(pdfBuffer), {
-        contentType: 'application/pdf',
-        upsert: false,
-      });
-
-    if (uploadError) {
-      throw uploadError;
-    }
-
-    // Get public URL
-    const { data: { publicUrl } } = supabase.storage
-      .from('bucket0')
-      .getPublicUrl(filePath);
-
-    // Prepare download links
+    // Prepare download links using existing PDF
     const downloadLinks = [{
-      filename: filename,
+      filename: existingFilename,
       downloadUrl: publicUrl,
       type: 'pdf',
       description: documentType
     }];
 
-    // Update the form with PDF URL
-    await supabase
-      .from('property_owner_forms')
-      .update({ pdf_url: publicUrl })
-      .eq('id', settlementForm.id);
-
-    // Send email with PDF
+    // Send email with PDF - use custom subject and content for settlement
     const { sendApprovalEmail } = await import('../../lib/emailService');
     
     await sendApprovalEmail({
@@ -200,11 +116,16 @@ export default async function handler(req, res) {
       submitterName: application.submitter_name || 'Valued Customer',
       hoaName: application.hoa_properties?.name || 'HOA',
       downloadLinks: downloadLinks,
+      // Custom settlement-specific email content
+      isSettlement: true,
+      customSubject: `Thank You Submitting Your Request For ${application.property_address}`,
+      customTitle: 'Thank you for submitting in your request',
+      customMessage: `Your document(s) for <strong>${application.property_address}</strong> in <strong>${application.hoa_properties?.name || 'HOA'}</strong> are now ready for download.`,
     });
 
     // Create notification record
-    const notificationSubject = `Settlement Form Ready - ${application.property_address}`;
-    const notificationMessage = `Your Settlement Form for ${application.property_address} in ${application.hoa_properties?.name} is now ready. You can download it using the link provided in the email.`;
+    const notificationSubject = `Thank You Submitting Your Request For ${application.property_address}`;
+    const notificationMessage = `Your document(s) for ${application.property_address} in ${application.hoa_properties?.name} are now ready for download.`;
 
     const { error: notifError } = await supabase
       .from('notifications')

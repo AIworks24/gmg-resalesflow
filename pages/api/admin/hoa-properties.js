@@ -32,18 +32,24 @@ export default async function handler(req, res) {
     const page = parseInt(req.query.page) || 1;
     const pageSize = parseInt(req.query.pageSize) || 10;
     const search = req.query.search || '';
+    const bypassCache = req.query.bypassCache === 'true'; // Allow bypassing cache
 
-    // Try to get from cache first (cache key includes pagination params and user ID to prevent collisions)
+    // Try to get from cache first (unless bypass is requested)
+    // Cache key includes pagination params and user ID to prevent collisions
     const cacheKey = `admin:hoa_properties:${user.id}:page:${page}:size:${pageSize}:search:${search}`;
-    const cachedData = await getCache(cacheKey);
-
-    if (cachedData) {
-      console.log('✅ Properties cache HIT');
-      return res.status(200).json({ 
-        ...cachedData,
-        cached: true,
-        timestamp: new Date().toISOString()
-      });
+    
+    if (!bypassCache) {
+      const cachedData = await getCache(cacheKey);
+      if (cachedData) {
+        console.log('✅ Properties cache HIT');
+        return res.status(200).json({ 
+          ...cachedData,
+          cached: true,
+          timestamp: new Date().toISOString()
+        });
+      }
+    } else {
+      console.log('🔄 Bypassing cache - fetching fresh data');
     }
 
     console.log('❌ Properties cache MISS - fetching from database');

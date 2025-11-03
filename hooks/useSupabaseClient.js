@@ -22,7 +22,14 @@ export function useSupabaseClient() {
     let timeoutId;
     let subscription;
     
-    const handleAuthChange = (event) => {
+    const handleAuthChange = (event, session) => {
+      // Don't recreate client on TOKEN_REFRESHED - it's not necessary
+      // Only recreate on actual auth state changes
+      if (event === 'TOKEN_REFRESHED') {
+        console.log('useSupabaseClient: Token refreshed (skipping client recreation)');
+        return; // Skip client recreation on token refresh
+      }
+      
       console.log('useSupabaseClient: Auth state changed', event);
       
       // Add small delay to avoid rapid recreations

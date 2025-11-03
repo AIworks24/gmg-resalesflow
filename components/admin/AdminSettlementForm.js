@@ -54,23 +54,107 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
   }, [propertyState]);
 
   useEffect(() => {
-    loadApplicationData();
-    loadCurrentUser();
+    let timeoutId = null;
+    let isMounted = true;
+
+    // Set a timeout to prevent infinite loading
+    timeoutId = setTimeout(() => {
+      if (isMounted) {
+        console.error('Settlement form loading timed out');
+        setLoading(false);
+        setErrors({ 
+          general: 'Form loading timed out. Please try again. The form may still load partially - please refresh if needed.' 
+        });
+        if (showSnackbar) {
+          showSnackbar('Form loading timed out. Please try again.', 'error');
+        }
+      }
+    }, 15000); // 15 second timeout
+
+    // Load data
+    Promise.all([
+      loadApplicationData(),
+      loadCurrentUser()
+    ]).catch(error => {
+      if (isMounted) {
+        console.error('Error loading settlement form data:', error);
+        setErrors({ general: 'Failed to load form data. Please try again.' });
+        if (showSnackbar) {
+          showSnackbar('Failed to load form data', 'error');
+        }
+        setLoading(false);
+      }
+    }).finally(() => {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    });
+
+    // Cleanup timeout on unmount
+    return () => {
+      isMounted = false;
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    };
   }, [applicationId]);
 
-  // Update form data when user loads
+  // Update form data when user loads (but only if form is already initialized)
   useEffect(() => {
     if (user && formData && Object.keys(formData).length > 0) {
-      setFormData(prev => ({
-        ...prev,
-        managerName: user?.name || '',
-        managerTitle: user?.title || 'Community Manager',
-        managerCompany: user?.company || 'GMG Community Management',
-        managerPhone: user?.phone || '',
-        managerEmail: user?.email || '',
-      }));
+      setFormData(prev => {
+        // Only update if manager fields are currently empty or different
+        const needsUpdate = 
+          !prev.managerName || 
+          prev.managerName !== user?.name ||
+          !prev.managerEmail ||
+          prev.managerEmail !== user?.email;
+        
+        if (needsUpdate) {
+          return {
+            ...prev,
+            managerName: user?.name || prev.managerName || '',
+            managerTitle: user?.title || prev.managerTitle || 'Community Manager',
+            managerCompany: user?.company || prev.managerCompany || 'GMG Community Management',
+            managerPhone: user?.phone || prev.managerPhone || '',
+            managerEmail: user?.email || prev.managerEmail || '',
+          };
+        }
+        return prev;
+      });
     }
   }, [user]);
+
+  const loadCurrentUserForInit = async () => {
+    try {
+      const supabase = createClientComponentClient();
+      const { data: { user }, error: authError } = await supabase.auth.getUser();
+      
+      if (authError) {
+        console.warn('Auth error loading user:', authError);
+        return null;
+      }
+
+      if (user) {
+        const { data: userData, error: profileError } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('email', user.email)
+          .single();
+        
+        if (profileError) {
+          console.warn('Profile error:', profileError);
+          return null;
+        }
+        
+        return userData;
+      }
+      return null;
+    } catch (error) {
+      console.warn('Error loading user for init:', error);
+      return null;
+    }
+  };
 
   const loadCurrentUser = async () => {
     const supabase = createClientComponentClient();
@@ -100,103 +184,171 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
   const loadApplicationData = async () => {
     try {
       setLoading(true);
+      setErrors({}); // Clear previous errors
       
       const supabase = createClientComponentClient();
 
-      // Load application data with HOA properties
-      const { data: appData, error: appError } = await supabase
-        .from('applications')
-        .select(`
-          *,
-          hoa_properties(name, location, property_owner_name, property_owner_email)
-        `)
-        .eq('id', applicationId)
-        .single();
+      // Optimize: Load application and form data in parallel
+      const [appResponse, formResponse] = await Promise.allSettled([
+        supabase
+          .from('applications')
+          .select(`
+            *,
+            hoa_properties(name, location, property_owner_name, property_owner_email, property_owner_phone, management_contact, phone, email)
+          `)
+          .eq('id', applicationId)
+          .single(),
+        supabase
+          .from('property_owner_forms')
+          .select('id,form_data,status')
+          .eq('application_id', applicationId)
+          .eq('form_type', 'settlement_form')
+          .maybeSingle()
+      ]);
 
-      if (appError) throw appError;
+      // Handle application data
+      if (appResponse.status === 'rejected') {
+        throw new Error('Failed to load application data');
+      }
+      
+      const { data: appData, error: appError } = appResponse.value;
+      if (appError) {
+        console.error('Application data error:', appError);
+        throw appError;
+      }
+
+      if (!appData) {
+        throw new Error('Application not found');
+      }
+
       setApplication(appData);
 
       // Get property data from nested hoa_properties or from hoa_property_id
       let propertyData = appData.hoa_properties || null;
       
       // Load HOA property data if not already included in nested object
+      // Use a timeout for this query to prevent hanging
       if (!propertyData && appData.hoa_property_id) {
-        const { data: propertyDataResult, error: propertyError } = await supabase
-          .from('hoa_properties')
-          .select('*')
-          .eq('id', appData.hoa_property_id)
-          .single();
+        try {
+          const propertyPromise = supabase
+            .from('hoa_properties')
+            .select('*')
+            .eq('id', appData.hoa_property_id)
+            .single();
+          
+          const propertyTimeout = new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('Property query timeout')), 5000)
+          );
 
-        if (propertyError) {
-          console.warn('Could not load HOA property data:', propertyError);
-          // Don't throw error - continue without property data
-        } else {
-          propertyData = propertyDataResult;
-          setHoaProperty(propertyData);
+          const { data: propertyDataResult, error: propertyError } = await Promise.race([
+            propertyPromise,
+            propertyTimeout
+          ]);
+
+          if (propertyError && propertyError.message !== 'Property query timeout') {
+            console.warn('Could not load HOA property data:', propertyError);
+            // Continue without property data - use defaults
+          } else if (propertyDataResult) {
+            propertyData = propertyDataResult;
+            setHoaProperty(propertyData);
+          }
+        } catch (propertyError) {
+          console.warn('Property data loading failed or timed out:', propertyError);
+          // Continue with partial data
         }
       } else if (propertyData) {
         setHoaProperty(propertyData);
       }
 
-      // Determine property state and document type
+      // Determine property state and document type (use default if no property data)
       let state = 'VA'; // Default to VA if no property data
       if (propertyData && propertyData.location) {
-        state = getPropertyState(propertyData.location);
+        state = getPropertyState(propertyData.location) || 'VA';
+      } else if (appData.hoa_properties?.location) {
+        state = getPropertyState(appData.hoa_properties.location) || 'VA';
       }
       setPropertyState(state);
       setDocumentType(getSettlementDocumentType(state));
 
-      // Check if settlement form already exists
-      const { data: existingForm, error: formFetchError } = await supabase
-        .from('property_owner_forms')
-        .select('id,form_data,status')
-        .eq('application_id', applicationId)
-        .eq('form_type', 'settlement_form')
-        .maybeSingle();
+      // Handle existing form data (from parallel query)
+      if (formResponse.status === 'fulfilled') {
+        const { data: existingForm, error: formFetchError } = formResponse.value;
+        
+        // Error handling - PGRST116 is expected when no form exists yet
+        if (formFetchError && formFetchError.code !== 'PGRST116') {
+          console.error('Error checking for existing form:', formFetchError);
+          // Don't block form initialization for this error
+        }
 
-      // Error handling - PGRST116 is expected when no form exists yet
-      if (formFetchError && formFetchError.code !== 'PGRST116') {
-        console.error('Error checking for existing form:', formFetchError);
-        setErrors({ general: 'Failed to load form data' });
+        if (existingForm && existingForm.form_data) {
+          setFormData(existingForm.form_data);
+          return; // Exit early if we have existing form data
+        }
       }
 
-      if (existingForm) {
-        setFormData(existingForm.form_data || {});
-        // Don't set isCompleted - allow editing even after completion
-        // setIsCompleted(existingForm.status === 'completed');
-      } else {
-        // Initialize form with auto-filled data
-        initializeFormDataLocal(appData, propertyData);
+      // Initialize new form - load user data first
+      try {
+        const currentUser = await Promise.race([
+          loadCurrentUserForInit(),
+          new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('User load timeout')), 5000)
+          )
+        ]).catch(err => {
+          console.warn('User data load timed out or failed:', err);
+          return null; // Continue without user data
+        });
+
+        initializeFormDataLocal(appData, propertyData, currentUser, state);
+      } catch (initError) {
+        console.error('Error initializing form:', initError);
+        // Initialize with minimal data so form can still render
+        initializeFormDataLocal(appData, propertyData, null, state);
       }
 
     } catch (error) {
       console.error('Error loading application data:', error);
-      setErrors({ general: 'Failed to load application data' });
+      const errorMessage = error.message || 'Failed to load application data';
+      setErrors({ general: errorMessage });
+      
+      // Set minimal state so form can still render
+      setPropertyState('VA'); // Default state
+      setDocumentType(getSettlementDocumentType('VA'));
     } finally {
       setLoading(false);
     }
   };
 
-  const initializeFormDataLocal = (appData, propertyData) => {
+  const initializeFormDataLocal = (appData, propertyData, currentUser = null, stateToUse = null) => {
+    const userToUse = currentUser || user;
+    // Use provided state or fallback to component state
+    const effectiveState = stateToUse || propertyState || 'VA';
+    
     // Get HOA properties name from nested object or fallback
     const hoaName = appData.hoa_properties?.name || propertyData?.name || appData.property_address || 'N/A';
     const unitNumber = appData.unit_number ? ` ${appData.unit_number}` : '';
     const fullPropertyAddress = `${appData.property_address || ''}${unitNumber}`;
+    
+    // Get property manager details from propertyData (preferred) or hoa_properties nested object
+    const propertyManager = propertyData || appData.hoa_properties || {};
     
     // Prepare application data for auto-filling based on new JSON structure
     const applicationData = {
       // Property Information
       propertyAddress: fullPropertyAddress.trim(),
       associationName: hoaName,
-      parcelId: propertyState === 'NC' ? '' : undefined,
+      parcelId: effectiveState === 'NC' ? (propertyManager.parcel_id || '') : undefined,
       
       // Seller Information
       sellerName: appData.seller_name || appData.sellerName || '',
       
       // Buyer Information
       buyerName: appData.buyer_name || appData.buyerName || '',
-      estimatedClosingDate: appData.closing_date || appData.estimatedClosingDate || '',
-      currentOwner: propertyState === 'NC' ? (appData.seller_name || appData.sellerName || '') : undefined,
+      estimatedClosingDate: appData.closing_date 
+        ? (appData.closing_date.includes('T') 
+            ? appData.closing_date.split('T')[0] 
+            : appData.closing_date)
+        : (appData.estimatedClosingDate || ''),
+      currentOwner: effectiveState === 'NC' ? (appData.seller_name || appData.sellerName || '') : undefined,
       
       // Requestor Information (from submitter)
       requestorName: appData.submitter_name || appData.submitterName || '',
@@ -204,31 +356,54 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
       requestorPhone: appData.submitter_phone || appData.submitterPhone || '',
       
       // Closing Information
-      salesPrice: appData.sale_price ? `$${appData.sale_price.toLocaleString()}` : (appData.salesPrice || ''),
-      fileEscrowNumber: appData.file_number || appData.fileNumber || '',
+      salesPrice: appData.sale_price 
+        ? (typeof appData.sale_price === 'number' 
+            ? `$${appData.sale_price.toLocaleString()}` 
+            : appData.sale_price)
+        : (appData.salesPrice || ''),
+      fileEscrowNumber: appData.file_number || appData.fileNumber || appData.escrow_number || '',
+      buyerOccupant: appData.buyer_occupant || '',
       
       // Assessment fields - let the JSON initializer handle defaults
     };
 
-    // Prepare user data for auto-filling manager information
+    // Prepare manager information from property data first, then fallback to user data
+    const managerFromProperty = propertyManager.management_contact || propertyManager.property_owner_name || '';
+    const managerEmailFromProperty = propertyManager.email || propertyManager.property_owner_email || '';
+    const managerPhoneFromProperty = propertyManager.phone || propertyManager.property_owner_phone || '';
+    
     const userData = {
-      managerName: user?.name || '',
-      managerTitle: user?.title || 'Community Manager',
-      managerCompany: user?.company || 'GMG Community Management',
-      managerPhone: user?.phone || '',
-      managerEmail: user?.email || '',
-      managerAddress: user?.address || '',
-      preparerSignature: user?.name || '',
-      preparerName: user?.name || '',
+      // Use property manager details if available, otherwise use logged-in user details
+      managerName: managerFromProperty || userToUse?.name || '',
+      managerTitle: userToUse?.title || 'Community Manager',
+      managerCompany: userToUse?.company || 'Goodman Management Group',
+      managerPhone: managerPhoneFromProperty || userToUse?.phone || '',
+      managerEmail: managerEmailFromProperty || userToUse?.email || '',
+      managerAddress: userToUse?.address || '',
+      preparerSignature: userToUse?.name || managerFromProperty || '',
+      preparerName: userToUse?.name || managerFromProperty || '',
     };
 
-    // Use the JSON-based initializer
-    const initialData = initializeFormData(propertyState, applicationData, userData);
+    // Use the JSON-based initializer with the correct state
+    const initialData = initializeFormData(effectiveState, applicationData, userData);
 
     // Set auto-generated fields
     initialData.datePrepared = new Date().toISOString().split('T')[0];
-    initialData.preparerSignature = user?.name || '';
-    initialData.preparerName = user?.name || '';
+    initialData.preparerSignature = userToUse?.name || managerFromProperty || '';
+    initialData.preparerName = userToUse?.name || managerFromProperty || '';
+
+    // Debug logging to verify auto-population
+    console.log('🔍 Initializing settlement form with data:', {
+      propertyState: effectiveState,
+      propertyAddress: initialData.propertyAddress,
+      associationName: initialData.associationName,
+      sellerName: initialData.sellerName,
+      buyerName: initialData.buyerName,
+      managerName: initialData.managerName,
+      managerEmail: initialData.managerEmail,
+      hasApplicationData: !!applicationData.propertyAddress,
+      hasUserData: !!userData.managerName
+    });
 
     setFormData(initialData);
   };
@@ -419,6 +594,15 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
         // Don't throw - form was saved successfully
       }
       
+      // Notify parent listeners to refresh tasks/status
+      if (typeof window !== 'undefined') {
+        try {
+          window.dispatchEvent(new CustomEvent('application-updated', { detail: { applicationId } }));
+        } catch (e) {
+          // no-op
+        }
+      }
+
       // Show success notification
       if (showSnackbar) {
         showSnackbar('Settlement form completed successfully!', 'success');
@@ -446,18 +630,33 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
     );
   }
 
-  if (!application || !hoaProperty) {
+  // Allow form to render with partial data - don't block on missing hoaProperty
+  if (!application) {
     return (
       <div className="text-center p-8">
         <AlertCircle className="h-12 w-12 text-red-500 mx-auto mb-4" />
         <h3 className="text-lg font-semibold text-gray-900 mb-2">Data Not Found</h3>
-        <p className="text-gray-600">Could not load application or property data.</p>
-        <button 
-          onClick={onClose}
-          className="mt-4 px-4 py-2 bg-gray-300 text-gray-700 rounded hover:bg-gray-400"
-        >
-          Close
-        </button>
+        <p className="text-gray-600 mb-4">Could not load application data.</p>
+        {errors.general && (
+          <p className="text-red-600 mb-4">{errors.general}</p>
+        )}
+        <div className="flex gap-4 justify-center">
+          <button 
+            onClick={() => {
+              setLoading(true);
+              loadApplicationData();
+            }}
+            className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+          >
+            Retry
+          </button>
+          <button 
+            onClick={onClose}
+            className="px-4 py-2 bg-gray-300 text-gray-700 rounded hover:bg-gray-400"
+          >
+            Close
+          </button>
+        </div>
       </div>
     );
   }

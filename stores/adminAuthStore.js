@@ -67,45 +67,103 @@ const useAdminAuthStore = create(
       });
     }
 
-    // Set up auth state listener
-    supabase.auth.onAuthStateChange(async (event, session) => {
-      console.log('Auth state changed:', event, session?.user?.email || 'no user');
+    // Set up auth state listener with debouncing to prevent rapid-fire updates
+    let lastEventTime = 0;
+    let debounceTimeout = null;
+    const DEBOUNCE_DELAY = 1000; // 1 second debounce
+    
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      const currentTime = Date.now();
+      const timeSinceLastEvent = currentTime - lastEventTime;
       
-      if (event === 'SIGNED_OUT' || !session?.user) {
-        set({
-          user: null,
-          profile: null,
-          role: null,
-          isLoading: false,
-          isInitialized: true,
-        });
-      } else if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
-        // Re-validate user role on sign in or token refresh
-        try {
-          const { data: profile } = await supabase
-            .from('profiles')
-            .select('role')
-            .eq('id', session.user.id)
-            .single();
-          
-          if (profile?.role === 'admin' || profile?.role === 'staff' || profile?.role === 'accounting') {
-            set({
-              user: session.user,
-              profile,
-              role: profile.role,
-              isLoading: false,
-              isInitialized: true,
-            });
-          } else {
-            // User exists but not admin/staff/accounting
+      // Skip TOKEN_REFRESHED events if we just handled an event recently
+      // TOKEN_REFRESHED happens automatically and shouldn't trigger full re-initialization
+      if (event === 'TOKEN_REFRESHED' && timeSinceLastEvent < 5000) {
+        console.log('Auth state changed: TOKEN_REFRESHED (ignored - too soon after last event)');
+        return; // Skip token refresh if recent event
+      }
+      
+      // Clear any pending debounce
+      if (debounceTimeout) {
+        clearTimeout(debounceTimeout);
+      }
+      
+      // Debounce rapid-fire events
+      debounceTimeout = setTimeout(async () => {
+        lastEventTime = Date.now();
+        console.log('Auth state changed:', event, session?.user?.email || 'no user');
+        
+        const currentState = get();
+        
+        if (event === 'SIGNED_OUT' || !session?.user) {
+          set({
+            user: null,
+            profile: null,
+            role: null,
+            isLoading: false,
+            isInitialized: true,
+          });
+        } else if (event === 'SIGNED_IN') {
+          // Only on actual sign-in: re-validate user role
+          try {
+            const { data: profile } = await supabase
+              .from('profiles')
+              .select('role')
+              .eq('id', session.user.id)
+              .single();
+            
+            if (profile?.role === 'admin' || profile?.role === 'staff' || profile?.role === 'accounting') {
+              set({
+                user: session.user,
+                profile,
+                role: profile.role,
+                isLoading: false,
+                isInitialized: true,
+              });
+            } else {
+              // User exists but not admin/staff/accounting
+              await supabase.auth.signOut();
+            }
+          } catch (error) {
+            console.error('Error checking user role:', error);
             await supabase.auth.signOut();
           }
-        } catch (error) {
-          console.error('Error checking user role:', error);
-          await supabase.auth.signOut();
+        } else if (event === 'TOKEN_REFRESHED') {
+          // For TOKEN_REFRESHED: Only update user object if it changed, don't query database
+          // Only update if user ID actually changed (shouldn't happen, but safety check)
+          if (currentState.user?.id !== session.user?.id) {
+            console.log('Token refreshed with different user - updating state');
+            try {
+              const { data: profile } = await supabase
+                .from('profiles')
+                .select('role')
+                .eq('id', session.user.id)
+                .single();
+              
+              if (profile?.role === 'admin' || profile?.role === 'staff' || profile?.role === 'accounting') {
+                set({
+                  user: session.user,
+                  profile,
+                  role: profile.role,
+                  isLoading: false,
+                  isInitialized: true,
+                });
+              }
+            } catch (error) {
+              console.warn('Token refresh: Error getting profile (non-critical):', error);
+              // Don't sign out on token refresh errors - just log
+            }
+          } else {
+            // User hasn't changed, just update the user object silently
+            // Don't query database or trigger state updates
+            console.log('Token refreshed - user unchanged, skipping updates');
+          }
         }
-      }
+      }, DEBOUNCE_DELAY);
     });
+    
+    // Store subscription for cleanup (though Zustand store doesn't typically cleanup)
+    // This listener persists for the app lifetime
   },
 
   signIn: async (email, password) => {

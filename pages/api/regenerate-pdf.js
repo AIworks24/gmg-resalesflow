@@ -30,7 +30,7 @@ export default async function handler(req, res) {
       return res.status(403).json({ error: 'Forbidden - Admin access required' });
     }
 
-    const { formData, applicationId, propertyGroupId, propertyName } = req.body;
+    const { formData: rawFormData, applicationId, propertyGroupId, propertyName } = req.body;
     
     // Use service role key for server-side operations
     const supabase = createClient(
@@ -60,14 +60,96 @@ export default async function handler(req, res) {
         .eq('id', applicationId);
     }
     
-    console.log(`🚀 Starting PDF generation for application ${applicationId}${isPropertySpecific ? `, property: ${propertyName}` : ''}`);
+    // Extract resale certificate data from nested structure if needed
+    let actualFormData = rawFormData;
+    if (rawFormData && typeof rawFormData === 'object') {
+      // Check if data is nested under resaleCertificate key
+      if (rawFormData.resaleCertificate) {
+        actualFormData = rawFormData.resaleCertificate;
+        // Also check if there's form_data or response_data nested
+        if (actualFormData.form_data) {
+          actualFormData = actualFormData.form_data;
+        } else if (actualFormData.response_data) {
+          actualFormData = actualFormData.response_data;
+        }
+      } else if (rawFormData.form_data) {
+        actualFormData = rawFormData.form_data;
+      } else if (rawFormData.response_data) {
+        actualFormData = rawFormData.response_data;
+      }
+    }
+    
+    // Fetch application and property data to enrich formData
+    const { data: applicationData, error: appError } = await supabase
+      .from('applications')
+      .select(`
+        *,
+        hoa_properties(id, name, address, location, property_owner_name, property_owner_email)
+      `)
+      .eq('id', applicationId)
+      .single();
+    
+    // Start with the extracted formData and enrich it
+    let enrichedFormData = actualFormData || {};
+    
+    if (applicationData) {
+      // Helper function to get value or fallback (handles empty strings)
+      const getValueOrFallback = (value, fallback) => {
+        if (value == null || value === '') return (fallback || '');
+        if (typeof value === 'string' && value.trim() === '') return (fallback || '');
+        return value;
+      };
+      
+      // Enrich formData with application-level data (formData takes precedence, but empty strings should use fallback)
+      enrichedFormData = {
+        // Spread existing formData first to preserve all fields
+        ...actualFormData,
+        // Override with enriched values (only if formData value is missing or empty)
+        developmentName: getValueOrFallback(actualFormData?.developmentName, applicationData.hoa_properties?.name),
+        associationName: getValueOrFallback(actualFormData?.associationName, applicationData.hoa_properties?.name),
+        associationAddress: getValueOrFallback(actualFormData?.associationAddress, applicationData.hoa_properties?.address || applicationData.hoa_properties?.location),
+        developmentLocation: getValueOrFallback(actualFormData?.developmentLocation, applicationData.hoa_properties?.location),
+        lotAddress: getValueOrFallback(actualFormData?.lotAddress, applicationData.property_address),
+        salePrice: getValueOrFallback(actualFormData?.salePrice || actualFormData?.sale_price, applicationData.sale_price),
+        closingDate: getValueOrFallback(actualFormData?.closingDate || actualFormData?.closing_date, applicationData.closing_date),
+        // Ensure preparer object exists (merge with existing if present)
+        preparer: {
+          name: actualFormData?.preparer?.name || applicationData.hoa_properties?.property_owner_name || '',
+          company: actualFormData?.preparer?.company || 'Goodman Management Group',
+          email: actualFormData?.preparer?.email || applicationData.hoa_properties?.property_owner_email || '',
+          address: actualFormData?.preparer?.address || applicationData.hoa_properties?.address || '',
+          phone: actualFormData?.preparer?.phone || ''
+        },
+        // Ensure managingAgent object exists (merge with existing if present)
+        managingAgent: {
+          name: actualFormData?.managingAgent?.name || applicationData.hoa_properties?.property_owner_name || '',
+          company: actualFormData?.managingAgent?.company || 'Goodman Management Group',
+          email: actualFormData?.managingAgent?.email || applicationData.hoa_properties?.property_owner_email || '',
+          address: actualFormData?.managingAgent?.address || applicationData.hoa_properties?.address || '',
+          phone: actualFormData?.managingAgent?.phone || '',
+          licenseNumber: actualFormData?.managingAgent?.licenseNumber || ''
+        },
+        // Ensure disclosures object exists if missing (preserve existing)
+        disclosures: actualFormData?.disclosures || {}
+      };
+      
+      // Force enrichment if values are still missing (double-check)
+      if (!enrichedFormData.developmentName || !enrichedFormData.associationName) {
+        if (applicationData.hoa_properties?.name) {
+          if (!enrichedFormData.developmentName) enrichedFormData.developmentName = applicationData.hoa_properties.name;
+          if (!enrichedFormData.associationName) enrichedFormData.associationName = applicationData.hoa_properties.name;
+          if (!enrichedFormData.associationAddress) enrichedFormData.associationAddress = applicationData.hoa_properties.address || applicationData.hoa_properties.location || '';
+          if (!enrichedFormData.lotAddress) enrichedFormData.lotAddress = applicationData.property_address || '';
+        }
+      }
+    }
     
     // Set a maximum timeout for the entire operation
     const operationTimeout = setTimeout(() => {
       console.error(`⏰ PDF generation timeout for application ${applicationId}${isPropertySpecific ? `, property: ${propertyName}` : ''}`);
     }, 30000); // 30 seconds total timeout
     
-    const fields = mapFormDataToPDFFields(formData);
+    const fields = mapFormDataToPDFFields(enrichedFormData);
     const apiKey = process.env.PDFCO_API_KEY;
     
     // Generate different file paths for property-specific vs application-wide PDFs
@@ -116,7 +198,6 @@ export default async function handler(req, res) {
       }
     }
 
-    console.log(`✅ PDF generation completed for application ${applicationId}${isPropertySpecific ? `, property: ${propertyName}` : ''} in ${generationTime}ms`);
     return res.status(200).json({ 
       success: true, 
       pdfUrl: publicURL,
@@ -145,9 +226,6 @@ export default async function handler(req, res) {
             updated_at: new Date().toISOString()
           })
           .eq('id', propertyGroupId);
-      } else {
-        // Note: Could add error tracking here if needed
-        console.log(`PDF generation failed for application ${req.body.applicationId}: ${error.message}`);
       }
     } catch (updateError) {
       console.error('Failed to update PDF error status:', updateError);

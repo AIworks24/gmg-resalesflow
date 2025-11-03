@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
 import { useRouter } from 'next/router';
 import useSWR from 'swr';
+import { deleteCachePattern } from '../../lib/redis';
 import {
   Building,
   Plus,
@@ -24,7 +25,8 @@ import {
   RefreshCw,
   Link,
   Unlink,
-  AlertTriangle
+  AlertTriangle,
+  CheckCircle
 } from 'lucide-react';
 import { 
   getLinkedProperties, 
@@ -33,18 +35,16 @@ import {
   unlinkProperties 
 } from '../../lib/multiCommunityUtils';
 import AdminLayout from './AdminLayout';
+import useAdminAuthStore from '../../stores/adminAuthStore';
 
-const AdminPropertiesManagement = ({ userRole }) => {
+const AdminPropertiesManagement = () => {
+  const { role: userRole } = useAdminAuthStore();
   const [searchTerm, setSearchTerm] = useState('');
   const [showModal, setShowModal] = useState(false);
   const [modalMode, setModalMode] = useState('add'); // 'add' or 'edit'
   const [selectedProperty, setSelectedProperty] = useState(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [propertyToDelete, setPropertyToDelete] = useState(null);
-  const [propertyFiles, setPropertyFiles] = useState({});
-  const [selectedFiles, setSelectedFiles] = useState([]);
-  const [uploading, setUploading] = useState(false);
-  
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
@@ -57,6 +57,17 @@ const AdminPropertiesManagement = ({ userRole }) => {
   const [showLinkModal, setShowLinkModal] = useState(false);
   const [linkingProperty, setLinkingProperty] = useState(null);
 
+  // Snackbar state
+  const [snackbar, setSnackbar] = useState({ show: false, message: '', type: 'success' });
+
+  // Snackbar helper function
+  const showSnackbar = (message, type = 'success') => {
+    setSnackbar({ show: true, message, type });
+    setTimeout(() => {
+      setSnackbar({ show: false, message: '', type: 'success' });
+    }, 4000); // Auto-close after 4 seconds
+  };
+
   const [formData, setFormData] = useState({
     name: '',
     location: '',
@@ -67,7 +78,10 @@ const AdminPropertiesManagement = ({ userRole }) => {
     phone: '',
     email: '',
     special_requirements: '',
-    is_multi_community: false
+    is_multi_community: false,
+    allow_public_offering: false,
+    force_price_enabled: false,
+    force_price_value: null
   });
 
   const supabase = createClientComponentClient();
@@ -110,13 +124,6 @@ const AdminPropertiesManagement = ({ userRole }) => {
     }
   }, [searchTerm]);
 
-  useEffect(() => {
-    if (properties.length > 0) {
-      loadAllPropertyFiles();
-    }
-  }, [properties]);
-
-
   // Handle auto-opening edit modal from query parameter
   useEffect(() => {
     if (router.query.edit && properties.length > 0) {
@@ -131,90 +138,6 @@ const AdminPropertiesManagement = ({ userRole }) => {
   }, [router.query.edit, properties]);
 
 
-
-
-  // File management functions
-  const loadPropertyFiles = async (propertyId) => {
-    try {
-      const { data, error } = await supabase.storage
-        .from('bucket0')
-        .list(`property_files/${propertyId}`, {
-          limit: 100,
-          offset: 0
-        });
-
-      if (error) throw error;
-      return data || [];
-    } catch (error) {
-      console.error('Error loading property files:', error);
-      return [];
-    }
-  };
-
-  const loadAllPropertyFiles = async () => {
-    const filePromises = properties.map(async (property) => {
-      if (property.documents_folder) {
-        const files = await loadPropertyFiles(property.id);
-        return { propertyId: property.id, files };
-      }
-      return { propertyId: property.id, files: [] };
-    });
-
-    const results = await Promise.all(filePromises);
-    const filesMap = {};
-    results.forEach(({ propertyId, files }) => {
-      filesMap[propertyId] = files;
-    });
-    setPropertyFiles(filesMap);
-  };
-
-  const handleFileSelect = (event) => {
-    const files = Array.from(event.target.files);
-    setSelectedFiles(files);
-  };
-
-  const uploadFiles = async (propertyId) => {
-    if (selectedFiles.length === 0) return;
-
-    setUploading(true);
-    try {
-      const uploadPromises = selectedFiles.map(async (file) => {
-        const fileName = `${Date.now()}_${file.name}`;
-        const filePath = `property_files/${propertyId}/${fileName}`;
-
-        const { error } = await supabase.storage
-          .from('bucket0')
-          .upload(filePath, file);
-
-        if (error) throw error;
-        return filePath;
-      });
-
-      await Promise.all(uploadPromises);
-      
-      // Update the documents_folder field in the database
-      const documentsFolder = `bucket0/property_files/${propertyId}`;
-      const { error: updateError } = await supabase
-        .from('hoa_properties')
-        .update({ 
-          documents_folder: documentsFolder,
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', propertyId);
-
-      if (updateError) throw updateError;
-
-      setSelectedFiles([]);
-      mutate(); // Reload properties
-      await loadAllPropertyFiles(); // Reload all files
-    } catch (error) {
-      console.error('Error uploading files:', error);
-      alert('Error uploading files: ' + error.message);
-    } finally {
-      setUploading(false);
-    }
-  };
-
   const openAddModal = () => {
     setModalMode('add');
     setSelectedProperty(null);
@@ -228,9 +151,11 @@ const AdminPropertiesManagement = ({ userRole }) => {
       phone: '',
       email: '',
       special_requirements: '',
-      is_multi_community: false
+      is_multi_community: false,
+      allow_public_offering: false,
+      force_price_enabled: false,
+      force_price_value: null
     });
-    setSelectedFiles([]);
     setIsMultiCommunity(false);
     setLinkedProperties([]);
     setShowModal(true);
@@ -249,9 +174,11 @@ const AdminPropertiesManagement = ({ userRole }) => {
       phone: property.phone || '',
       email: property.email || '',
       special_requirements: property.special_requirements || '',
-      is_multi_community: property.is_multi_community || false
+      is_multi_community: property.is_multi_community || false,
+      allow_public_offering: property.allow_public_offering || false,
+      force_price_enabled: property.force_price_enabled || false,
+      force_price_value: property.force_price_value || null
     });
-    setSelectedFiles([]);
     setIsMultiCommunity(property.is_multi_community || false);
     
     // Load linked properties for this property
@@ -281,7 +208,19 @@ const AdminPropertiesManagement = ({ userRole }) => {
         const { data, error } = await supabase
           .from('hoa_properties')
           .insert([{
-            ...formData,
+            name: formData.name,
+            location: formData.location,
+            property_owner_name: formData.property_owner_name,
+            property_owner_email: formData.property_owner_email,
+            property_owner_phone: formData.property_owner_phone,
+            management_contact: formData.management_contact,
+            phone: formData.phone,
+            email: formData.email,
+            special_requirements: formData.special_requirements,
+            is_multi_community: formData.is_multi_community,
+            allow_public_offering: formData.allow_public_offering || false,
+            force_price_enabled: formData.force_price_enabled || false,
+            force_price_value: formData.force_price_enabled ? (formData.force_price_value || null) : null,
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString()
           }])
@@ -295,7 +234,19 @@ const AdminPropertiesManagement = ({ userRole }) => {
         const { error } = await supabase
           .from('hoa_properties')
           .update({
-            ...formData,
+            name: formData.name,
+            location: formData.location,
+            property_owner_name: formData.property_owner_name,
+            property_owner_email: formData.property_owner_email,
+            property_owner_phone: formData.property_owner_phone,
+            management_contact: formData.management_contact,
+            phone: formData.phone,
+            email: formData.email,
+            special_requirements: formData.special_requirements,
+            is_multi_community: formData.is_multi_community,
+            allow_public_offering: formData.allow_public_offering || false,
+            force_price_enabled: formData.force_price_enabled || false,
+            force_price_value: formData.force_price_enabled ? (formData.force_price_value || null) : null,
             updated_at: new Date().toISOString()
           })
           .eq('id', selectedProperty.id);
@@ -304,16 +255,55 @@ const AdminPropertiesManagement = ({ userRole }) => {
         propertyId = selectedProperty.id;
       }
 
-      // Upload files if any are selected
-      if (selectedFiles.length > 0) {
-        await uploadFiles(propertyId);
+      // Fetch the updated property directly from database to bypass cache
+      // This ensures we have the latest data including allow_public_offering
+      const { data: updatedProperty, error: fetchError } = await supabase
+        .from('hoa_properties')
+        .select('*')
+        .eq('id', propertyId)
+        .single();
+
+      if (fetchError) {
+        console.warn('Could not fetch updated property:', fetchError);
       }
 
+      // Close modal first
       setShowModal(false);
-      mutate();
+      
+      // Force SWR to revalidate by fetching with bypassCache parameter
+      // This bypasses both SWR cache and Redis cache
+      const refreshUrl = `/api/admin/hoa-properties?page=${currentPage}&pageSize=${pageSize}&search=${encodeURIComponent(searchTerm)}&bypassCache=true&_t=${Date.now()}`;
+      try {
+        const freshResponse = await fetch(refreshUrl);
+        const freshData = await freshResponse.json();
+        
+        // Update SWR cache with fresh data
+        mutate(freshData, false);
+      } catch (refreshError) {
+        console.warn('Could not refresh properties cache:', refreshError);
+        // Fallback: just revalidate normally
+        mutate();
+      }
+      
+      // Also optimistically update the cache with fresh property data if available
+      if (updatedProperty && swrData?.properties) {
+        const updatedProperties = swrData.properties.map(p => 
+          p.id === propertyId ? updatedProperty : p
+        );
+        // Update cache optimistically
+        mutate({ ...swrData, properties: updatedProperties }, false);
+      }
+      
+      // Show success message
+      showSnackbar('Property saved successfully!', 'success');
     } catch (error) {
       console.error('Error saving property:', error);
-      alert('Error saving property: ' + error.message);
+      console.error('Full error details:', JSON.stringify(error, null, 2));
+      
+      // Show detailed error message
+      const errorMessage = error.message || 'Unknown error occurred';
+      const errorDetails = error.details || error.hint || '';
+      showSnackbar(`Error saving property: ${errorMessage}${errorDetails ? ' - ' + errorDetails : ''}`, 'error');
     }
   };
 
@@ -496,7 +486,8 @@ const AdminPropertiesManagement = ({ userRole }) => {
 
           {/* Table Skeleton */}
           <div className="bg-white rounded-lg shadow overflow-hidden">
-            <table className="min-w-full divide-y divide-gray-200">
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-gray-200">
               <thead className="bg-gray-50">
                 <tr>
                   <th className="px-6 py-3 text-left">
@@ -537,9 +528,6 @@ const AdminPropertiesManagement = ({ userRole }) => {
                       <div className="h-5 bg-gray-200 rounded-full w-12 animate-pulse"></div>
                     </td>
                     <td className="px-6 py-4">
-                      <div className="h-4 bg-gray-200 rounded w-8 animate-pulse"></div>
-                    </td>
-                    <td className="px-6 py-4">
                       <div className="flex gap-2">
                         <div className="h-8 w-8 bg-gray-200 rounded animate-pulse"></div>
                         <div className="h-8 w-8 bg-gray-200 rounded animate-pulse"></div>
@@ -550,6 +538,7 @@ const AdminPropertiesManagement = ({ userRole }) => {
                 ))}
               </tbody>
             </table>
+            </div>
           </div>
 
           {/* Pagination Skeleton */}
@@ -621,7 +610,8 @@ const AdminPropertiesManagement = ({ userRole }) => {
 
         {/* Properties Table */}
         <div className="bg-white rounded-lg shadow overflow-hidden">
-          <table className="min-w-full divide-y divide-gray-200">
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50">
               <tr>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -635,9 +625,6 @@ const AdminPropertiesManagement = ({ userRole }) => {
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   Multi-Community
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Files
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   Actions
@@ -664,9 +651,6 @@ const AdminPropertiesManagement = ({ userRole }) => {
                       <div className="h-5 bg-gray-200 rounded-full w-12"></div>
                     </td>
                     <td className="px-6 py-4">
-                      <div className="h-4 bg-gray-200 rounded w-8"></div>
-                    </td>
-                    <td className="px-6 py-4">
                       <div className="flex gap-2">
                         <div className="h-8 w-8 bg-gray-200 rounded"></div>
                         <div className="h-8 w-8 bg-gray-200 rounded"></div>
@@ -677,7 +661,7 @@ const AdminPropertiesManagement = ({ userRole }) => {
                 ))
               ) : properties.length === 0 ? (
                 <tr>
-                  <td colSpan="6" className="px-6 py-12 text-center text-gray-500">
+                  <td colSpan="5" className="px-6 py-12 text-center text-gray-500">
                     No properties found
                   </td>
                 </tr>
@@ -711,36 +695,6 @@ const AdminPropertiesManagement = ({ userRole }) => {
                     ) : (
                       <span className="text-sm text-gray-400">Single</span>
                     )}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <div className="flex items-center gap-2">
-                      <FileText className="w-4 h-4 text-gray-400" />
-                      <div className="text-sm">
-                        {property.documents_folder ? (
-                          <div>
-                            <div className="text-gray-900 font-medium">
-                              {propertyFiles[property.id]?.length || 0} file(s)
-                            </div>
-                            {propertyFiles[property.id]?.length > 0 && (
-                              <div className="text-gray-500 text-xs">
-                                {propertyFiles[property.id].slice(0, 2).map((file, index) => (
-                                  <div key={index}>
-                                    {file.name.split('_').slice(1).join('_')}
-                                  </div>
-                                ))}
-                                {propertyFiles[property.id].length > 2 && (
-                                  <div className="text-gray-400">
-                                    +{propertyFiles[property.id].length - 2} more
-                                  </div>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                        ) : (
-                          <span className="text-gray-500 italic">No files</span>
-                        )}
-                      </div>
-                    </div>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-2">
                     <button
@@ -780,6 +734,7 @@ const AdminPropertiesManagement = ({ userRole }) => {
               )}
             </tbody>
           </table>
+          </div>
         </div>
 
         {/* Pagination */}
@@ -980,6 +935,91 @@ const AdminPropertiesManagement = ({ userRole }) => {
                   )}
                 </div>
 
+                {/* Public Offering Statement Settings */}
+                <div className="border-t pt-4">
+                  <h3 className="text-md font-medium text-gray-900 mb-3">Public Offering Statement</h3>
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="checkbox"
+                      id="allow_public_offering"
+                      checked={formData.allow_public_offering || false}
+                      onChange={(e) => setFormData({...formData, allow_public_offering: e.target.checked})}
+                      className="w-4 h-4 text-green-600 border-gray-300 rounded focus:ring-green-500"
+                    />
+                    <label htmlFor="allow_public_offering" className="text-sm font-medium text-gray-700">
+                      Allow Public Offering Statement Requests
+                    </label>
+                  </div>
+                  {formData.allow_public_offering && (
+                    <div className="mt-3 p-3 bg-amber-50 rounded-md">
+                      <div className="flex items-start gap-2">
+                        <AlertTriangle className="w-4 h-4 text-amber-600 mt-0.5" />
+                        <div className="text-sm text-amber-800">
+                          <p className="font-medium">Public Offering Statement Enabled</p>
+                          <p className="text-amber-700">
+                            When enabled, users selecting "Builder/Developer" as their submitter type will see 
+                            the option to request a Public Offering Statement ($200 fixed fee). Only enable this 
+                            for condo-type properties that have Public Offering Statement documents available.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Force Price Settings - Only for Admin/Accounting */}
+                {(userRole === 'admin' || userRole === 'accounting') && (
+                  <div className="border-t pt-4">
+                    <h3 className="text-md font-medium text-gray-900 mb-3">Force Price Settings</h3>
+                    <div className="flex items-center gap-3 mb-3">
+                      <input
+                        type="checkbox"
+                        id="force_price_enabled"
+                        checked={formData.force_price_enabled || false}
+                        onChange={(e) => {
+                          const enabled = e.target.checked;
+                          setFormData({
+                            ...formData, 
+                            force_price_enabled: enabled,
+                            force_price_value: enabled ? (formData.force_price_value || 200.00) : null
+                          });
+                        }}
+                        className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                      />
+                      <label htmlFor="force_price_enabled" className="text-sm font-medium text-gray-700">
+                        Force Property Price
+                      </label>
+                    </div>
+                    {formData.force_price_enabled && (
+                      <div className="ml-7 flex items-center gap-3">
+                        <label htmlFor="force_price_value" className="text-sm font-medium text-gray-700 whitespace-nowrap">
+                          Forced Price Value: $
+                        </label>
+                        <input
+                          id="force_price_value"
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          value={formData.force_price_value || 200.00}
+                          onChange={(e) => {
+                            const value = parseFloat(e.target.value) || 0;
+                            setFormData({...formData, force_price_value: value});
+                          }}
+                          placeholder="200.00"
+                          className="w-32 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                      </div>
+                    )}
+                    {formData.force_price_enabled && (
+                      <div className="ml-7 mt-2">
+                        <p className="text-xs text-gray-500">
+                          This price will override the standard property price during checkout. Rush fees do not apply when force price is enabled.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {/* Special Requirements */}
                 <div className="border-t pt-4">
                   <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -994,48 +1034,6 @@ const AdminPropertiesManagement = ({ userRole }) => {
                   />
                 </div>
 
-                {/* File Upload */}
-                <div className="border-t pt-4">
-                  <h3 className="text-md font-medium text-gray-900 mb-3">Property Files</h3>
-                  <div className="mb-4">
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Upload Files
-                    </label>
-                    <div className="flex items-center gap-4">
-                      <input
-                        type="file"
-                        multiple
-                        onChange={handleFileSelect}
-                        className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-medium file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
-                      />
-                      {selectedFiles.length > 0 && (
-                        <span className="text-sm text-gray-600">
-                          {selectedFiles.length} file(s) selected
-                        </span>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Show existing files for edit mode */}
-                  {modalMode === 'edit' && selectedProperty && propertyFiles[selectedProperty.id]?.length > 0 && (
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">
-                        Current Files
-                      </label>
-                      <div className="space-y-1 max-h-32 overflow-y-auto">
-                        {propertyFiles[selectedProperty.id].map((file, index) => (
-                          <div key={index} className="flex items-center gap-2 p-2 bg-gray-50 rounded-md">
-                            <FileText className="w-4 h-4 text-gray-400" />
-                            <span className="text-sm text-gray-700">
-                              {file.name.split('_').slice(1).join('_')}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-
                 <div className="flex justify-end gap-3 pt-4">
                   <button
                     type="button"
@@ -1046,20 +1044,10 @@ const AdminPropertiesManagement = ({ userRole }) => {
                   </button>
                   <button
                     type="submit"
-                    disabled={uploading}
-                    className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 flex items-center gap-2 disabled:opacity-50"
+                    className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 flex items-center gap-2"
                   >
-                    {uploading ? (
-                      <>
-                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                        Uploading...
-                      </>
-                    ) : (
-                      <>
-                        <Save className="w-4 h-4" />
-                        {modalMode === 'add' ? 'Add Property' : 'Update Property'}
-                      </>
-                    )}
+                    <Save className="w-4 h-4" />
+                    {modalMode === 'add' ? 'Add Property' : 'Update Property'}
                   </button>
                 </div>
               </form>
@@ -1186,6 +1174,32 @@ const AdminPropertiesManagement = ({ userRole }) => {
                   Delete
                 </button>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* Snackbar Notification */}
+        {snackbar.show && (
+          <div className='fixed bottom-4 right-4 z-[90]'>
+            <div className={`
+              px-6 py-4 rounded-lg shadow-lg border flex items-center gap-3 max-w-md
+              ${snackbar.type === 'success' 
+                ? 'bg-green-50 border-green-200 text-green-800' 
+                : 'bg-red-50 border-red-200 text-red-800'
+              }
+            `}>
+              {snackbar.type === 'success' ? (
+                <CheckCircle className='w-5 h-5' />
+              ) : (
+                <AlertTriangle className='w-5 h-5' />
+              )}
+              <span className='text-sm font-medium'>{snackbar.message}</span>
+              <button
+                onClick={() => setSnackbar({ show: false, message: '', type: 'success' })}
+                className='text-current opacity-70 hover:opacity-100'
+              >
+                <X className='w-4 h-4' />
+              </button>
             </div>
           </div>
         )}

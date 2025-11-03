@@ -79,8 +79,8 @@ export default async function handler(req, res) {
       : `Resale Certificate Ready - ${application.property_address}`;
     
     const notificationMessage = isPropertySpecific
-      ? `Your Resale Certificate for ${propertyName} in ${application.hoa_properties.name} is now ready. You can download it using the link provided in the email.`
-      : `Your Resale Certificate for ${application.property_address} in ${application.hoa_properties.name} is now ready. You can download it using the link provided in the email.`;
+      ? `Your document(s) for ${propertyName} in ${application.hoa_properties.name} are now ready for download.`
+      : `Your document(s) for ${application.property_address} in ${application.hoa_properties.name} are now ready for download.`;
 
     const { error: notifError } = await supabase.from('notifications').insert([
       {

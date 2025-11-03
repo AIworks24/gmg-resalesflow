@@ -610,20 +610,11 @@ const AdminApplications = ({ userRole }) => {
     let emailsSent = 0;
 
     propertyGroups.forEach((group, index) => {
-      const isPrimary = group.is_primary;
-      
-      // Check form completion based on property type
-      let formsCompleted = false;
-      if (isPrimary) {
-        // Primary property needs both inspection and resale forms
-        const inspectionForm = application.property_owner_forms?.find(form => form.form_type === 'inspection_form');
-        const inspectionStatus = inspectionForm?.status || 'not_started';
-        const resaleStatus = group.status === 'completed';
-        formsCompleted = inspectionStatus === 'completed' && resaleStatus;
-      } else {
-        // Secondary properties only need resale form
-        formsCompleted = group.status === 'completed';
-      }
+      // All properties need both inspection and resale forms
+      // Use property-group-specific inspection status only (no fallback to application-level)
+      const inspectionStatus = group.inspection_status ?? 'not_started';
+      const resaleStatus = group.status === 'completed';
+      const formsCompleted = inspectionStatus === 'completed' && resaleStatus;
 
       if (formsCompleted) {
         // Check PDF generation
@@ -638,9 +629,9 @@ const AdminApplications = ({ userRole }) => {
         }
       } else {
         // Check if forms are in progress
-        const inspectionForm = application.property_owner_forms?.find(form => form.form_type === 'inspection_form');
-        if (group.status === 'in_progress' || 
-            (isPrimary && inspectionForm?.status === 'in_progress')) {
+        // Use property-group-specific inspection status only (no fallback to application-level)
+        const inspectionStatus = group.inspection_status ?? 'not_started';
+        if (group.status === 'in_progress' || inspectionStatus === 'in_progress') {
           formsInProgress++;
         }
       }
@@ -924,6 +915,41 @@ const AdminApplications = ({ userRole }) => {
     }
   };
 
+  // Listen for application updates (e.g., settlement form completed) and refresh
+  useEffect(() => {
+    const handler = async (e) => {
+      const updatedId = e.detail?.applicationId;
+      try {
+        // Refresh the applications list using SWR mutate
+        await mutate();
+        // Also refresh the selected application if it's the one that was updated
+        if (selectedApplication && selectedApplication.id === updatedId) {
+          const { data: updatedApp } = await supabase
+            .from('applications')
+            .select(`
+              *,
+              hoa_properties(name, property_owner_email, property_owner_name, is_multi_community),
+              property_owner_forms(id, form_type, status, completed_at, form_data, response_data),
+              notifications(id, notification_type, status, sent_at)
+            `)
+            .eq('id', updatedId)
+            .single();
+          if (updatedApp) setSelectedApplication(updatedApp);
+        }
+      } catch (err) {
+        console.error('Failed to refresh after application update:', err);
+      }
+    };
+    if (typeof window !== 'undefined') {
+      window.addEventListener('application-updated', handler);
+    }
+    return () => {
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('application-updated', handler);
+      }
+    };
+  }, [selectedApplication, mutate, supabase]);
+
   const loadFormData = async (applicationId, formType, group) => {
     try {
       // Load application data with HOA properties
@@ -943,26 +969,49 @@ const AdminApplications = ({ userRole }) => {
       const effectiveHoaId = group?.property_id || appData.hoa_property_id;
 
       // Get or create the form
-      let { data: formData, error: formError } = await supabase
+      // For inspection forms in multi-community apps, query by property_group_id if available
+      let query = supabase
         .from('property_owner_forms')
-        .select('id, form_data, response_data, status')
+        .select('id, form_data, response_data, status, property_group_id')
         .eq('application_id', applicationId)
-        .eq('form_type', formType === 'inspection' ? 'inspection_form' : 'resale_certificate')
-        .single();
+        .eq('form_type', formType === 'inspection' ? 'inspection_form' : 'resale_certificate');
+      
+      // If this is an inspection form and we have a property group, filter by property_group_id
+      // This ensures each property has its own form
+      if (formType === 'inspection' && group?.id) {
+        query = query.eq('property_group_id', group.id);
+      }
+      
+      let { data: formData, error: formError } = await query.single();
+      
+      // Special handling: If we found a form without property_group_id in a multi-community context,
+      // treat it as "not found" and create a new form for this property group
+      if (formData && formType === 'inspection' && group?.id && !formData.property_group_id) {
+        console.log(`⚠️ Found inspection form without property_group_id for multi-community app. Creating new form for property group ${group.id}`);
+        formError = { code: 'PGRST116' }; // Simulate "not found" to trigger form creation
+        formData = null;
+      }
 
       // If no form exists, create it
       if (formError && formError.code === 'PGRST116') {
+        const formDataToInsert = {
+          application_id: applicationId,
+          form_type: formType === 'inspection' ? 'inspection_form' : 'resale_certificate',
+          status: 'not_started',
+          access_token: crypto.randomUUID(),
+          recipient_email: appData.hoa_properties?.property_owner_email || appData.submitter_email || 'admin@gmgva.com',
+          expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+          created_at: new Date().toISOString()
+        };
+        
+        // For inspection forms in multi-community apps, associate with property group
+        if (formType === 'inspection' && group?.id) {
+          formDataToInsert.property_group_id = group.id;
+        }
+        
         const { data: newForm, error: createError } = await supabase
           .from('property_owner_forms')
-          .insert([{
-            application_id: applicationId,
-            form_type: formType === 'inspection' ? 'inspection_form' : 'resale_certificate',
-            status: 'not_started',
-            access_token: crypto.randomUUID(),
-            recipient_email: appData.hoa_properties?.property_owner_email || appData.submitter_email || 'admin@gmgva.com',
-            expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
-            created_at: new Date().toISOString()
-          }])
+          .insert([formDataToInsert])
           .select()
           .single();
 
@@ -1020,7 +1069,7 @@ const AdminApplications = ({ userRole }) => {
           hoa_properties(name, property_owner_email, property_owner_name, is_multi_community),
           property_owner_forms(id, form_type, status, completed_at, form_data, response_data),
           notifications(id, notification_type, status, sent_at),
-          application_property_groups(id, property_id, property_name, property_location, is_primary, status,
+          application_property_groups(id, property_id, property_name, property_location, is_primary, status, inspection_status, inspection_completed_at,
             hoa_properties(id, name, location)
           )
         `)
@@ -1079,33 +1128,48 @@ const AdminApplications = ({ userRole }) => {
     try {
       if (selectedApplication && currentFormType) {
         if (currentFormType === 'inspection') {
-          // Application-level inspection completion (primary only)
-          await fetch('/api/complete-task', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ applicationId: selectedApplication.id, taskName: 'inspection_form' })
-          });
-          // Ensure the inspection form record shows completed in UI immediately
+          // Per-property inspection completion - update the property group's inspection_status
+          if (currentGroupId) {
+            // Update the property group's inspection status
+            const { error: groupUpdateError } = await supabase
+              .from('application_property_groups')
+              .update({
+                inspection_status: 'completed',
+                inspection_completed_at: new Date().toISOString(),
+                updated_at: new Date().toISOString()
+              })
+              .eq('id', currentGroupId);
+            
+            if (groupUpdateError) {
+              console.error('Error updating property group inspection status:', groupUpdateError);
+            } else {
+              console.log(`✅ Updated inspection_status for property group ${currentGroupId}`);
+            }
+          }
+          
+          // Also update the form record
           if (currentFormId) {
             await supabase
               .from('property_owner_forms')
               .update({ status: 'completed', completed_at: new Date().toISOString() })
               .eq('id', currentFormId);
           }
-          // Optimistic UI update so the task flips instantly
-          setSelectedApplication((prev) => prev ? {
-            ...prev,
-            inspection_form_completed_at: new Date().toISOString(),
-            forms: {
-              ...prev.forms,
-              inspectionForm: {
-                ...(prev.forms?.inspectionForm || {}),
-                status: 'completed'
-              }
-            }
-          } : prev);
+          
+          // For backwards compatibility, also update application-level if it's a single property app
+          if (!currentGroupId) {
+            await fetch('/api/complete-task', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ applicationId: selectedApplication.id, taskName: 'inspection_form' })
+            });
+          }
+          
           try {
-            await refreshSelectedApplication(selectedApplication.id);
+            // Refresh both the application and property groups to ensure UI updates
+            await Promise.all([
+              refreshSelectedApplication(selectedApplication.id),
+              currentGroupId && loadPropertyGroups(selectedApplication.id)
+            ]);
           } catch (refreshError) {
             console.warn('Failed to refresh selected application after inspection form completion:', refreshError);
           }
@@ -1234,6 +1298,7 @@ const AdminApplications = ({ userRole }) => {
 
       if (!settlementForm) {
         showSnackbar('Settlement form not found', 'error');
+        setGeneratingPDF(false);
         return;
       }
 
@@ -1250,22 +1315,27 @@ const AdminApplications = ({ userRole }) => {
       const result = await response.json();
       if (!result.success) throw new Error(result.error || 'Failed to generate PDF');
       
-      // Refresh applications list
-      await mutate();
-      
-      // Update the selected application if it's open in the modal
-      if (selectedApplication && selectedApplication.id === applicationId) {
-        const updatedApp = await refreshSelectedApplication(applicationId);
-        if (updatedApp) {
-          setSelectedApplication(updatedApp);
-        }
-      }
+      // Clear loading state immediately after successful generation
+      setGeneratingPDF(false);
       
       showSnackbar('PDF generated successfully!', 'success');
+      
+      // Refresh applications list and selected application in background (non-blocking)
+      Promise.all([
+        mutate().catch(err => console.warn('Failed to refresh applications list:', err)),
+        selectedApplication && selectedApplication.id === applicationId
+          ? refreshSelectedApplication(applicationId).catch(err => console.warn('Failed to refresh selected application:', err))
+          : Promise.resolve()
+      ]).then(() => {
+        // Optionally dispatch event to trigger UI update
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('application-updated', { detail: { applicationId } }));
+        }
+      });
+      
     } catch (error) {
       console.error('Failed to generate settlement PDF:', error);
       showSnackbar('Failed to generate PDF. Please try again.', 'error');
-    } finally {
       setGeneratingPDF(false);
     }
   };
@@ -1576,7 +1646,7 @@ const AdminApplications = ({ userRole }) => {
       console.log(`🔄 Loading property groups for application ${applicationId}`);
       const { data, error } = await supabase
         .from('application_property_groups')
-        .select('*')
+        .select('id, property_id, property_name, property_location, is_primary, status, inspection_status, inspection_completed_at, pdf_status, pdf_url, email_status, form_data, hoa_properties(id, name, location)')
         .eq('application_id', applicationId)
         .order('is_primary', { ascending: false })
         .order('created_at', { ascending: true });
@@ -1869,16 +1939,12 @@ const AdminApplications = ({ userRole }) => {
   // Helper functions for multi-community property tasks
   const canGeneratePDFForProperty = (group) => {
     // Check if both forms are completed for this property
-    const isPrimary = !!group.is_primary;
-    const taskStatuses = getTaskStatuses(selectedApplication);
+    // All properties now require both inspection and resale forms
+    // Use property-group-specific inspection status only (no fallback to application-level)
+    const inspectionStatus = group.inspection_status ?? 'not_started';
     
-    // For primary property: both inspection and resale must be completed
-    if (isPrimary) {
-      return taskStatuses.inspection === 'completed' && group.status === 'completed';
-    }
-    
-    // For secondary properties: only resale form needs to be completed
-    return group.status === 'completed';
+    // All properties need both inspection and resale forms completed
+    return inspectionStatus === 'completed' && group.status === 'completed';
   };
 
   const canSendEmailForProperty = (group) => {
@@ -2741,51 +2807,51 @@ const AdminApplications = ({ userRole }) => {
                                   const taskStatuses = getTaskStatuses(selectedApplication);
                                   const isPrimary = !!group.is_primary;
                                   const resaleStatusForGroup = group.status === 'completed' ? 'completed' : 'not_started';
+                                  // Use property-group-specific inspection status for multi-community apps
+                                  // For multi-community, never fall back to application-level - default to 'not_started' if not set
+                                  const inspectionStatusForGroup = group.inspection_status ?? 'not_started';
 
                                   return (
                                     <>
-                                      {/* Task A: Property Inspection Form (Primary only) */}
-                                      <div className={`border rounded-lg p-3 ${getTaskStatusColor(isPrimary ? taskStatuses.inspection : 'not_started')}`}>
+                                      {/* Task A: Property Inspection Form (All properties) */}
+                                      <div className={`border rounded-lg p-3 ${getTaskStatusColor(inspectionStatusForGroup)}`}>
                                         <div className='flex items-center justify-between'>
                                           <div className='flex items-center gap-3'>
                                             <div className='flex items-center justify-center w-6 h-6 rounded-full bg-white border-2 border-current'>
                                               <span className='text-xs font-bold'>1</span>
                                             </div>
-                                            {getTaskStatusIcon(isPrimary ? taskStatuses.inspection : 'not_started')}
+                                            {getTaskStatusIcon(inspectionStatusForGroup)}
                                             <div>
                                               <h5 className='font-medium text-sm'>Property Inspection Form</h5>
-                                              {isPrimary ? (
-                                                <p className='text-xs opacity-75'>{getTaskStatusText(taskStatuses.inspection)}</p>
-                                              ) : (
-                                                <div className='flex items-center gap-2'>
-                                                  <span className='text-xs text-gray-500'>Not applicable for secondary properties</span>
-                                                  <span className='px-2 py-0.5 text-[10px] rounded-full bg-gray-200 text-gray-700'>Not applicable</span>
-                                                </div>
-                                              )}
+                                              <p className='text-xs opacity-75'>{getTaskStatusText(inspectionStatusForGroup)}</p>
                                             </div>
                                           </div>
                                           <div className='flex gap-2'>
-                                            {isPrimary ? (
-                                              <>
                                             <button
                                               onClick={() => handleCompleteForm(selectedApplication.id, 'inspection', group)}
-                                                  disabled={loadingFormData}
-                                                  className='px-3 py-1 text-xs bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity font-medium disabled:opacity-50 disabled:cursor-not-allowed'
-                                                >
-                                              {loadingFormKey === `inspection:${group.id}` ? 'Loading...' : getFormButtonText(taskStatuses.inspection)}
-                                                </button>
-                                                {!selectedApplication.inspection_form_completed_at && (
-                                                  <button
-                                                    onClick={() => handleCompleteTask(selectedApplication.id, 'inspection_form')}
-                                                    className='px-2 py-1 text-xs bg-green-100 text-green-800 border border-green-300 rounded-md hover:bg-green-200 transition-colors font-medium'
-                                                    title='Mark this task as completed'
-                                                  >
-                                                    Mark Complete
-                                                  </button>
-                                                )}
-                                              </>
-                                            ) : (
-                                              <span className='text-xs text-gray-400'>Disabled</span>
+                                              disabled={loadingFormData}
+                                              className='px-3 py-1 text-xs bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity font-medium disabled:opacity-50 disabled:cursor-not-allowed'
+                                            >
+                                              {loadingFormKey === `inspection:${group.id}` ? 'Loading...' : getFormButtonText(inspectionStatusForGroup)}
+                                            </button>
+                                            {inspectionStatusForGroup !== 'completed' && (
+                                              <button
+                                                onClick={() => {
+                                                  // Update property group inspection status directly
+                                                  supabase
+                                                    .from('application_property_groups')
+                                                    .update({
+                                                      inspection_status: 'completed',
+                                                      inspection_completed_at: new Date().toISOString()
+                                                    })
+                                                    .eq('id', group.id)
+                                                    .then(() => refreshSelectedApplication(selectedApplication.id));
+                                                }}
+                                                className='px-2 py-1 text-xs bg-green-100 text-green-800 border border-green-300 rounded-md hover:bg-green-200 transition-colors font-medium'
+                                                title='Mark this task as completed'
+                                              >
+                                                Mark Complete
+                                              </button>
                                             )}
                                           </div>
                                         </div>

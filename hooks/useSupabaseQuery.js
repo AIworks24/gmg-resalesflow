@@ -34,18 +34,63 @@ export function useSupabaseQuery(table, select, options = {}, swrOptions = {}) {
     .update(JSON.stringify(cacheKeyData))
     .digest('hex');
   
-  // Add a version to force cache invalidation on auth changes
+  // Add a version to force cache invalidation on meaningful auth changes
   const [authVersion, setAuthVersion] = React.useState(0);
   
-  // Listen for auth state changes
+  // Listen for auth state changes - but only meaningful ones
   React.useEffect(() => {
     const supabase = createClientComponentClient();
-    const subscription = supabase.auth.onAuthStateChange(() => {
-      console.log(`[useSupabaseQuery] Auth state changed, incrementing cache version for ${table}`);
-      setAuthVersion(v => v + 1);
+    let debounceTimeout = null;
+    let lastUserId = null;
+    
+    // Initialize lastUserId from current session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      lastUserId = session?.user?.id || null;
+    });
+    
+    const subscription = supabase.auth.onAuthStateChange((event, session) => {
+      const currentUserId = session?.user?.id || null;
+      
+      // Only respond to meaningful auth events, not TOKEN_REFRESHED
+      // TOKEN_REFRESHED happens automatically and shouldn't invalidate cache
+      if (event === 'TOKEN_REFRESHED') {
+        // Check if user actually changed
+        if (currentUserId === lastUserId) {
+          // Same user, token just refreshed - don't invalidate cache
+          return;
+        }
+        // User changed on token refresh (unusual) - will handle in debounced callback
+      }
+      
+      // Debounce to prevent rapid-fire cache invalidations
+      if (debounceTimeout) {
+        clearTimeout(debounceTimeout);
+      }
+      
+      debounceTimeout = setTimeout(() => {
+        // Update lastUserId after processing
+        if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
+          lastUserId = currentUserId;
+        } else if (event === 'SIGNED_OUT') {
+          lastUserId = null;
+        }
+        
+        // Only invalidate on actual sign in/out events
+        if (event === 'SIGNED_IN' || event === 'SIGNED_OUT' || event === 'USER_UPDATED') {
+          console.log(`[useSupabaseQuery] ${event} - invalidating cache for ${table}`);
+          setAuthVersion(v => v + 1);
+        } else if (event === 'TOKEN_REFRESHED') {
+          // This should never trigger since we return early above, but just in case
+          console.log(`[useSupabaseQuery] Token refreshed with user change - invalidating cache for ${table}`);
+          setAuthVersion(v => v + 1);
+        }
+      }, 500); // 500ms debounce
     });
     
     return () => {
+      if (debounceTimeout) {
+        clearTimeout(debounceTimeout);
+      }
       subscription.data?.subscription?.unsubscribe();
     };
   }, [table]);

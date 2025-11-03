@@ -181,11 +181,31 @@ export default async function handler(req, res) {
     } else {
       // Single property pricing
       try {
-        // Get base price without credit card fee
-        basePrice = await getApplicationTypePricing(applicationType, packageType);
+        // Get property ID from hoaProperty (should be available from earlier fetch)
+        const propertyId = allProperties.length > 0 ? allProperties[0].id : null;
         
-        // Get total amount including credit card fee
-        totalAmount = await calculateTotalAmount(applicationType, packageType, paymentMethod);
+        // Get base price without credit card fee (pass propertyId to check for forced price)
+        basePrice = await getApplicationTypePricing(applicationType, packageType, propertyId, supabase);
+        
+        // Calculate total amount
+        // Note: getApplicationTypePricing already handles forced price + rush fees correctly
+        // basePrice will contain: forced price (if enabled) + rush fee (if rush package)
+        // So we just need to add convenience fee
+        if (propertyId) {
+          const { getForcedPriceValue } = require('../../lib/propertyPricingUtils');
+          const forcedPrice = await getForcedPriceValue(propertyId, supabase);
+          if (forcedPrice !== null) {
+            // basePrice already includes forced price + rush fee (if rush)
+            // Just add convenience fee
+            totalAmount = basePrice + (paymentMethod === 'credit_card' ? 9.95 : 0);
+          } else {
+            // Use standard calculation with rush fees
+            totalAmount = await calculateTotalAmount(applicationType, packageType, paymentMethod);
+          }
+        } else {
+          // No propertyId available, use standard calculation
+          totalAmount = await calculateTotalAmount(applicationType, packageType, paymentMethod);
+        }
         
         // Get messaging for the application type
         messaging = getApplicationTypeMessaging(applicationType);
