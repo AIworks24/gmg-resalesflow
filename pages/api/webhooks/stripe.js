@@ -119,7 +119,22 @@ export default async function handler(req, res) {
         const isMultiCommunity = paymentIntent.metadata.isMultiCommunity === 'true';
         
         if (applicationId) {
-          if (isMultiCommunity) {
+          // Check if this is a lender questionnaire application
+          const { data: appData } = await supabase
+            .from('applications')
+            .select('application_type')
+            .eq('id', applicationId)
+            .single();
+          
+          // Skip property owner forms for lender questionnaire (user uploads their own form)
+          if (appData?.application_type === 'lender_questionnaire') {
+            // Update status to under_review (file will be uploaded separately)
+            await supabase
+              .from('applications')
+              .update({ status: 'under_review' })
+              .eq('id', applicationId);
+            console.log(`Skipping property owner forms for lender questionnaire application ${applicationId}`);
+          } else if (isMultiCommunity) {
             await handleMultiCommunityApplication(applicationId, paymentIntent.metadata);
           } else {
             await createPropertyOwnerForms(applicationId, paymentIntent.metadata);

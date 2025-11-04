@@ -190,7 +190,7 @@ export default async function handler(req, res) {
     <div class="section">
         <h2>Additional Information</h2>
         <p>This form was completed as part of the resale certificate process for ${application.property_address}.</p>
-        <p>For questions or concerns, please contact Goodman Management Group at resales@gmgva.com</p>
+        <p>For questions or concerns, please contact GMG ResaleFlow at resales@gmgva.com</p>
     </div>
 </body>
 </html>`;

@@ -189,17 +189,26 @@ export default async function handler(req, res) {
         
         // Calculate total amount
         // Note: getApplicationTypePricing already handles forced price + rush fees correctly
-        // basePrice will contain: forced price (if enabled) + rush fee (if rush package)
+        // basePrice will contain: forced price (if enabled and applicable) + rush fee (if rush package)
+        // Forced price only applies to standard resale applications (single_property, multi_community)
         // So we just need to add convenience fee
         if (propertyId) {
+          const { shouldApplyForcedPrice } = require('../../lib/applicationTypes');
           const { getForcedPriceValue } = require('../../lib/propertyPricingUtils');
-          const forcedPrice = await getForcedPriceValue(propertyId, supabase);
-          if (forcedPrice !== null) {
-            // basePrice already includes forced price + rush fee (if rush)
-            // Just add convenience fee
-            totalAmount = basePrice + (paymentMethod === 'credit_card' ? 9.95 : 0);
+          
+          // Only check for forced price if it applies to this application type
+          if (shouldApplyForcedPrice(applicationType)) {
+            const forcedPrice = await getForcedPriceValue(propertyId, supabase);
+            if (forcedPrice !== null) {
+              // basePrice already includes forced price + rush fee (if rush)
+              // Just add convenience fee
+              totalAmount = basePrice + (paymentMethod === 'credit_card' ? 9.95 : 0);
+            } else {
+              // Use standard calculation with rush fees
+              totalAmount = await calculateTotalAmount(applicationType, packageType, paymentMethod);
+            }
           } else {
-            // Use standard calculation with rush fees
+            // Forced price doesn't apply to this application type, use standard calculation
             totalAmount = await calculateTotalAmount(applicationType, packageType, paymentMethod);
           }
         } else {

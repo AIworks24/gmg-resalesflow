@@ -50,7 +50,6 @@ const AdminPropertiesManagement = () => {
   const [pageSize, setPageSize] = useState(10);
 
   // Multi-community state
-  const [isMultiCommunity, setIsMultiCommunity] = useState(false);
   const [linkedProperties, setLinkedProperties] = useState([]);
   const [availableProperties, setAvailableProperties] = useState([]);
   const [selectedLinkedProperties, setSelectedLinkedProperties] = useState([]);
@@ -156,7 +155,6 @@ const AdminPropertiesManagement = () => {
       force_price_enabled: false,
       force_price_value: null
     });
-    setIsMultiCommunity(false);
     setLinkedProperties([]);
     setShowModal(true);
   };
@@ -164,6 +162,18 @@ const AdminPropertiesManagement = () => {
   const openEditModal = async (property) => {
     setModalMode('edit');
     setSelectedProperty(property);
+    
+    // Load linked properties first to determine actual multi-community status
+    let linked = [];
+    try {
+      linked = await getLinkedProperties(property.id, supabase);
+    } catch (error) {
+      console.error('Error loading linked properties:', error);
+    }
+    
+    // Multi-community status is automatically managed by linked properties
+    const actuallyMultiCommunity = linked.length > 0;
+    
     setFormData({
       name: property.name || '',
       location: property.location || '',
@@ -174,25 +184,12 @@ const AdminPropertiesManagement = () => {
       phone: property.phone || '',
       email: property.email || '',
       special_requirements: property.special_requirements || '',
-      is_multi_community: property.is_multi_community || false,
+      is_multi_community: actuallyMultiCommunity,
       allow_public_offering: property.allow_public_offering || false,
       force_price_enabled: property.force_price_enabled || false,
       force_price_value: property.force_price_value || null
     });
-    setIsMultiCommunity(property.is_multi_community || false);
-    
-    // Load linked properties for this property
-    if (property.is_multi_community) {
-      try {
-        const linked = await getLinkedProperties(property.id);
-        setLinkedProperties(linked);
-      } catch (error) {
-        console.error('Error loading linked properties:', error);
-        setLinkedProperties([]);
-      }
-    } else {
-      setLinkedProperties([]);
-    }
+    setLinkedProperties(linked);
     
     setShowModal(true);
   };
@@ -217,7 +214,10 @@ const AdminPropertiesManagement = () => {
             phone: formData.phone,
             email: formData.email,
             special_requirements: formData.special_requirements,
-            is_multi_community: formData.is_multi_community,
+            // is_multi_community is automatically managed by linked properties
+            // When properties are linked/unlinked, it's automatically updated in the database
+            // For new properties, default to false (will be set to true when properties are linked)
+            is_multi_community: linkedProperties.length > 0,
             allow_public_offering: formData.allow_public_offering || false,
             force_price_enabled: formData.force_price_enabled || false,
             force_price_value: formData.force_price_enabled ? (formData.force_price_value || null) : null,
@@ -243,7 +243,10 @@ const AdminPropertiesManagement = () => {
             phone: formData.phone,
             email: formData.email,
             special_requirements: formData.special_requirements,
-            is_multi_community: formData.is_multi_community,
+            // is_multi_community is automatically managed by linked properties
+            // When properties are linked/unlinked, it's automatically updated in the database
+            // For new properties, default to false (will be set to true when properties are linked)
+            is_multi_community: linkedProperties.length > 0,
             allow_public_offering: formData.allow_public_offering || false,
             force_price_enabled: formData.force_price_enabled || false,
             force_price_value: formData.force_price_enabled ? (formData.force_price_value || null) : null,
@@ -356,7 +359,7 @@ const AdminPropertiesManagement = () => {
     
     // Load existing linked properties for this property
     try {
-      const linked = await getLinkedProperties(property.id);
+      const linked = await getLinkedProperties(property.id, supabase);
       setLinkedProperties(linked);
     } catch (error) {
       console.error('Error loading linked properties:', error);
@@ -370,74 +373,214 @@ const AdminPropertiesManagement = () => {
     if (!linkingProperty || selectedLinkedProperties.length === 0) return;
 
     try {
-      await linkProperties(linkingProperty.id, selectedLinkedProperties);
+      // Store reference to property ID before closing modal
+      const propertyIdToUpdate = linkingProperty.id;
+      
+      // Optimistically update the cache IMMEDIATELY to show the change right away
+      if (swrData?.properties) {
+        const updatedProperties = swrData.properties.map(p => 
+          p.id === propertyIdToUpdate 
+            ? { ...p, is_multi_community: true }
+            : p
+        );
+        // Update cache optimistically - this shows the change instantly
+        mutate({ ...swrData, properties: updatedProperties }, false);
+      }
+      
+      // Close modal first for better UX
       setShowLinkModal(false);
       setLinkingProperty(null);
       setSelectedLinkedProperties([]);
       
-      // Reload properties to show updated multi-community status
-      mutate();
+      // Now perform the actual database operation
+      await linkProperties(propertyIdToUpdate, selectedLinkedProperties, supabase);
       
-      // If we're in edit mode, reload the linked properties
-      if (selectedProperty && selectedProperty.id === linkingProperty.id) {
-        const linked = await getLinkedProperties(linkingProperty.id);
-        setLinkedProperties(linked);
+      // Verify the database update was successful by directly querying the property
+      const { data: verifiedProperty, error: verifyError } = await supabase
+        .from('hoa_properties')
+        .select('id, is_multi_community')
+        .eq('id', propertyIdToUpdate)
+        .single();
+      
+      if (verifyError) {
+        console.error('Error verifying property update:', verifyError);
+      } else if (verifiedProperty) {
+        console.log(`✅ Database verification: Property ${propertyIdToUpdate} has is_multi_community=${verifiedProperty.is_multi_community}`);
+        if (!verifiedProperty.is_multi_community) {
+          console.error('❌ CRITICAL: Database update failed! Property does not have is_multi_community=true');
+          // Try to fix it
+          const { error: fixError } = await supabase
+            .from('hoa_properties')
+            .update({ is_multi_community: true })
+            .eq('id', propertyIdToUpdate);
+          if (fixError) {
+            console.error('Failed to fix is_multi_community:', fixError);
+          } else {
+            console.log('✅ Fixed is_multi_community in database');
+          }
+        }
       }
+      
+      // Small delay to ensure database transaction is committed
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      // Force SWR to revalidate by fetching with bypassCache parameter
+      // This ensures we have the latest data from the database
+      const refreshUrl = `/api/admin/hoa-properties?page=${currentPage}&pageSize=${pageSize}&search=${encodeURIComponent(searchTerm)}&bypassCache=true&_t=${Date.now()}`;
+      try {
+        const freshResponse = await fetch(refreshUrl);
+        if (!freshResponse.ok) throw new Error('Failed to refresh');
+        const freshData = await freshResponse.json();
+        
+        // CRITICAL: Verify the updated property is in the response and has is_multi_community: true
+        // If server returned stale cached data, we must fix it to preserve the optimistic update
+        const updatedPropertyInResponse = freshData?.properties?.find(p => p.id === propertyIdToUpdate);
+        if (updatedPropertyInResponse) {
+          // Property found in response - ALWAYS ensure it has is_multi_community: true
+          // This prevents the server's stale cache from overwriting our optimistic update
+          if (!updatedPropertyInResponse.is_multi_community) {
+            console.warn('⚠️ Server returned stale data: Property does not have is_multi_community=true, fixing...');
+            updatedPropertyInResponse.is_multi_community = true;
+          } else {
+            console.log('✅ Server response has correct is_multi_community status');
+          }
+        } else {
+          console.log('ℹ️ Property not in current page response (pagination)');
+        }
+        // If property not in response, it's not on current page - that's fine, optimistic update will remain
+        
+        // Update SWR cache with fresh data (with corrected property status if needed)
+        mutate(freshData, false);
+      } catch (refreshError) {
+        console.warn('Could not refresh properties cache:', refreshError);
+        // On error, keep the optimistic update - don't revert
+        // The property should still show as multi-community
+      }
+      
+      // Reload linked properties to update state (for future modal opens)
+      try {
+        const linked = await getLinkedProperties(propertyIdToUpdate, supabase);
+        setLinkedProperties(linked);
+        
+        // Safety check: Ensure is_multi_community matches actual linked properties
+        // This fixes any discrepancies if the update didn't work
+        if (linked.length > 0) {
+          // Verify the property actually has is_multi_community=true
+          const { data: propertyCheck } = await supabase
+            .from('hoa_properties')
+            .select('is_multi_community')
+            .eq('id', propertyIdToUpdate)
+            .single();
+          
+          if (propertyCheck && !propertyCheck.is_multi_community) {
+            console.warn('⚠️ Property has links but is_multi_community=false, fixing...');
+            // Use API endpoint to fix it
+            try {
+              await fetch('/api/admin/update-property-multi-community', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  propertyId: propertyIdToUpdate,
+                  isMultiCommunity: true
+                })
+              });
+            } catch (fixError) {
+              console.warn('Could not fix is_multi_community:', fixError);
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Error reloading linked properties:', error);
+      }
+      
+      // If we're in edit mode, update form state
+      if (selectedProperty && selectedProperty.id === propertyIdToUpdate) {
+        // Update form data to reflect multi-community status (automatically set by linkProperties)
+        setFormData({...formData, is_multi_community: true});
+      }
+      
+      showSnackbar('Properties linked successfully! The property is now multi-community.', 'success');
     } catch (error) {
       console.error('Error linking properties:', error);
-      alert('Error linking properties: ' + error.message);
+      // Revert optimistic update on error by forcing a fresh fetch
+      mutate();
+      showSnackbar('Error linking properties: ' + error.message, 'error');
     }
   };
 
   const handleUnlinkProperty = async (propertyId, linkedPropertyId) => {
     try {
-      await unlinkProperties(propertyId, [linkedPropertyId]);
+      // First, check if this will be the last property to unlink
+      const linked = await getLinkedProperties(propertyId, supabase);
+      const willBeLastLink = linked.length === 1; // Only one link remaining means this will be the last
       
-      // Reload linked properties
-      const linked = await getLinkedProperties(propertyId);
-      setLinkedProperties(linked);
+      // Optimistically update the cache IMMEDIATELY to show the change right away
+      if (swrData?.properties && willBeLastLink) {
+        const updatedProperties = swrData.properties.map(p => 
+          p.id === propertyId 
+            ? { ...p, is_multi_community: false }
+            : p
+        );
+        // Update cache optimistically - this shows the change instantly
+        mutate({ ...swrData, properties: updatedProperties }, false);
+      } else if (swrData?.properties) {
+        // If not the last link, still update to reflect current linked count
+        // This ensures the property shows as multi-community if it still has links
+        const property = swrData.properties.find(p => p.id === propertyId);
+        if (property && linked.length > 1) {
+          // Still has links, so keep it as multi-community
+          const updatedProperties = swrData.properties.map(p => 
+            p.id === propertyId 
+              ? { ...p, is_multi_community: true }
+              : p
+          );
+          mutate({ ...swrData, properties: updatedProperties }, false);
+        }
+      }
       
-      // Reload properties list
-      mutate();
+      // Now perform the actual database operation
+      await unlinkProperties(propertyId, [linkedPropertyId], supabase);
+      
+      // Reload linked properties after unlinking
+      const remainingLinked = await getLinkedProperties(propertyId, supabase);
+      setLinkedProperties(remainingLinked);
+      
+      // If link modal is open for this property, update the linked properties list
+      // This ensures the "Available Properties" list updates to show the unlinked property
+      if (linkingProperty && linkingProperty.id === propertyId) {
+        setLinkedProperties(remainingLinked);
+      }
+      
+      // Update form state if we're editing this property
+      if (selectedProperty && selectedProperty.id === propertyId) {
+        setFormData({...formData, is_multi_community: remainingLinked.length > 0});
+      }
+      
+      // Force SWR to revalidate by fetching with bypassCache parameter
+      // This ensures we have the latest data from the database
+      const refreshUrl = `/api/admin/hoa-properties?page=${currentPage}&pageSize=${pageSize}&search=${encodeURIComponent(searchTerm)}&bypassCache=true&_t=${Date.now()}`;
+      try {
+        const freshResponse = await fetch(refreshUrl);
+        if (!freshResponse.ok) throw new Error('Failed to refresh');
+        const freshData = await freshResponse.json();
+        
+        // Update SWR cache with fresh data from server
+        mutate(freshData, false);
+      } catch (refreshError) {
+        console.warn('Could not refresh properties cache:', refreshError);
+        // Fallback: force revalidate with mutate
+        await mutate();
+      }
+      
+      showSnackbar('Property unlinked successfully.', 'success');
     } catch (error) {
       console.error('Error unlinking property:', error);
-      alert('Error unlinking property: ' + error.message);
+      // Revert optimistic update on error
+      mutate();
+      showSnackbar('Error unlinking property: ' + error.message, 'error');
     }
   };
 
-  const handleMultiCommunityToggle = async (checked) => {
-    setIsMultiCommunity(checked);
-    setFormData({...formData, is_multi_community: checked});
-    
-    if (!checked && linkedProperties.length > 0) {
-      // Warn user about existing links
-      const confirmUnlink = confirm(
-        `This property has ${linkedProperties.length} linked properties. Unchecking this will remove all property links. Do you want to continue?`
-      );
-      
-      if (confirmUnlink) {
-        try {
-          // Unlink all properties
-          const linkedIds = linkedProperties.map(prop => prop.linked_property_id);
-          await unlinkProperties(selectedProperty.id, linkedIds);
-          setLinkedProperties([]);
-          alert('All property links have been removed.');
-        } catch (error) {
-          console.error('Error unlinking properties:', error);
-          alert('Error removing property links: ' + error.message);
-          // Revert the checkbox
-          setIsMultiCommunity(true);
-          setFormData({...formData, is_multi_community: true});
-        }
-      } else {
-        // User cancelled, revert the checkbox
-        setIsMultiCommunity(true);
-        setFormData({...formData, is_multi_community: true});
-      }
-    } else if (!checked) {
-      setLinkedProperties([]);
-    }
-  };
 
   const totalPages = Math.ceil(totalCount / pageSize);
 
@@ -904,37 +1047,6 @@ const AdminPropertiesManagement = () => {
 
                 {/* Management Information removed per request */}
 
-                {/* Multi-Community Settings */}
-                <div className="border-t pt-4">
-                  <h3 className="text-md font-medium text-gray-900 mb-3">Multi-Community Settings</h3>
-                  <div className="flex items-center gap-3">
-                    <input
-                      type="checkbox"
-                      id="is_multi_community"
-                      checked={isMultiCommunity}
-                      onChange={(e) => handleMultiCommunityToggle(e.target.checked)}
-                      className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
-                    />
-                    <label htmlFor="is_multi_community" className="text-sm font-medium text-gray-700">
-                      Check for Multiple Community Associations
-                    </label>
-                  </div>
-                  {isMultiCommunity && (
-                    <div className="mt-3 p-3 bg-blue-50 rounded-md">
-                      <div className="flex items-start gap-2">
-                        <AlertTriangle className="w-4 h-4 text-blue-600 mt-0.5" />
-                        <div className="text-sm text-blue-800">
-                          <p className="font-medium">Multi-Community Property</p>
-                          <p className="text-blue-600">
-                            This property will automatically include additional associations when selected by users. 
-                            Use the Link Properties button to manage associated properties.
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                </div>
-
                 {/* Public Offering Statement Settings */}
                 <div className="border-t pt-4">
                   <h3 className="text-md font-medium text-gray-900 mb-3">Public Offering Statement</h3>
@@ -1075,6 +1187,7 @@ const AdminPropertiesManagement = () => {
                 <p className="text-sm text-gray-600 mb-4">
                   Select properties that should be automatically included when users select "{linkingProperty.name}".
                   These properties will generate additional transactions and documents.
+                  <strong className="block mt-2 text-blue-600">Note: Linking properties will automatically enable multi-community status for this property.</strong>
                 </p>
 
                 {/* Current linked properties */}
@@ -1106,7 +1219,13 @@ const AdminPropertiesManagement = () => {
                   <h3 className="text-sm font-medium text-gray-700 mb-2">Available Properties to Link:</h3>
                   <div className="max-h-60 overflow-y-auto border border-gray-200 rounded-md">
                     {availableProperties
-                      .filter(prop => prop.id !== linkingProperty.id) // Don't show the property itself
+                      .filter(prop => {
+                        // Don't show the property itself
+                        if (prop.id === linkingProperty.id) return false;
+                        // Don't show properties that are already linked
+                        const isAlreadyLinked = linkedProperties.some(linked => linked.linked_property_id === prop.id);
+                        return !isAlreadyLinked;
+                      })
                       .map((property) => (
                         <div key={property.id} className="flex items-center p-3 hover:bg-gray-50">
                           <input

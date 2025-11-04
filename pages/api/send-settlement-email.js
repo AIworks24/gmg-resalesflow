@@ -142,7 +142,7 @@ export default async function handler(req, res) {
     <div style="margin-top: 30px; padding: 15px; background-color: #FEF3C7; border-radius: 5px;">
         <h3 style="margin-top: 0;">Important Notes</h3>
         <p>This settlement form was generated as part of the resale certificate process.</p>
-        <p>For questions or concerns, please contact Goodman Management Group at resales@gmgva.com</p>
+        <p>For questions or concerns, please contact GMG ResaleFlow at resales@gmgva.com</p>
         <p style="margin-bottom: 0;"><strong>Application ID:</strong> ${applicationId}</p>
     </div>
 </body>

@@ -1,0 +1,309 @@
+import { createClient } from '@supabase/supabase-js';
+import nodemailer from 'nodemailer';
+
+// Initialize Supabase client with service role key for admin operations
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY
+);
+
+/**
+ * Test endpoint for expiring documents email alerts
+ * This endpoint allows you to test the email functionality without waiting for the cron job
+ * 
+ * Usage:
+ * POST /api/test-expiring-documents
+ * 
+ * Optional query parameters:
+ * - days: Number of days in the future to check (default: 30)
+ * - testEmail: Override recipient email for testing (optional)
+ */
+export default async function handler(req, res) {
+  // Allow both GET and POST for easier testing
+  if (req.method !== 'POST' && req.method !== 'GET') {
+    return res.status(405).json({ error: 'Method not allowed. Use GET or POST.' });
+  }
+
+  // Allow testing in development or with a test flag
+  const isTestMode = process.env.NODE_ENV === 'development' || req.query.test === 'true';
+  
+  if (!isTestMode) {
+    return res.status(403).json({ 
+      error: 'Test endpoint only available in development mode. Add ?test=true to enable.' 
+    });
+  }
+
+  try {
+    // Create email transporter - EXACTLY matching send-daily-email.js configuration
+    const transporter = nodemailer.createTransport({
+      host: process.env.SMTP_HOST,
+      port: process.env.SMTP_PORT,
+      secure: process.env.SMTP_SECURE === "true",
+      auth: {
+        user: process.env.GMAIL_USER,
+        pass: process.env.GMAIL_APP_PASSWORD,
+      },
+      tls: {
+        ciphers: process.env.CIPHERS || "SSLv3",
+        rejectUnauthorized: false,
+      },
+    });
+
+    // Get days parameter or default to 30
+    const daysToCheck = parseInt(req.query.days) || 30;
+    const testEmail = req.query.testEmail || null;
+
+    // Calculate date range
+    const today = new Date();
+    const futureDate = new Date();
+    futureDate.setDate(today.getDate() + daysToCheck);
+    
+    const todayStr = today.toISOString().split('T')[0];
+    const futureStr = futureDate.toISOString().split('T')[0];
+
+    console.log(`🔍 Testing expiring documents check for dates between ${todayStr} and ${futureStr}`);
+
+    // Get all documents expiring within the specified days
+    const { data: expiringDocs, error } = await supabase
+      .from('property_documents')
+      .select(`
+        *,
+        property:property_id (
+          id,
+          name,
+          property_owner_email,
+          property_owner_name
+        )
+      `)
+      .gte('expiration_date', todayStr)
+      .lte('expiration_date', futureStr)
+      .eq('is_not_applicable', false)
+      .not('expiration_date', 'is', null);
+
+    if (error) throw error;
+
+    console.log(`📋 Found ${expiringDocs?.length || 0} expiring documents`);
+
+    if (!expiringDocs || expiringDocs.length === 0) {
+      return res.status(200).json({
+        success: true,
+        test: true,
+        message: 'No expiring documents found in the specified date range',
+        dateRange: {
+          from: todayStr,
+          to: futureStr,
+          days: daysToCheck
+        },
+        suggestion: 'Create test documents with expiration dates within the next 30 days to test the email alerts.'
+      });
+    }
+
+    // Group documents by property
+    const propertiesWithExpiringDocs = {};
+    
+    expiringDocs.forEach(doc => {
+      if (!doc.property) return;
+      
+      const propertyId = doc.property.id;
+      if (!propertiesWithExpiringDocs[propertyId]) {
+        propertiesWithExpiringDocs[propertyId] = {
+          property: doc.property,
+          documents: []
+        };
+      }
+      
+      const daysUntilExpiration = Math.ceil(
+        (new Date(doc.expiration_date) - new Date()) / (1000 * 60 * 60 * 24)
+      );
+      
+      const specificFileName = doc.display_name || doc.file_name || doc.document_name;
+      const isSpecificFile = doc.display_name || doc.file_name;
+      
+      propertiesWithExpiringDocs[propertyId].documents.push({
+        document_type: doc.document_name,
+        file_name: specificFileName,
+        is_specific: isSpecificFile,
+        expiration_date: doc.expiration_date,
+        days_until_expiration: daysUntilExpiration
+      });
+    });
+
+    // Send email alerts
+    const emailPromises = [];
+    const emailResults = [];
+    
+    for (const propertyData of Object.values(propertiesWithExpiringDocs)) {
+      const { property, documents } = propertyData;
+      
+      // Determine recipient emails
+      const recipients = [];
+      if (testEmail) {
+        // Use test email if provided
+        recipients.push(testEmail);
+      } else if (property.property_owner_email) {
+        recipients.push(property.property_owner_email);
+      }
+      
+      if (recipients.length === 0) {
+        console.log(`⚠️ Skipping property ${property.name} - no email address`);
+        continue;
+      }
+      
+      // Sort documents by expiration date
+      documents.sort((a, b) => new Date(a.expiration_date) - new Date(b.expiration_date));
+      
+      // Create document list HTML
+      const documentListHtml = documents.map(doc => {
+        const displayName = doc.is_specific 
+          ? `<strong>${doc.document_type}</strong><br/><span style="color: #6b7280; font-size: 0.9em;">File: ${doc.file_name}</span>`
+          : `<strong>${doc.document_type}</strong>`;
+        
+        return `
+        <tr>
+          <td style="padding: 12px; border-bottom: 1px solid #e5e7eb;">
+            ${displayName}
+          </td>
+          <td style="padding: 12px; border-bottom: 1px solid #e5e7eb;">
+            ${new Date(doc.expiration_date).toLocaleDateString('en-US', { 
+              year: 'numeric', 
+              month: 'long', 
+              day: 'numeric' 
+            })}
+          </td>
+          <td style="padding: 12px; border-bottom: 1px solid #e5e7eb;">
+            <strong style="color: ${doc.days_until_expiration <= 7 ? '#dc2626' : doc.days_until_expiration <= 14 ? '#f59e0b' : '#10b981'};">${doc.days_until_expiration} ${doc.days_until_expiration === 1 ? 'day' : 'days'}</strong>
+          </td>
+        </tr>
+      `;
+      }).join('');
+      
+      const documentCount = documents.length;
+      const documentText = documentCount === 1 ? 'document' : 'documents';
+      
+      // Email HTML template (same as production)
+      const emailHtml = `
+        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; max-width: 650px; margin: 0 auto; background-color: #ffffff;">
+          <div style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; padding: 30px; text-align: center; border-radius: 8px 8px 0 0;">
+            <h2 style="margin: 0; font-size: 24px; font-weight: 600;">Document Expiration Alert</h2>
+            <p style="margin: 10px 0 0; font-size: 14px; opacity: 0.95;">${documentCount} ${documentText} expiring within ${daysToCheck} days</p>
+          </div>
+          
+          <div style="padding: 30px; background-color: #f9fafb;">
+            <p style="margin: 0 0 15px; color: #374151; font-size: 15px; line-height: 1.6;">
+              Dear <strong>${property.property_owner_name || 'Property Manager'}</strong>,
+            </p>
+            
+            <p style="margin: 0 0 20px; color: #374151; font-size: 15px; line-height: 1.6;">
+              This is an automated reminder that the following ${documentText} for <strong style="color: #10b981;">${property.name}</strong> ${documentCount === 1 ? 'is' : 'are'} expiring within the next ${daysToCheck} days:
+            </p>
+            
+            <table style="width: 100%; border-collapse: collapse; margin: 25px 0; background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+              <thead>
+                <tr style="background: linear-gradient(135deg, #f3f4f6 0%, #e5e7eb 100%);">
+                  <th style="padding: 14px 16px; text-align: left; font-weight: 600; color: #374151; font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px;">Document</th>
+                  <th style="padding: 14px 16px; text-align: left; font-weight: 600; color: #374151; font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px;">Expiration Date</th>
+                  <th style="padding: 14px 16px; text-align: left; font-weight: 600; color: #374151; font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px;">Days Remaining</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${documentListHtml}
+              </tbody>
+            </table>
+            
+            <p style="margin: 20px 0; color: #374151; font-size: 15px; line-height: 1.6;">
+              Please ensure these ${documentText} ${documentCount === 1 ? 'is' : 'are'} renewed before ${documentCount === 1 ? 'its' : 'their'} expiration ${documentCount === 1 ? 'date' : 'dates'} to maintain compliance.
+            </p>
+            
+            <div style="margin-top: 30px; padding: 18px; background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%); border-left: 4px solid #f59e0b; border-radius: 6px;">
+              <p style="margin: 0; color: #92400e; font-size: 14px; line-height: 1.6;">
+                <strong style="font-size: 15px;">⚠️ Action Required:</strong> Please log in to the admin portal to update these ${documentText}.
+              </p>
+            </div>
+            
+            ${documentCount > 1 ? `
+            <div style="margin-top: 20px; padding: 15px; background-color: #eff6ff; border-left: 4px solid #3b82f6; border-radius: 6px;">
+              <p style="margin: 0; color: #1e40af; font-size: 13px; line-height: 1.6;">
+                <strong>ℹ️ Note:</strong> You have multiple documents expiring. Each document can be managed individually in the admin portal.
+              </p>
+            </div>
+            ` : ''}
+            
+            <p style="margin-top: 30px; color: #6b7280; font-size: 13px; line-height: 1.6; border-top: 1px solid #e5e7eb; padding-top: 20px;">
+              This is an automated message from <strong>GMG Resale Flow System</strong>. Please do not reply to this email.<br/>
+              If you have questions, please contact GMG ResaleFlow at <a href="mailto:resales@gmgva.com" style="color: #10b981; text-decoration: none;">resales@gmgva.com</a>.
+            </p>
+          </div>
+        </div>
+      `;
+      
+      // Send email
+      const mailOptions = {
+        from: `"GMG Resale Flow Admin" <${process.env.GMAIL_USER}>`,
+        to: recipients.join(', '),
+        subject: `Document Expiration Alert - ${property.name}`,
+        html: emailHtml
+      };
+      
+      try {
+        const info = await transporter.sendMail(mailOptions);
+        emailResults.push({
+          property: property.name,
+          recipient: recipients[0],
+          documents: documentCount,
+          messageId: info.messageId,
+          status: 'sent'
+        });
+        console.log(`✅ Email sent to ${recipients[0]} for property ${property.name}`);
+      } catch (emailError) {
+        emailResults.push({
+          property: property.name,
+          recipient: recipients[0],
+          documents: documentCount,
+          error: emailError.message,
+          status: 'failed'
+        });
+        console.error(`❌ Failed to send email to ${recipients[0]}:`, emailError);
+      }
+    }
+    
+    // Return results
+    const totalProperties = Object.keys(propertiesWithExpiringDocs).length;
+    const totalDocuments = expiringDocs.length;
+    const successfulEmails = emailResults.filter(r => r.status === 'sent').length;
+    const failedEmails = emailResults.filter(r => r.status === 'failed').length;
+    
+    res.status(200).json({
+      success: true,
+      test: true,
+      message: `Test completed: ${totalDocuments} expiring documents across ${totalProperties} properties`,
+      dateRange: {
+        from: todayStr,
+        to: futureStr,
+        days: daysToCheck
+      },
+      summary: {
+        properties_found: totalProperties,
+        documents_expiring: totalDocuments,
+        emails_sent: successfulEmails,
+        emails_failed: failedEmails
+      },
+      emailResults: emailResults,
+      documents: expiringDocs.map(doc => ({
+        id: doc.id,
+        document_type: doc.document_name,
+        file_name: doc.display_name || doc.file_name,
+        expiration_date: doc.expiration_date,
+        property: doc.property?.name
+      }))
+    });
+    
+  } catch (error) {
+    console.error('Error testing expiring documents:', error);
+    res.status(500).json({ 
+      error: 'Failed to test expiring documents',
+      details: error.message,
+      test: true
+    });
+  }
+}
+

@@ -1,15 +1,20 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
 import {
   Upload,
   FileText,
-  Check,
-  X,
   Download,
   Trash2,
   Calendar,
   AlertCircle,
-  Loader2
+  Loader2,
+  Plus,
+  ChevronDown,
+  ChevronUp,
+  X,
+  Image as ImageIcon,
+  File,
+  FileCheck
 } from 'lucide-react';
 
 // Predefined document types for all properties
@@ -35,199 +40,272 @@ const DOCUMENT_TYPES = [
 ];
 
 const PropertyFileManagement = ({ propertyId, propertyName }) => {
-  const [files, setFiles] = useState({});
-  const [uploading, setUploading] = useState({});
+  // State: documents grouped by document_key
+  const [documentsByKey, setDocumentsByKey] = useState({});
   const [loading, setLoading] = useState(true);
-  const [notApplicable, setNotApplicable] = useState({});
-  const [expirationDates, setExpirationDates] = useState({});
+  const [expandedSections, setExpandedSections] = useState({});
   
+  // Modal state
+  const [showModal, setShowModal] = useState(false);
+  const [selectedDocType, setSelectedDocType] = useState(null);
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [documentName, setDocumentName] = useState('');
+  const [documentDescription, setDocumentDescription] = useState('');
+  const [expirationDate, setExpirationDate] = useState('');
+  const [isNotApplicable, setIsNotApplicable] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [isUploading, setIsUploading] = useState(false);
+  
+  const fileInputRef = useRef(null);
+  const dropZoneRef = useRef(null);
   const supabase = createClientComponentClient();
 
   useEffect(() => {
     if (propertyId) {
-      loadPropertyFiles();
-      loadPropertySettings();
+      loadPropertyDocuments();
     }
   }, [propertyId]);
 
-  const loadPropertyFiles = async () => {
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (showModal && !event.target.closest('.modal-content')) {
+        // Don't close if clicking on upload progress indicators
+        if (!event.target.closest('.upload-progress')) {
+          handleCloseModal();
+        }
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showModal]);
+
+  const loadPropertyDocuments = async () => {
     try {
       setLoading(true);
       
-      // Get all files for this property
-      const { data: fileList, error: listError } = await supabase.storage
-        .from('bucket0')
-        .list(`property_files/${propertyId}`, {
-          limit: 100,
-          offset: 0
-        });
+      const { data: documents, error } = await supabase
+        .from('property_documents')
+        .select('*')
+        .eq('property_id', propertyId)
+        .order('created_at', { ascending: false });
 
-      if (listError) throw listError;
+      if (error) throw error;
 
-      // Create a map of document types to files
-      const fileMap = {};
-      if (fileList && fileList.length > 0) {
-        for (const file of fileList) {
-          // Match file to document type based on the filename pattern
-          const docType = DOCUMENT_TYPES.find(doc => 
-            file.name.includes(doc.key)
-          );
-          
-          if (docType) {
-            fileMap[docType.key] = {
-              name: file.name,
-              size: file.metadata?.size || 0,
-              updated_at: file.updated_at || file.created_at,
-              path: `property_files/${propertyId}/${file.name}`
-            };
+      const grouped = {};
+      
+      if (documents && documents.length > 0) {
+        documents.forEach(doc => {
+          if (!grouped[doc.document_key]) {
+            grouped[doc.document_key] = [];
           }
-        }
+          
+          // Include all documents with files
+          if (doc.file_path) {
+            grouped[doc.document_key].push(doc);
+          }
+        });
       }
       
-      setFiles(fileMap);
+      setDocumentsByKey(grouped);
     } catch (error) {
-      console.error('Error loading property files:', error);
+      console.error('Error loading property documents:', error);
+      alert('Error loading documents: ' + error.message);
     } finally {
       setLoading(false);
     }
   };
 
-  const loadPropertySettings = async () => {
-    try {
-      // Load N/A settings and expiration dates from database
-      const { data, error } = await supabase
-        .from('property_documents')
-        .select('*')
-        .eq('property_id', propertyId);
+  const openUploadModal = (docType) => {
+    setSelectedDocType(docType);
+    setShowModal(true);
+    setSelectedFile(null);
+    setDocumentName('');
+    setDocumentDescription('');
+    setExpirationDate('');
+    setIsNotApplicable(false);
+    setUploadProgress(0);
+    setIsUploading(false);
+  };
 
-      if (error) throw error;
-
-      if (data && data.length > 0) {
-        const naSettings = {};
-        const expDates = {};
-        
-        data.forEach(doc => {
-          if (doc.is_not_applicable) {
-            naSettings[doc.document_key] = true;
-          }
-          if (doc.expiration_date) {
-            expDates[doc.document_key] = doc.expiration_date;
-          }
-        });
-        
-        setNotApplicable(naSettings);
-        setExpirationDates(expDates);
-      }
-    } catch (error) {
-      console.error('Error loading property settings:', error);
+  const handleCloseModal = () => {
+    if (!isUploading) {
+      setShowModal(false);
+      setSelectedDocType(null);
+      setSelectedFile(null);
+      setDocumentName('');
+      setDocumentDescription('');
+      setExpirationDate('');
+      setIsNotApplicable(false);
+      setUploadProgress(0);
     }
   };
 
-  const handleFileUpload = async (docType, file) => {
-    if (!file) return;
+  const handleDragOver = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(true);
+  };
 
-    setUploading(prev => ({ ...prev, [docType.key]: true }));
+  const handleDragLeave = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+
+    const files = e.dataTransfer.files;
+    if (files && files.length > 0) {
+      handleFileSelect(files[0]);
+    }
+  };
+
+  const handleFileSelect = (file) => {
+    // Validate file type
+    const allowedTypes = ['.pdf', '.doc', '.docx', '.txt', '.png', '.jpg', '.jpeg'];
+    const fileExt = '.' + file.name.split('.').pop().toLowerCase();
     
-    try {
-      // Remove old file if exists
-      if (files[docType.key]) {
-        await supabase.storage
-          .from('bucket0')
-          .remove([files[docType.key].path]);
-      }
+    if (!allowedTypes.includes(fileExt)) {
+      alert('Invalid file type. Please upload PDF, DOC, DOCX, TXT, PNG, JPG, or JPEG files.');
+      return;
+    }
 
-      // Upload new file with structured naming
-      const fileExt = file.name.split('.').pop();
-      const fileName = `${docType.key}.${fileExt}`;
+    // Validate file size (10MB max)
+    const maxSize = 10 * 1024 * 1024; // 10MB
+    if (file.size > maxSize) {
+      alert('File size exceeds 10MB limit.');
+      return;
+    }
+
+    setSelectedFile(file);
+    if (!documentName) {
+      setDocumentName(file.name.replace(/\.[^/.]+$/, '')); // Name without extension
+    }
+  };
+
+  const handleFileInputChange = (e) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      handleFileSelect(file);
+    }
+  };
+
+  const handleUpload = async () => {
+    if (!selectedFile || !selectedDocType) return;
+
+    setIsUploading(true);
+    setUploadProgress(0);
+
+    try {
+      // Generate unique filename
+      const timestamp = Date.now();
+      const fileExt = selectedFile.name.split('.').pop();
+      const sanitizedName = selectedFile.name.replace(/[^a-zA-Z0-9.-]/g, '_');
+      const fileName = `${selectedDocType.key}_${timestamp}_${sanitizedName}`;
       const filePath = `property_files/${propertyId}/${fileName}`;
 
+      // Simulate upload progress
+      const progressInterval = setInterval(() => {
+        setUploadProgress(prev => {
+          if (prev >= 90) {
+            clearInterval(progressInterval);
+            return prev;
+          }
+          return prev + 10;
+        });
+      }, 200);
+
+      // Upload file
       const { error: uploadError } = await supabase.storage
         .from('bucket0')
-        .upload(filePath, file, {
-          upsert: true
+        .upload(filePath, selectedFile, {
+          upsert: false
         });
+
+      clearInterval(progressInterval);
+      setUploadProgress(100);
 
       if (uploadError) throw uploadError;
 
-      // Update or create database record
+      // Create database record
+      const documentData = {
+        property_id: propertyId,
+        document_key: selectedDocType.key,
+        document_name: selectedDocType.name,
+        file_path: filePath,
+        file_name: selectedFile.name,
+        display_name: documentName || selectedFile.name,
+        is_not_applicable: isNotApplicable,
+        expiration_date: isNotApplicable ? null : (expirationDate || null),
+        updated_at: new Date().toISOString()
+      };
+
       const { error: dbError } = await supabase
         .from('property_documents')
-        .upsert({
-          property_id: propertyId,
-          document_key: docType.key,
-          document_name: docType.name,
-          file_path: filePath,
-          is_not_applicable: false,
-          updated_at: new Date().toISOString()
-        }, {
-          onConflict: 'property_id,document_key'
-        });
+        .insert(documentData)
+        .select()
+        .single();
 
       if (dbError) throw dbError;
 
-      // Reload files
-      await loadPropertyFiles();
+      // Reload documents
+      await loadPropertyDocuments();
       
-      // Clear N/A status if it was set
-      if (notApplicable[docType.key]) {
-        setNotApplicable(prev => {
-          const newState = { ...prev };
-          delete newState[docType.key];
-          return newState;
-        });
-      }
+      // Close modal after a brief delay to show completion
+      setTimeout(() => {
+        handleCloseModal();
+      }, 500);
     } catch (error) {
       console.error('Error uploading file:', error);
       alert('Error uploading file: ' + error.message);
-    } finally {
-      setUploading(prev => ({ ...prev, [docType.key]: false }));
+      setIsUploading(false);
+      setUploadProgress(0);
     }
   };
 
-  const handleRemoveFile = async (docType) => {
-    if (!files[docType.key]) return;
+  const handleRemoveDocument = async (documentId, filePath) => {
+    if (!confirm('Are you sure you want to remove this document?')) return;
 
     try {
-      const { error } = await supabase.storage
-        .from('bucket0')
-        .remove([files[docType.key].path]);
+      if (filePath) {
+        const { error: storageError } = await supabase.storage
+          .from('bucket0')
+          .remove([filePath]);
 
-      if (error) throw error;
+        if (storageError) throw storageError;
+      }
 
-      // Update database record
-      await supabase
+      const { error: dbError } = await supabase
         .from('property_documents')
         .delete()
-        .eq('property_id', propertyId)
-        .eq('document_key', docType.key);
+        .eq('id', documentId);
 
-      // Update local state
-      setFiles(prev => {
-        const newFiles = { ...prev };
-        delete newFiles[docType.key];
-        return newFiles;
-      });
+      if (dbError) throw dbError;
+
+      await loadPropertyDocuments();
     } catch (error) {
-      console.error('Error removing file:', error);
-      alert('Error removing file: ' + error.message);
+      console.error('Error removing document:', error);
+      alert('Error removing document: ' + error.message);
     }
   };
 
-  const handleDownloadFile = async (docType) => {
-    if (!files[docType.key]) return;
-
+  const handleDownloadFile = async (filePath, fileName) => {
     try {
       const { data, error } = await supabase.storage
         .from('bucket0')
-        .download(files[docType.key].path);
+        .download(filePath);
 
       if (error) throw error;
 
-      // Create download link
       const url = URL.createObjectURL(data);
       const a = document.createElement('a');
       a.href = url;
-      a.download = files[docType.key].name;
+      a.download = fileName || filePath.split('/').pop();
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -238,71 +316,86 @@ const PropertyFileManagement = ({ propertyId, propertyName }) => {
     }
   };
 
-  const toggleNotApplicable = async (docType) => {
-    const newValue = !notApplicable[docType.key];
-    
+  const updateExpirationDate = async (documentId, date) => {
     try {
+      // If date is set, automatically uncheck N/A
       const { error } = await supabase
         .from('property_documents')
-        .upsert({
-          property_id: propertyId,
-          document_key: docType.key,
-          document_name: docType.name,
-          is_not_applicable: newValue,
+        .update({
+          expiration_date: date || null,
+          is_not_applicable: date ? false : undefined,
           updated_at: new Date().toISOString()
-        }, {
-          onConflict: 'property_id,document_key'
-        });
+        })
+        .eq('id', documentId);
 
       if (error) throw error;
 
-      setNotApplicable(prev => ({
-        ...prev,
-        [docType.key]: newValue
-      }));
-
-      // If marking as N/A, remove any uploaded file
-      if (newValue && files[docType.key]) {
-        await handleRemoveFile(docType);
-      }
-    } catch (error) {
-      console.error('Error updating N/A status:', error);
-      alert('Error updating status: ' + error.message);
-    }
-  };
-
-  const updateExpirationDate = async (docType, date) => {
-    try {
-      const { error } = await supabase
-        .from('property_documents')
-        .upsert({
-          property_id: propertyId,
-          document_key: docType.key,
-          document_name: docType.name,
-          expiration_date: date,
-          updated_at: new Date().toISOString()
-        }, {
-          onConflict: 'property_id,document_key'
-        });
-
-      if (error) throw error;
-
-      setExpirationDates(prev => ({
-        ...prev,
-        [docType.key]: date
-      }));
+      await loadPropertyDocuments();
     } catch (error) {
       console.error('Error updating expiration date:', error);
       alert('Error updating expiration date: ' + error.message);
     }
   };
 
-  const isExpiringSoon = (date) => {
-    if (!date) return false;
+  const toggleDocumentNotApplicable = async (documentId, currentValue) => {
+    try {
+      const newValue = !currentValue;
+      const { error } = await supabase
+        .from('property_documents')
+        .update({
+          is_not_applicable: newValue,
+          expiration_date: newValue ? null : undefined,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', documentId);
+
+      if (error) throw error;
+
+      await loadPropertyDocuments();
+    } catch (error) {
+      console.error('Error updating N/A status:', error);
+      alert('Error updating N/A status: ' + error.message);
+    }
+  };
+
+
+  const toggleSection = (docKey) => {
+    setExpandedSections(prev => ({
+      ...prev,
+      [docKey]: !prev[docKey]
+    }));
+  };
+
+  const isExpiringSoon = (date, isNA) => {
+    if (!date || isNA) return false;
     const expDate = new Date(date);
+    const today = new Date();
     const thirtyDaysFromNow = new Date();
     thirtyDaysFromNow.setDate(thirtyDaysFromNow.getDate() + 30);
-    return expDate <= thirtyDaysFromNow;
+    return expDate >= today && expDate <= thirtyDaysFromNow;
+  };
+
+  const isExpired = (date, isNA) => {
+    if (!date || isNA) return false;
+    return new Date(date) < new Date();
+  };
+
+  const formatFileSize = (bytes) => {
+    if (!bytes) return '';
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+  };
+
+  const getFileIcon = (fileName) => {
+    const ext = fileName.split('.').pop()?.toLowerCase();
+    if (['jpg', 'jpeg', 'png', 'gif'].includes(ext)) {
+      return <ImageIcon className="h-8 w-8 text-blue-500" />;
+    }
+    if (ext === 'pdf') {
+      return <FileText className="h-8 w-8 text-red-500" />;
+    }
+    return <File className="h-8 w-8 text-gray-500" />;
   };
 
   if (loading) {
@@ -314,125 +407,452 @@ const PropertyFileManagement = ({ propertyId, propertyName }) => {
   }
 
   return (
-    <div className="space-y-4">
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-        <h3 className="text-lg font-semibold text-gray-900 mb-4">
-          Property Documents - {propertyName}
-        </h3>
-        
-        <div className="space-y-3">
-          {DOCUMENT_TYPES.map((docType) => {
-            const file = files[docType.key];
-            const isNA = notApplicable[docType.key];
-            const expDate = expirationDates[docType.key];
-            const expiringSoon = isExpiringSoon(expDate);
-            
-            return (
-              <div
-                key={docType.key}
-                className={`border rounded-lg p-4 ${
-                  isNA ? 'bg-gray-50 border-gray-300' : 'bg-white border-gray-200'
-                }`}
-              >
-                <div className="flex items-start justify-between">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2">
-                      <FileText className="h-5 w-5 text-gray-400" />
-                      <h4 className="font-medium text-gray-900">
-                        {docType.name}
-                      </h4>
-                      {docType.required && (
-                        <span className="text-xs bg-red-100 text-red-700 px-2 py-1 rounded">
-                          Required
-                        </span>
-                      )}
-                      {expiringSoon && (
-                        <div className="flex items-center gap-1 text-amber-600">
-                          <AlertCircle className="h-4 w-4" />
-                          <span className="text-xs">Expiring Soon</span>
+    <>
+      <div className="space-y-6">
+        <div className="bg-gradient-to-br from-white to-gray-50 rounded-xl shadow-lg border border-gray-100 p-8">
+          <div className="flex items-center gap-3 mb-8">
+            <div className="p-3 bg-gradient-to-br from-green-500 to-green-600 rounded-lg shadow-md">
+              <FileText className="h-6 w-6 text-white" />
+            </div>
+            <div>
+              <h3 className="text-2xl font-bold text-gray-900">
+                Property Documents
+              </h3>
+              <p className="text-sm text-gray-500 mt-1">{propertyName}</p>
+            </div>
+          </div>
+          
+          <div className="space-y-5">
+            {DOCUMENT_TYPES.map((docType) => {
+              const documents = documentsByKey[docType.key] || [];
+              const isExpanded = expandedSections[docType.key];
+              const hasDocuments = documents.length > 0;
+              const docCount = documents.length;
+              
+              const hasExpiringSoon = documents.some(doc => isExpiringSoon(doc.expiration_date, doc.is_not_applicable));
+              const hasExpired = documents.some(doc => isExpired(doc.expiration_date, doc.is_not_applicable));
+              
+              return (
+                <div
+                  key={docType.key}
+                  className="bg-white border border-gray-200 rounded-xl overflow-hidden transition-all duration-200 hover:shadow-lg hover:border-green-200"
+                >
+                  {/* Section Header */}
+                  <div className="p-5 bg-gradient-to-r from-gray-50 to-white">
+                    <div className="flex items-start justify-between">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-3 flex-wrap">
+                          <div className="p-2 bg-blue-50 rounded-lg">
+                            <FileText className="h-5 w-5 text-blue-600 flex-shrink-0" />
+                          </div>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <h4 className="font-semibold text-gray-900 text-base">
+                              {docType.name}
+                            </h4>
+                            {docType.required && (
+                              <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-red-100 text-red-700 border border-red-200">
+                                Required
+                              </span>
+                            )}
+                            {hasDocuments && (
+                              <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-700 border border-blue-200">
+                                {docCount} {docCount === 1 ? 'document' : 'documents'}
+                              </span>
+                            )}
+                            {hasExpiringSoon && (
+                              <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-amber-100 text-amber-700 border border-amber-200">
+                                <AlertCircle className="h-3.5 w-3.5" />
+                                <span>Expiring Soon</span>
+                              </div>
+                            )}
+                            {hasExpired && (
+                              <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-red-100 text-red-700 border border-red-200">
+                                <AlertCircle className="h-3.5 w-3.5" />
+                                <span>Expired</span>
+                              </div>
+                            )}
+                          </div>
                         </div>
-                      )}
+                      </div>
+                      
+                      <div className="flex items-center gap-3 ml-4">
+                        {hasDocuments && (
+                          <button
+                            onClick={() => toggleSection(docType.key)}
+                            className="p-2 text-gray-500 hover:text-gray-700 rounded-lg hover:bg-gray-100 transition-all duration-200 hover:scale-110"
+                            title={isExpanded ? 'Collapse' : 'Expand'}
+                          >
+                            {isExpanded ? (
+                              <ChevronUp className="h-5 w-5" />
+                            ) : (
+                              <ChevronDown className="h-5 w-5" />
+                            )}
+                          </button>
+                        )}
+                      </div>
                     </div>
+                  </div>
+
+                  {/* Documents List (Expanded) */}
+                  {hasDocuments && isExpanded && (
+                    <div className="border-t border-gray-200 bg-gradient-to-b from-gray-50 to-white">
+                      <div className="p-5 space-y-4">
+                        {documents.map((doc) => {
+                          const expiringSoon = isExpiringSoon(doc.expiration_date, doc.is_not_applicable);
+                          const expired = isExpired(doc.expiration_date, doc.is_not_applicable);
+                          
+                          return (
+                            <div
+                              key={doc.id}
+                              className={`bg-white border-2 rounded-xl p-5 shadow-sm transition-all duration-200 hover:shadow-md ${
+                                expired ? 'border-red-200 bg-gradient-to-br from-red-50 to-white' : 
+                                expiringSoon ? 'border-amber-200 bg-gradient-to-br from-amber-50 to-white' : 
+                                'border-gray-200 hover:border-green-200'
+                              }`}
+                            >
+                              <div className="flex items-start justify-between gap-4">
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex items-center gap-3 mb-3">
+                                    <div className="p-2 bg-gradient-to-br from-blue-100 to-blue-50 rounded-lg">
+                                      <FileText className="h-5 w-5 text-blue-600 flex-shrink-0" />
+                                    </div>
+                                    <div className="flex-1 min-w-0">
+                                      <p className="font-semibold text-gray-900 truncate text-base">
+                                        {doc.display_name || doc.file_name || doc.file_path?.split('/').pop() || 'Document'}
+                                      </p>
+                                    </div>
+                                  </div>
+                                  
+                                  <div className="flex flex-wrap items-center gap-4 text-sm text-gray-500 mb-3">
+                                    <span className="flex items-center gap-1">
+                                      <Calendar className="h-3.5 w-3.5" />
+                                      Uploaded: {new Date(doc.created_at).toLocaleDateString()}
+                                    </span>
+                                    {doc.updated_at !== doc.created_at && (
+                                      <span className="flex items-center gap-1">
+                                        <FileCheck className="h-3.5 w-3.5" />
+                                        Updated: {new Date(doc.updated_at).toLocaleDateString()}
+                                      </span>
+                                    )}
+                                  </div>
+                                  
+                                  <div className="space-y-3 bg-gray-50 rounded-lg p-3 border border-gray-200">
+                                    <div className="flex items-center gap-2">
+                                      <label className="flex items-center gap-2 text-sm cursor-pointer">
+                                        <input
+                                          type="checkbox"
+                                          checked={doc.is_not_applicable || false}
+                                          onChange={() => toggleDocumentNotApplicable(doc.id, doc.is_not_applicable || false)}
+                                          className="rounded border-gray-300 text-green-600 focus:ring-2 focus:ring-green-500 focus:ring-offset-1 h-4 w-4"
+                                        />
+                                        <span className="text-gray-700 font-medium">N/A (Not Applicable)</span>
+                                      </label>
+                                    </div>
+                                    {!doc.is_not_applicable && (
+                                      <div className="flex flex-wrap items-center gap-3">
+                                        <label className="flex items-center gap-2 text-sm">
+                                          <Calendar className="h-4 w-4 text-gray-500" />
+                                          <span className="text-gray-700 font-medium">Expiration:</span>
+                                          <input
+                                            type="date"
+                                            value={doc.expiration_date || ''}
+                                            onChange={(e) => updateExpirationDate(doc.id, e.target.value)}
+                                            className={`text-sm border-2 rounded-lg px-3 py-1.5 font-medium transition-all ${
+                                              expired ? 'border-red-300 bg-red-50 text-red-700' : 
+                                              expiringSoon ? 'border-amber-300 bg-amber-50 text-amber-700' : 
+                                              'border-gray-300 bg-white hover:border-green-400 focus:border-green-500 focus:ring-2 focus:ring-green-500'
+                                            }`}
+                                          />
+                                          {expired && (
+                                            <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-semibold bg-red-100 text-red-700 border border-red-200">
+                                              Expired
+                                            </span>
+                                          )}
+                                          {expiringSoon && !expired && (
+                                            <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-semibold bg-amber-100 text-amber-700 border border-amber-200">
+                                              Expires in {Math.ceil((new Date(doc.expiration_date) - new Date()) / (1000 * 60 * 60 * 24))} days
+                                            </span>
+                                          )}
+                                        </label>
+                                      </div>
+                                    )}
+                                    {doc.is_not_applicable && (
+                                      <p className="text-xs text-gray-500 italic bg-gray-100 px-2 py-1 rounded border border-gray-200">Expiration date is not applicable for this document</p>
+                                    )}
+                                  </div>
+                                </div>
+                                
+                                <div className="flex items-center gap-2 flex-shrink-0">
+                                  <button
+                                    onClick={() => handleDownloadFile(doc.file_path, doc.file_name)}
+                                    className="p-2.5 text-blue-600 hover:bg-blue-50 rounded-lg transition-all duration-200 hover:scale-110 hover:shadow-md border border-blue-200 hover:border-blue-300"
+                                    title="Download"
+                                  >
+                                    <Download className="h-5 w-5" />
+                                  </button>
+                                  <button
+                                    onClick={() => handleRemoveDocument(doc.id, doc.file_path)}
+                                    className="p-2.5 text-red-600 hover:bg-red-50 rounded-lg transition-all duration-200 hover:scale-110 hover:shadow-md border border-red-200 hover:border-red-300"
+                                    title="Remove"
+                                  >
+                                    <Trash2 className="h-5 w-5" />
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Add Document Button */}
+                  <div className={`border-t border-gray-200 p-5 ${hasDocuments && !isExpanded ? 'bg-white' : 'bg-gradient-to-br from-gray-50 to-white'}`}>
+                    <button
+                      onClick={() => openUploadModal(docType)}
+                      className="group relative flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-green-600 to-green-700 text-white rounded-xl hover:from-green-700 hover:to-green-800 transition-all duration-200 shadow-md hover:shadow-lg transform hover:scale-105 font-semibold"
+                    >
+                      <div className="p-1 bg-white/20 rounded-lg group-hover:bg-white/30 transition-colors">
+                        <Plus className="h-5 w-5" />
+                      </div>
+                      <span>Add Document</span>
+                    </button>
                     
-                    {file && !isNA && (
-                      <div className="mt-2 text-sm text-gray-600">
-                        <p>File: {file.name}</p>
-                        <p>Updated: {new Date(file.updated_at).toLocaleDateString()}</p>
+                    {!hasDocuments && (
+                      <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                        <p className="text-sm text-blue-700 flex items-center gap-2">
+                          <FileText className="h-4 w-4" />
+                          <span>No documents uploaded yet. Click "Add Document" to upload your first file.</span>
+                        </p>
                       </div>
                     )}
                   </div>
-                  
-                  <div className="flex items-center gap-2">
-                    {/* N/A Checkbox */}
-                    <label className="flex items-center gap-2 text-sm">
-                      <input
-                        type="checkbox"
-                        checked={isNA}
-                        onChange={() => toggleNotApplicable(docType)}
-                        className="rounded border-gray-300 text-green-600 focus:ring-green-500"
-                      />
-                      <span className="text-gray-600">N/A</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      {/* Upload Modal */}
+      {showModal && selectedDocType && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fadeIn">
+          <div className="modal-content bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto border border-gray-200 animate-slideUp">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between p-6 border-b border-gray-200 bg-gradient-to-r from-green-50 to-white">
+              <div className="flex items-center gap-4">
+                <div className="p-3 bg-gradient-to-br from-green-500 to-green-600 rounded-xl shadow-lg">
+                  <Upload className="h-6 w-6 text-white" />
+                </div>
+                <div>
+                  <h2 className="text-2xl font-bold text-gray-900">Upload Document</h2>
+                  <p className="text-sm text-gray-600 mt-1">
+                    Upload your document for <span className="font-semibold text-gray-900">{selectedDocType.name}</span>
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={handleCloseModal}
+                disabled={isUploading}
+                className="p-2 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100 transition-all duration-200 hover:scale-110 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-6 space-y-6">
+              {/* Drag and Drop Zone */}
+              <div
+                ref={dropZoneRef}
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onDrop={handleDrop}
+                onClick={() => fileInputRef.current?.click()}
+                className={`border-2 border-dashed rounded-xl p-10 text-center cursor-pointer transition-all duration-200 ${
+                  isDragging
+                    ? 'border-green-500 bg-gradient-to-br from-green-50 to-green-100 scale-105 shadow-lg'
+                    : selectedFile
+                    ? 'border-green-400 bg-gradient-to-br from-green-50 to-white shadow-md'
+                    : 'border-gray-300 bg-gradient-to-br from-gray-50 to-white hover:border-green-400 hover:bg-gradient-to-br hover:from-green-50 hover:to-white hover:shadow-lg hover:scale-[1.02]'
+                }`}
+              >
+                {selectedFile ? (
+                  <div className="space-y-3">
+                    <div className="flex justify-center">
+                      {getFileIcon(selectedFile.name)}
+                    </div>
+                    <div>
+                      <p className="font-medium text-gray-900">{selectedFile.name}</p>
+                      <p className="text-sm text-gray-500">{formatFileSize(selectedFile.size)}</p>
+                    </div>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSelectedFile(null);
+                        setDocumentName('');
+                      }}
+                      className="text-sm text-red-600 hover:text-red-700"
+                    >
+                      Remove file
+                    </button>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    <div className="flex justify-center">
+                      <Upload className="h-12 w-12 text-gray-400" />
+                    </div>
+                    <div>
+                      <p className="text-gray-700 font-medium">
+                        Drag and drop files here, or{' '}
+                        <span className="text-green-600 underline">browse</span>
+                      </p>
+                      <p className="text-xs text-gray-500 mt-2">
+                        Supports PDF, DOC, DOCX, TXT, PNG, JPG, JPEG up to 10MB
+                      </p>
+                    </div>
+                  </div>
+                )}
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  className="hidden"
+                  onChange={handleFileInputChange}
+                  accept=".pdf,.doc,.docx,.txt,.png,.jpg,.jpeg"
+                />
+              </div>
+
+              {/* Document Details */}
+              {selectedFile && (
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Document Name <span className="text-gray-400">(optional)</span>
                     </label>
+                    <input
+                      type="text"
+                      value={documentName}
+                      onChange={(e) => setDocumentName(e.target.value)}
+                      placeholder="Enter a name for this document"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500"
+                      maxLength={255}
+                    />
+                    <p className="text-xs text-gray-500 mt-1">
+                      Leave blank to use the file name
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Description <span className="text-gray-400">(optional)</span>
+                    </label>
+                    <textarea
+                      value={documentDescription}
+                      onChange={(e) => setDocumentDescription(e.target.value)}
+                      placeholder="Add a description for this document"
+                      rows={3}
+                      maxLength={400}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 resize-none"
+                    />
+                    <p className="text-xs text-gray-500 mt-1 text-right">
+                      {documentDescription.length}/400
+                    </p>
+                  </div>
+
+                  <div>
+                    <div className="mb-3">
+                      <label className="flex items-center gap-2 text-sm font-medium text-gray-700">
+                        <input
+                          type="checkbox"
+                          checked={isNotApplicable}
+                          onChange={(e) => {
+                            setIsNotApplicable(e.target.checked);
+                            if (e.target.checked) {
+                              setExpirationDate('');
+                            }
+                          }}
+                          className="rounded border-gray-300 text-green-600 focus:ring-green-500"
+                        />
+                        <span>N/A (Not Applicable)</span>
+                      </label>
+                      <p className="text-xs text-gray-500 mt-1 ml-6">
+                        Check if expiration date is not applicable for this document
+                      </p>
+                    </div>
                     
-                    {/* Expiration Date */}
-                    {!isNA && (
-                      <input
-                        type="date"
-                        value={expDate || ''}
-                        onChange={(e) => updateExpirationDate(docType, e.target.value)}
-                        className="text-sm border border-gray-300 rounded px-2 py-1"
-                        placeholder="Expiration"
-                      />
-                    )}
-                    
-                    {/* File Actions */}
-                    {!isNA && (
+                    {!isNotApplicable && (
                       <>
-                        {file ? (
-                          <div className="flex gap-1">
-                            <button
-                              onClick={() => handleDownloadFile(docType)}
-                              className="p-1 text-blue-600 hover:bg-blue-50 rounded"
-                              title="Download"
-                            >
-                              <Download className="h-4 w-4" />
-                            </button>
-                            <button
-                              onClick={() => handleRemoveFile(docType)}
-                              className="p-1 text-red-600 hover:bg-red-50 rounded"
-                              title="Remove"
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </button>
-                          </div>
-                        ) : (
-                          <label className="cursor-pointer">
-                            <input
-                              type="file"
-                              className="hidden"
-                              onChange={(e) => handleFileUpload(docType, e.target.files[0])}
-                              accept=".pdf,.doc,.docx,.txt,.png,.jpg,.jpeg"
-                            />
-                            <div className="flex items-center gap-2 px-3 py-1 bg-green-600 text-white rounded hover:bg-green-700">
-                              {uploading[docType.key] ? (
-                                <Loader2 className="h-4 w-4 animate-spin" />
-                              ) : (
-                                <Upload className="h-4 w-4" />
-                              )}
-                              <span className="text-sm">Upload</span>
-                            </div>
-                          </label>
-                        )}
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          <Calendar className="h-4 w-4 inline mr-1" />
+                          Expiration Date <span className="text-gray-400">(optional)</span>
+                        </label>
+                        <input
+                          type="date"
+                          value={expirationDate}
+                          onChange={(e) => setExpirationDate(e.target.value)}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500"
+                        />
+                        <p className="text-xs text-gray-500 mt-1">
+                          Set when this document expires
+                        </p>
                       </>
+                    )}
+                    {isNotApplicable && (
+                      <p className="text-xs text-gray-500 italic">
+                        Expiration date is not applicable for this document
+                      </p>
                     )}
                   </div>
                 </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="flex items-center justify-end gap-3 p-6 border-t border-gray-200 bg-gradient-to-r from-gray-50 to-white">
+              <button
+                onClick={handleCloseModal}
+                disabled={isUploading}
+                className="px-5 py-2.5 text-gray-700 bg-white border-2 border-gray-300 rounded-xl hover:bg-gray-50 hover:border-gray-400 transition-all duration-200 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleUpload}
+                disabled={!selectedFile || isUploading}
+                className="px-6 py-2.5 bg-gradient-to-r from-green-600 to-green-700 text-white rounded-xl hover:from-green-700 hover:to-green-800 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 font-semibold shadow-md hover:shadow-lg transform hover:scale-105 disabled:transform-none"
+              >
+                {isUploading ? (
+                  <>
+                    <Loader2 className="h-5 w-5 animate-spin" />
+                    <span>Uploading...</span>
+                  </>
+                ) : (
+                  <>
+                    <Upload className="h-5 w-5" />
+                    <span>Upload</span>
+                  </>
+                )}
+              </button>
+            </div>
+
+            {/* Upload Progress Indicator */}
+            {isUploading && uploadProgress > 0 && (
+              <div className="px-6 pb-6">
+                <div className="bg-gray-200 rounded-full h-2 overflow-hidden">
+                  <div
+                    className="bg-green-600 h-full transition-all duration-300 ease-out"
+                    style={{ width: `${uploadProgress}%` }}
+                  />
+                </div>
+                <p className="text-xs text-gray-500 mt-2 text-center">
+                  {uploadProgress < 100 ? `Uploading... ${uploadProgress}%` : 'Processing...'}
+                </p>
               </div>
-            );
-          })}
+            )}
+          </div>
         </div>
-      </div>
-    </div>
+      )}
+    </>
   );
 };
 

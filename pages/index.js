@@ -15,6 +15,7 @@ import {
   calculateTotalAmount,
   isPaymentRequired 
 } from '../lib/applicationTypes';
+import { getPricing } from '../lib/pricingConfig';
 import Image from 'next/image';
 import companyLogo from '../assets/company_logo.png';
 import {
@@ -57,6 +58,18 @@ const getForcedPriceSync = (property) => {
   return null;
 };
 
+// Helper function to check if forced price should apply based on application type
+const shouldApplyForcedPrice = (applicationType) => {
+  // Force price only applies to standard resale applications
+  const excludedTypes = [
+    'settlement_va',
+    'settlement_nc',
+    'lender_questionnaire',
+    'public_offering'
+  ];
+  return !excludedTypes.includes(applicationType);
+};
+
 // Helper function to calculate total amount
 // Synchronous calculateTotal function for display purposes (approximation only)
 const calculateTotal = (formData, stripePrices, hoaProperties) => {
@@ -74,6 +87,16 @@ const calculateTotal = (formData, stripePrices, hoaProperties) => {
       const total = (basePricePerProperty + rushFeePerProperty) * propertyCount + convenienceFee;
       return Math.round(total * 100) / 100;
     }
+  }
+
+  // Lender Questionnaire pricing
+  if (formData.submitterType === 'lender_questionnaire') {
+    const pricing = getPricing('lender_questionnaire', formData.packageType === 'rush');
+    let total = pricing.total / 100; // Convert cents to dollars
+    if (formData.paymentMethod === 'credit_card' && total > 0) {
+      total += 9.95; // Credit card convenience fee
+    }
+    return Math.round(total * 100) / 100; // Round to 2 decimal places
   }
 
   // Public Offering Statement pricing
@@ -124,8 +147,13 @@ const calculateTotal = (formData, stripePrices, hoaProperties) => {
     return 200.00;
   }
   
-  // Check for forced price override (single property)
-  if (formData.hoaProperty && hoaProperties) {
+  // Check for forced price override (single property) - only for standard resale applications
+  // Note: applicationType is not available in calculateTotal, so we'll check submitterType and publicOffering
+  const isExcludedType = formData.submitterType === 'settlement' || 
+                         formData.submitterType === 'lender_questionnaire' || 
+                         formData.publicOffering;
+  
+  if (!isExcludedType && formData.hoaProperty && hoaProperties) {
     const selectedProperty = hoaProperties.find(prop => prop.name === formData.hoaProperty);
     if (selectedProperty) {
       const forcedPrice = getForcedPriceSync(selectedProperty);
@@ -188,8 +216,8 @@ const calculateTotalDatabase = async (formData, hoaProperties, applicationType) 
       }
     }
     
-    // Single property pricing - check for forced price first
-    if (formData.hoaProperty && hoaProperties) {
+    // Single property pricing - check for forced price first (only for standard resale applications)
+    if (shouldApplyForcedPrice(applicationType) && formData.hoaProperty && hoaProperties) {
       const selectedProperty = hoaProperties.find(prop => prop.name === formData.hoaProperty);
       if (selectedProperty) {
         const forcedPrice = getForcedPriceSync(selectedProperty);
@@ -562,7 +590,7 @@ const SubmitterInfoStep = React.memo(({ formData, handleInputChange, hoaProperti
 
       <div className='bg-white p-6 rounded-lg border border-green-200'>
         <label className='block text-sm font-medium text-gray-700 mb-3'>
-          I am the: *
+          I am Requesting: *
         </label>
         <div className='grid grid-cols-2 md:grid-cols-5 gap-4'>
           {[
@@ -571,6 +599,7 @@ const SubmitterInfoStep = React.memo(({ formData, handleInputChange, hoaProperti
             { value: 'builder', label: 'Builder/Developer', icon: Building2 },
             { value: 'admin', label: 'GMG Staff', icon: CheckCircle },
             { value: 'settlement', label: 'Settlement Agent / Closing Attorney', icon: Briefcase },
+            { value: 'lender_questionnaire', label: 'Lender Questionnaire', icon: FileText },
           ].map((type) => {
             const Icon = type.icon;
             return (
@@ -1317,9 +1346,13 @@ const PackagePaymentStep = ({
           <div className='flex items-start justify-between mb-4 gap-4 md:gap-8'>
             <div className='pr-3 md:pr-6 max-w-[70%]'>
               <h4 className='text-lg font-semibold text-gray-900'>
-                {formData.submitterType === 'settlement' ? 'Dues Request - Escrow Instructions' : 'Standard Processing'}
+                {formData.submitterType === 'settlement' ? 'Dues Request - Escrow Instructions' : 
+                 formData.submitterType === 'lender_questionnaire' ? 'Standard' : 'Standard Processing'}
               </h4>
-              <p className='text-sm text-gray-600'>{formData.submitterType === 'settlement' ? '14 calendar days' : '10-15 business days'}</p>
+              <p className='text-sm text-gray-600'>
+                {formData.submitterType === 'settlement' ? '14 calendar days' : 
+                 formData.submitterType === 'lender_questionnaire' ? '10 Calendar Days' : '10-15 business days'}
+              </p>
             </div>
             <div className='text-right'>
               <div className='text-2xl font-bold text-green-600'>
@@ -1413,7 +1446,7 @@ const PackagePaymentStep = ({
           <div className='flex items-start justify-between mb-4 gap-4 md:gap-8'>
             <div className='pr-3 md:pr-6 max-w-[70%]'>
               <h4 className='text-lg font-semibold text-gray-900 flex items-center'>
-                {formData.submitterType === 'settlement' ? 'Everything in Standard' : 'Rush Processing'}
+                {formData.submitterType === 'settlement' ? 'Rush Dues Request - Escrow Instructions' : 'Rush Processing'}
                 <span className='ml-2 px-2 py-1 bg-orange-100 text-orange-800 text-xs rounded'>
                   PRIORITY
                 </span>
@@ -1428,15 +1461,21 @@ const PackagePaymentStep = ({
                   let basePrice = '317.95';
                   
                   if (selectedProperty) {
-                    const forcedPrice = getForcedPriceSync(selectedProperty);
-                    if (forcedPrice !== null) {
-                      // Show forced price as base (for rush, the +$70.66 will be shown below)
-                      return forcedPrice.toFixed(2);
+                    // Only show forced price if it applies to this application type
+                    if (shouldApplyForcedPrice(applicationType)) {
+                      const forcedPrice = getForcedPriceSync(selectedProperty);
+                      if (forcedPrice !== null) {
+                        // Show forced price as base (for rush, the +$70.66 will be shown below)
+                        return forcedPrice.toFixed(2);
+                      }
                     }
                   }
                   
                   // Show base processing fee only (no rush, no credit card fees)
-                  if (formData.submitterType === 'builder' && formData.publicOffering) {
+                  if (formData.submitterType === 'lender_questionnaire') {
+                    const pricing = getPricing('lender_questionnaire', false);
+                    basePrice = (pricing.base / 100).toFixed(2);
+                  } else if (formData.submitterType === 'builder' && formData.publicOffering) {
                     basePrice = '200.00';
                   } else if (formData.submitterType === 'settlement') {
                     if (selectedProperty?.location) {
@@ -1455,9 +1494,19 @@ const PackagePaymentStep = ({
                   return basePrice;
                 })()}
               </div>
-              <div className='text-sm text-gray-500'>
-                + ${stripePrices ? stripePrices.rush.rushFeeDisplay.toFixed(2) : '70.66'}
-              </div>
+              {formData.submitterType !== 'lender_questionnaire' && (
+                <div className='text-sm text-gray-500'>
+                  + ${stripePrices ? stripePrices.rush.rushFeeDisplay.toFixed(2) : '70.66'}
+                </div>
+              )}
+              {formData.submitterType === 'lender_questionnaire' && (
+                <div className='text-sm text-gray-500'>
+                  + ${(() => {
+                    const pricing = getPricing('lender_questionnaire', true);
+                    return (pricing.rushFee / 100).toFixed(2);
+                  })()}
+                </div>
+              )}
               <div className='text-2xl font-bold text-orange-600'>
                 ${(() => {
                   if (rushMultiCommunityPricing && rushMultiCommunityPricing.associations && rushMultiCommunityPricing.associations.length > 0) {
@@ -1622,9 +1671,12 @@ const PackagePaymentStep = ({
                     // Check for forced price first
                     const selectedProperty = hoaProperties?.find(prop => prop.name === formData.hoaProperty);
                     if (selectedProperty) {
-                      const forcedPrice = getForcedPriceSync(selectedProperty);
-                      if (forcedPrice !== null) {
-                        return forcedPrice.toFixed(2);
+                      // Only show forced price if it applies to this application type
+                      if (shouldApplyForcedPrice(applicationType)) {
+                        const forcedPrice = getForcedPriceSync(selectedProperty);
+                        if (forcedPrice !== null) {
+                          return forcedPrice.toFixed(2);
+                        }
                       }
                     }
                     
@@ -2023,6 +2075,245 @@ const AuthModal = ({ authMode, setAuthMode, setShowAuthModal, handleAuth, resetP
   );
 };
 
+const LenderQuestionnaireUploadStep = ({ formData, applicationId, setCurrentStep, setSnackbarData, setShowSnackbar, loadApplications }) => {
+  const [selectedFile, setSelectedFile] = React.useState(null);
+  const [isDragging, setIsDragging] = React.useState(false);
+  const [isUploading, setIsUploading] = React.useState(false);
+  const [uploadProgress, setUploadProgress] = React.useState(0);
+  const fileInputRef = React.useRef(null);
+  const dropZoneRef = React.useRef(null);
+
+  const handleDragEnter = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+  };
+
+  const handleDragOver = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+
+    const files = e.dataTransfer.files;
+    if (files && files.length > 0) {
+      handleFileSelect(files[0]);
+    }
+  };
+
+  const handleFileSelect = (file) => {
+    // Validate file type - only PDF, DOC, DOCX for lender questionnaire
+    const allowedTypes = ['.pdf', '.doc', '.docx'];
+    const fileExt = '.' + file.name.split('.').pop().toLowerCase();
+    
+    if (!allowedTypes.includes(fileExt)) {
+      setSnackbarData({
+        message: 'Invalid file type. Please upload PDF, DOC, or DOCX files only.',
+        type: 'error'
+      });
+      setShowSnackbar(true);
+      return;
+    }
+
+    // Validate file size (10MB max)
+    const maxSize = 10 * 1024 * 1024; // 10MB
+    if (file.size > maxSize) {
+      setSnackbarData({
+        message: 'File size exceeds 10MB limit.',
+        type: 'error'
+      });
+      setShowSnackbar(true);
+      return;
+    }
+
+    setSelectedFile(file);
+  };
+
+  const handleFileInputChange = (e) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      handleFileSelect(file);
+    }
+  };
+
+  const handleSubmit = async () => {
+    if (!selectedFile || !applicationId) {
+      setSnackbarData({
+        message: 'Please select a file to upload.',
+        type: 'error'
+      });
+      setShowSnackbar(true);
+      return;
+    }
+
+    setIsUploading(true);
+    setUploadProgress(0);
+
+    try {
+      const formData = new FormData();
+      formData.append('file', selectedFile);
+      formData.append('applicationId', applicationId);
+
+      // Simulate progress
+      const progressInterval = setInterval(() => {
+        setUploadProgress(prev => {
+          if (prev >= 90) {
+            clearInterval(progressInterval);
+            return prev;
+          }
+          return prev + 10;
+        });
+      }, 200);
+
+      const response = await fetch('/api/upload-lender-questionnaire', {
+        method: 'POST',
+        body: formData,
+      });
+
+      clearInterval(progressInterval);
+      setUploadProgress(100);
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to upload file');
+      }
+
+      const data = await response.json();
+
+      setSnackbarData({
+        message: 'Lender questionnaire uploaded successfully! Your request has been submitted.',
+        type: 'success'
+      });
+      setShowSnackbar(true);
+
+      // Load applications and redirect to dashboard
+      await loadApplications();
+      setCurrentStep(0);
+    } catch (error) {
+      console.error('Error uploading lender questionnaire:', error);
+      setSnackbarData({
+        message: error.message || 'Failed to upload lender questionnaire. Please try again.',
+        type: 'error'
+      });
+      setShowSnackbar(true);
+    } finally {
+      setIsUploading(false);
+      setUploadProgress(0);
+    }
+  };
+
+  return (
+    <div className='space-y-6'>
+      <div className='text-center mb-8'>
+        <h3 className='text-2xl font-bold text-green-900 mb-2'>
+          Upload Lender Questionnaire
+        </h3>
+        <p className='text-gray-600'>
+          Please upload your lender's questionnaire form. Our staff will complete it and return it once processed.
+        </p>
+      </div>
+
+      <div className='bg-white p-6 rounded-lg border border-green-200'>
+        <div
+          ref={dropZoneRef}
+          onDragEnter={handleDragEnter}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+          className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors ${
+            isDragging
+              ? 'border-green-500 bg-green-50'
+              : selectedFile
+              ? 'border-green-300 bg-green-50'
+              : 'border-gray-300 hover:border-green-400'
+          }`}
+        >
+          <Upload className='h-12 w-12 mx-auto mb-4 text-gray-400' />
+          {!selectedFile ? (
+            <>
+              <p className='text-lg font-medium text-gray-700 mb-2'>
+                Drag and drop your lender's questionnaire form here
+              </p>
+              <p className='text-sm text-gray-500 mb-4'>
+                or
+              </p>
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                className='px-6 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors'
+              >
+                Browse Files
+              </button>
+              <p className='text-xs text-gray-500 mt-4'>
+                Accepted formats: PDF, DOC, DOCX (Max 10MB)
+              </p>
+            </>
+          ) : (
+            <div className='space-y-4'>
+              <FileText className='h-12 w-12 mx-auto text-green-600' />
+              <p className='text-lg font-medium text-gray-700'>
+                {selectedFile.name}
+              </p>
+              <p className='text-sm text-gray-500'>
+                {(selectedFile.size / 1024 / 1024).toFixed(2)} MB
+              </p>
+              <button
+                onClick={() => {
+                  setSelectedFile(null);
+                  if (fileInputRef.current) {
+                    fileInputRef.current.value = '';
+                  }
+                }}
+                className='text-sm text-red-600 hover:text-red-700'
+              >
+                Remove File
+              </button>
+            </div>
+          )}
+          <input
+            ref={fileInputRef}
+            type='file'
+            accept='.pdf,.doc,.docx'
+            onChange={handleFileInputChange}
+            className='hidden'
+          />
+        </div>
+
+        {isUploading && (
+          <div className='mt-4'>
+            <div className='w-full bg-gray-200 rounded-full h-2.5'>
+              <div
+                className='bg-green-600 h-2.5 rounded-full transition-all duration-300'
+                style={{ width: `${uploadProgress}%` }}
+              ></div>
+            </div>
+            <p className='text-sm text-gray-600 mt-2 text-center'>
+              Uploading... {uploadProgress}%
+            </p>
+          </div>
+        )}
+
+        <button
+          onClick={handleSubmit}
+          disabled={!selectedFile || isUploading}
+          className='mt-6 w-full px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed font-medium'
+        >
+          {isUploading ? 'Uploading...' : 'Submit Request'}
+        </button>
+      </div>
+    </div>
+  );
+};
+
 const ReviewSubmitStep = ({ formData, stripePrices, applicationId, hoaProperties }) => {
   // Check if user just returned from payment
   const [showPaymentSuccess, setShowPaymentSuccess] = React.useState(false);
@@ -2407,12 +2698,31 @@ export default function GMGResaleFlow() {
       // Set pending payment status
       setIsPendingPayment(data.status === 'pending_payment');
 
-      // Don't navigate to any step here - let the caller decide the step
+      // Update application type from database
+      if (data.application_type) {
+        const newApplicationType = data.application_type;
+        setApplicationType(newApplicationType);
+        setFieldRequirements(getFieldRequirements(newApplicationType));
+        setCustomMessaging(getApplicationTypeMessaging(newApplicationType));
+        setFormSteps(getFormSteps(newApplicationType));
+      } else if (data.submitter_type) {
+        // Fallback: determine application type from submitter type
+        const selectedProperty = hoaProperties?.find(prop => prop.name === data.hoa_properties?.name);
+        const newApplicationType = determineApplicationType(data.submitter_type, selectedProperty, data.application_type === 'public_offering');
+        setApplicationType(newApplicationType);
+        setFieldRequirements(getFieldRequirements(newApplicationType));
+        setCustomMessaging(getApplicationTypeMessaging(newApplicationType));
+        setFormSteps(getFormSteps(newApplicationType));
+      }
+
+      // Return the application data so caller can use it
+      return data;
     } catch (error) {
       console.error('Error loading draft:', error);
       alert('Error loading application draft: ' + error.message);
+      return null;
     }
-  }, []);
+  }, [hoaProperties]);
 
   // Handle payment success redirect
   useEffect(() => {
@@ -2423,11 +2733,38 @@ export default function GMGResaleFlow() {
       const appId = urlParams.get('app_id');
 
       if (paymentSuccess === 'true' && sessionId && appId) {
-        // Load the application and continue to review step
-        loadDraftApplication(appId).then(() => {
-          setCurrentStep(5); // Go to review step
+        // Load the application and check if it's a lender questionnaire
+        loadDraftApplication(appId).then((applicationData) => {
+          if (!applicationData) {
+            console.error('No application data returned from loadDraftApplication');
+            return;
+          }
+          
+          console.log('Payment success - Application data:', {
+            id: applicationData.id,
+            application_type: applicationData.application_type,
+            submitter_type: applicationData.submitter_type,
+          });
+          
+          // Check if this is a lender questionnaire application
+          // Check both application_type from database and submitter_type as fallback
+          const isLenderQuestionnaire = 
+            applicationData.application_type === 'lender_questionnaire' ||
+            applicationData.submitter_type === 'lender_questionnaire';
+          
+          console.log('Is lender questionnaire?', isLenderQuestionnaire);
+          
+          if (isLenderQuestionnaire) {
+            console.log('Redirecting to lender questionnaire upload step (step 6)');
+            setCurrentStep(6); // Go to lender questionnaire upload step
+          } else {
+            console.log('Redirecting to review step (step 5)');
+            setCurrentStep(5); // Go to review step
+          }
           // Clean up URL parameters
           window.history.replaceState({}, document.title, window.location.pathname);
+        }).catch((error) => {
+          console.error('Error in payment success handler:', error);
         });
       }
 
@@ -2460,12 +2797,19 @@ export default function GMGResaleFlow() {
         (h) => h.name === formData.hoaProperty
       );
 
+      // Determine application type if not already set
+      let appType = applicationType;
+      if (!appType && formData.submitterType && hoaProperty) {
+        appType = determineApplicationType(formData.submitterType, hoaProperty, formData.publicOffering);
+      }
+
       const draftData = {
         user_id: user.id,
         hoa_property_id: hoaProperty?.id,
         property_address: formData.propertyAddress,
         unit_number: formData.unitNumber,
         submitter_type: formData.submitterType,
+        application_type: appType || 'single_property',
         submitter_name: formData.submitterName,
         submitter_email: formData.submitterEmail,
         submitter_phone: formData.submitterPhone,
@@ -2513,7 +2857,7 @@ export default function GMGResaleFlow() {
       console.error('Error saving draft:', error);
       return null;
     }
-  }, [user, currentStep, hoaProperties, formData, stripePrices, applicationId]);
+  }, [user, currentStep, hoaProperties, formData, stripePrices, applicationId, applicationType]);
 
   // Update application type when submitter type or property changes
   React.useEffect(() => {
@@ -3263,12 +3607,20 @@ export default function GMGResaleFlow() {
           <div className='grid grid-cols-1 md:grid-cols-2 gap-6'>
             <div className='bg-white p-8 rounded-lg shadow-sm border border-gray-200'>
               <h4 className='text-xl font-semibold text-gray-900 mb-2'>
-                Standard Processing
+                {formData.submitterType === 'lender_questionnaire' ? 'Standard' : 'Standard Processing'}
               </h4>
               <div className='text-3xl font-bold text-green-600 mb-4'>
-                $317.95
+                {(() => {
+                  if (formData.submitterType === 'lender_questionnaire') {
+                    const pricing = getPricing('lender_questionnaire', false);
+                    return `$${(pricing.base / 100).toFixed(2)}`;
+                  }
+                  return '$317.95';
+                })()}
               </div>
-              <p className='text-gray-600 mb-4'>10-15 business days</p>
+              <p className='text-gray-600 mb-4'>
+                {formData.submitterType === 'lender_questionnaire' ? '10 Calendar Days' : '10-15 business days'}
+              </p>
               <ul className='space-y-2 text-sm text-gray-600'>
                 <li>✓ Complete Virginia Resale Certificate</li>
                 <li>✓ HOA Documents Package</li>
@@ -3279,16 +3631,24 @@ export default function GMGResaleFlow() {
             <div className='bg-orange-50 p-8 rounded-lg shadow-sm border border-orange-200'>
               <div className='flex items-center justify-between mb-2'>
                 <h4 className='text-xl font-semibold text-gray-900'>
-                  Rush Processing
+                  {formData.submitterType === 'lender_questionnaire' ? 'Rush' : 'Rush Processing'}
                 </h4>
                 <span className='px-3 py-1 bg-orange-100 text-orange-800 text-sm rounded-full font-medium'>
                   PRIORITY
                 </span>
               </div>
               <div className='text-3xl font-bold text-orange-600 mb-4'>
-                $388.61
+                {(() => {
+                  if (formData.submitterType === 'lender_questionnaire') {
+                    const pricing = getPricing('lender_questionnaire', true);
+                    return `$${(pricing.total / 100).toFixed(2)}`;
+                  }
+                  return '$388.61';
+                })()}
               </div>
-              <p className='text-gray-600 mb-4'>5 business days</p>
+              <p className='text-gray-600 mb-4'>
+                {formData.submitterType === 'lender_questionnaire' ? '3 Business Days' : '5 business days'}
+              </p>
               <ul className='space-y-2 text-sm text-gray-600'>
                 <li>✓ Everything in Standard</li>
                 <li>✓ Priority queue processing</li>
@@ -3504,14 +3864,26 @@ export default function GMGResaleFlow() {
     );
   };
 
-  // Form Step Components
-  const steps = [
-    { number: 1, title: 'HOA Selection', icon: Building2 },
-    { number: 2, title: 'Submitter Info', icon: User },
-    { number: 3, title: 'Transaction Details', icon: Users },
-    { number: 4, title: 'Package & Payment', icon: CreditCard },
-    { number: 5, title: 'Review & Submit', icon: CheckCircle },
-  ];
+  // Form Step Components - dynamically adjust based on application type
+  const steps = React.useMemo(() => {
+    if (applicationType === 'lender_questionnaire') {
+      return [
+        { number: 1, title: 'HOA Selection', icon: Building2 },
+        { number: 2, title: 'Submitter Info', icon: User },
+        { number: 3, title: 'Transaction Details', icon: Users },
+        { number: 4, title: 'Package & Payment', icon: CreditCard },
+        { number: 5, title: 'Review & Submit', icon: CheckCircle },
+        { number: 6, title: 'Upload Lender Form', icon: Upload },
+      ];
+    }
+    return [
+      { number: 1, title: 'HOA Selection', icon: Building2 },
+      { number: 2, title: 'Submitter Info', icon: User },
+      { number: 3, title: 'Transaction Details', icon: Users },
+      { number: 4, title: 'Package & Payment', icon: CreditCard },
+      { number: 5, title: 'Review & Submit', icon: CheckCircle },
+    ];
+  }, [applicationType]);
 
   const renderStepContent = () => {
     switch (currentStep) {
@@ -3564,6 +3936,18 @@ export default function GMGResaleFlow() {
             stripePrices={stripePrices}
             applicationId={applicationId}
             hoaProperties={hoaProperties}
+          />
+        );
+      case 6:
+        // Lender Questionnaire Upload Step
+        return (
+          <LenderQuestionnaireUploadStep
+            formData={formData}
+            applicationId={applicationId}
+            setCurrentStep={setCurrentStep}
+            setSnackbarData={setSnackbarData}
+            setShowSnackbar={setShowSnackbar}
+            loadApplications={loadApplications}
           />
         );
       default:

@@ -24,6 +24,8 @@ import {
   Trash2,
   Paperclip,
   Mail,
+  FileCheck,
+  Download,
 } from 'lucide-react';
 import { useRouter } from 'next/router';
 import { mapFormDataToPDFFields } from '../../lib/pdfService';
@@ -532,6 +534,31 @@ const AdminApplications = ({ userRole }) => {
 
 
   const getWorkflowStep = (application) => {
+    // Check if this is a lender questionnaire application
+    const isLenderQuestionnaire = application.application_type === 'lender_questionnaire';
+    
+    if (isLenderQuestionnaire) {
+      // Lender questionnaire workflow - 3 steps (Download + Upload + Email)
+      const hasOriginalFile = !!application.lender_questionnaire_file_path;
+      const hasCompletedFile = !!application.lender_questionnaire_completed_file_path;
+      const hasNotificationSent = application.notifications?.some(n => n.notification_type === 'application_approved');
+      const hasEmailCompletedAt = application.email_completed_at;
+      
+      if (!hasOriginalFile) {
+        return { step: 1, text: 'Awaiting Upload', color: 'bg-yellow-100 text-yellow-800' };
+      }
+      
+      if (!hasCompletedFile) {
+        return { step: 2, text: 'Upload Completed Form', color: 'bg-orange-100 text-orange-800' };
+      }
+      
+      if (!hasNotificationSent && !hasEmailCompletedAt) {
+        return { step: 3, text: 'Send Email', color: 'bg-purple-100 text-purple-800' };
+      }
+      
+      return { step: 4, text: 'Completed', color: 'bg-green-100 text-green-800' };
+    }
+    
     // Check if this is a settlement application
     const isSettlementApp = application.submitter_type === 'settlement' || 
                             application.application_type?.startsWith('settlement');
@@ -714,6 +741,22 @@ const AdminApplications = ({ userRole }) => {
   };
 
   const getTaskStatuses = (application) => {
+    const isLenderQuestionnaire = application.application_type === 'lender_questionnaire';
+    
+    if (isLenderQuestionnaire) {
+      // Lender questionnaire workflow - 3 steps (Download + Upload + Email)
+      const hasOriginalFile = !!application.lender_questionnaire_file_path;
+      const hasCompletedFile = !!application.lender_questionnaire_completed_file_path;
+      const hasNotificationSent = application.notifications?.some(n => n.notification_type === 'application_approved');
+      const hasEmailCompletedAt = application.email_completed_at;
+      
+      return {
+        download: hasOriginalFile ? 'completed' : 'not_started',
+        upload: hasCompletedFile ? 'completed' : (hasOriginalFile ? 'not_started' : 'not_started'),
+        email: (hasNotificationSent || hasEmailCompletedAt) ? 'completed' : (hasCompletedFile ? 'not_started' : 'not_started')
+      };
+    }
+    
     const isSettlementApp = application.submitter_type === 'settlement' || 
                            application.application_type?.startsWith('settlement');
     
@@ -2349,6 +2392,12 @@ const AdminApplications = ({ userRole }) => {
                                   Multi-Community
                                 </span>
                               );
+                            } else if (appType === 'lender_questionnaire') {
+                              return (
+                                <span className='inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-indigo-100 text-indigo-800'>
+                                  Lender Questionnaire
+                                </span>
+                              );
                             } else {
                               return (
                                 <span className='inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-800'>
@@ -2663,6 +2712,18 @@ const AdminApplications = ({ userRole }) => {
                         {selectedApplication.submitter_phone || 'N/A'}
                       </div>
                       <div>
+                        <strong>Application Type:</strong>{' '}
+                        {(() => {
+                          const appType = selectedApplication.application_type || 'single_property';
+                          if (appType === 'settlement_va') return 'Settlement - VA';
+                          if (appType === 'settlement_nc') return 'Settlement - NC';
+                          if (appType === 'public_offering') return 'Public Offering';
+                          if (appType === 'multi_community') return 'Multi-Community';
+                          if (appType === 'lender_questionnaire') return 'Lender Questionnaire';
+                          return 'Single Property';
+                        })()}
+                      </div>
+                      <div>
                         <strong>Type:</strong> {selectedApplication.submitter_type || 'N/A'}
                       </div>
                       <div>
@@ -2717,6 +2778,272 @@ const AdminApplications = ({ userRole }) => {
                     </div>
                   </div>
                 </div>
+
+                {/* Lender Questionnaire Workflow */}
+                {selectedApplication.application_type === 'lender_questionnaire' && (
+                  <div>
+                    <h3 className='text-lg font-semibold text-gray-800 mb-4'>
+                      Tasks
+                    </h3>
+                    <div className='space-y-4'>
+                      {(() => {
+                        const taskStatuses = getTaskStatuses(selectedApplication);
+                        
+                        return (
+                          <>
+                            {/* Step 1: Download the Form */}
+                            <div className={`border rounded-lg p-4 ${getTaskStatusColor(taskStatuses.download)}`}>
+                              <div className='flex items-center justify-between'>
+                                <div className='flex items-center gap-3'>
+                                  <div className='flex items-center justify-center w-8 h-8 rounded-full bg-white border-2 border-current'>
+                                    <span className='text-sm font-bold'>1</span>
+                                  </div>
+                                  {getTaskStatusIcon(taskStatuses.download)}
+                                  <div>
+                                    <h4 className='font-medium'>Download the Form</h4>
+                                    <p className='text-sm opacity-75'>{getTaskStatusText(taskStatuses.download)}</p>
+                                    <p className='text-xs opacity-60 mt-1'>Download the original lender questionnaire form uploaded by the requester</p>
+                                    {selectedApplication.lender_questionnaire_deletion_date && (
+                                      <p className='text-xs opacity-50 mt-1'>
+                                        Auto-deletes: {new Date(selectedApplication.lender_questionnaire_deletion_date).toLocaleDateString()}
+                                      </p>
+                                    )}
+                                  </div>
+                                </div>
+                                <button
+                                  onClick={async () => {
+                                    try {
+                                      if (!selectedApplication.lender_questionnaire_file_path) {
+                                        showSnackbar('No file available to download', 'error');
+                                        return;
+                                      }
+                                      const { data, error } = await supabase.storage
+                                        .from('bucket0')
+                                        .createSignedUrl(selectedApplication.lender_questionnaire_file_path, 3600);
+                                      
+                                      if (error) throw error;
+                                      if (data?.signedUrl) {
+                                        window.open(data.signedUrl, '_blank');
+                                      }
+                                    } catch (error) {
+                                      console.error('Error downloading file:', error);
+                                      showSnackbar('Failed to download file', 'error');
+                                    }
+                                  }}
+                                  disabled={!selectedApplication.lender_questionnaire_file_path}
+                                  className='px-4 py-2 bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1'
+                                >
+                                  <Download className='w-4 h-4' />
+                                  Download
+                                </button>
+                              </div>
+                              {selectedApplication.lender_questionnaire_file_path && (
+                                <div className='mt-2 text-sm opacity-75'>
+                                  File: {selectedApplication.lender_questionnaire_file_path.split('/').pop()}
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Step 2: Reupload the Form */}
+                            <div className={`border rounded-lg p-4 ${getTaskStatusColor(taskStatuses.upload)}`}>
+                              <div className='flex items-center justify-between'>
+                                <div className='flex items-center gap-3'>
+                                  <div className='flex items-center justify-center w-8 h-8 rounded-full bg-white border-2 border-current'>
+                                    <span className='text-sm font-bold'>2</span>
+                                  </div>
+                                  {getTaskStatusIcon(taskStatuses.upload)}
+                                  <div>
+                                    <h4 className='font-medium'>Reupload the Form</h4>
+                                    <p className='text-sm opacity-75'>{getTaskStatusText(taskStatuses.upload)}</p>
+                                    <p className='text-xs opacity-60 mt-1'>Upload the completed lender questionnaire form after filling it out</p>
+                                    {selectedApplication.lender_questionnaire_completed_uploaded_at && (
+                                      <p className='text-sm opacity-75 mt-1'>
+                                        Uploaded: {new Date(selectedApplication.lender_questionnaire_completed_uploaded_at).toLocaleString()}
+                                      </p>
+                                    )}
+                                  </div>
+                                </div>
+                                <div className='flex gap-2'>
+                                  {selectedApplication.lender_questionnaire_completed_file_path ? (
+                                    <>
+                                      <button
+                                        onClick={async () => {
+                                          try {
+                                            const { data, error } = await supabase.storage
+                                              .from('bucket0')
+                                              .createSignedUrl(selectedApplication.lender_questionnaire_completed_file_path, 3600);
+                                            
+                                            if (error) throw error;
+                                            if (data?.signedUrl) {
+                                              window.open(data.signedUrl, '_blank');
+                                            }
+                                          } catch (error) {
+                                            console.error('Error downloading file:', error);
+                                            showSnackbar('Failed to download file', 'error');
+                                          }
+                                        }}
+                                        className='px-3 py-2 bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity text-sm font-medium flex items-center gap-1'
+                                      >
+                                        <Download className='w-4 h-4' />
+                                        View
+                                      </button>
+                                      <button
+                                        onClick={() => {
+                                          const input = document.createElement('input');
+                                          input.type = 'file';
+                                          input.accept = '.pdf,.doc,.docx';
+                                          input.onchange = async (e) => {
+                                            const file = e.target.files?.[0];
+                                            if (!file) return;
+
+                                            try {
+                                              setUploading(true);
+                                              const formData = new FormData();
+                                              formData.append('file', file);
+                                              formData.append('applicationId', selectedApplication.id);
+
+                                              const response = await fetch('/api/upload-lender-questionnaire-completed', {
+                                                method: 'POST',
+                                                body: formData,
+                                              });
+
+                                              if (!response.ok) {
+                                                const error = await response.json();
+                                                throw new Error(error.error || 'Failed to upload file');
+                                              }
+
+                                              showSnackbar('Completed form uploaded successfully', 'success');
+                                              await refreshSelectedApplication(selectedApplication.id);
+                                            } catch (error) {
+                                              console.error('Error uploading completed form:', error);
+                                              showSnackbar(error.message || 'Failed to upload completed form', 'error');
+                                            } finally {
+                                              setUploading(false);
+                                            }
+                                          };
+                                          input.click();
+                                        }}
+                                        disabled={uploading || !selectedApplication.lender_questionnaire_file_path}
+                                        className='px-4 py-2 bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1'
+                                      >
+                                        <Upload className='w-4 h-4' />
+                                        {uploading ? 'Uploading...' : 'Replace'}
+                                      </button>
+                                    </>
+                                  ) : (
+                                    <button
+                                      onClick={() => {
+                                        const input = document.createElement('input');
+                                        input.type = 'file';
+                                        input.accept = '.pdf,.doc,.docx';
+                                        input.onchange = async (e) => {
+                                          const file = e.target.files?.[0];
+                                          if (!file) return;
+
+                                          try {
+                                            setUploading(true);
+                                            const formData = new FormData();
+                                            formData.append('file', file);
+                                            formData.append('applicationId', selectedApplication.id);
+
+                                            const response = await fetch('/api/upload-lender-questionnaire-completed', {
+                                              method: 'POST',
+                                              body: formData,
+                                            });
+
+                                            if (!response.ok) {
+                                              const error = await response.json();
+                                              throw new Error(error.error || 'Failed to upload file');
+                                            }
+
+                                            showSnackbar('Completed form uploaded successfully', 'success');
+                                            await refreshSelectedApplication(selectedApplication.id);
+                                          } catch (error) {
+                                            console.error('Error uploading completed form:', error);
+                                            showSnackbar(error.message || 'Failed to upload completed form', 'error');
+                                          } finally {
+                                            setUploading(false);
+                                          }
+                                        };
+                                        input.click();
+                                      }}
+                                      disabled={uploading || !selectedApplication.lender_questionnaire_file_path}
+                                      className='px-4 py-2 bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1'
+                                    >
+                                      <Upload className='w-4 h-4' />
+                                      {uploading ? 'Uploading...' : 'Upload Completed Form'}
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                              {selectedApplication.lender_questionnaire_completed_file_path && (
+                                <div className='mt-2 text-sm opacity-75'>
+                                  File: {selectedApplication.lender_questionnaire_completed_file_path.split('/').pop()}
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Step 3: Send Form via Email */}
+                            <div className={`border rounded-lg p-4 ${getTaskStatusColor(taskStatuses.email)}`}>
+                              <div className='flex items-center justify-between'>
+                                <div className='flex items-center gap-3'>
+                                  <div className='flex items-center justify-center w-8 h-8 rounded-full bg-white border-2 border-current'>
+                                    <span className='text-sm font-bold'>3</span>
+                                  </div>
+                                  {getTaskStatusIcon(taskStatuses.email, sendingEmail)}
+                                  <div>
+                                    <h4 className='font-medium'>Send Form via Email</h4>
+                                    <p className='text-sm opacity-75'>
+                                      {sendingEmail ? 'Sending...' : getTaskStatusText(taskStatuses.email)}
+                                    </p>
+                                    <p className='text-xs opacity-60 mt-1'>Send the completed lender questionnaire form to the requester via email</p>
+                                    {selectedApplication.email_completed_at && (
+                                      <p className='text-sm opacity-75 mt-1'>
+                                        Sent: {new Date(selectedApplication.email_completed_at).toLocaleString()}
+                                      </p>
+                                    )}
+                                  </div>
+                                </div>
+                                <button
+                                  onClick={async () => {
+                                    try {
+                                      setSendingEmail(true);
+                                      const response = await fetch('/api/send-lender-questionnaire-email', {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({
+                                          applicationId: selectedApplication.id,
+                                        }),
+                                      });
+
+                                      if (!response.ok) {
+                                        const error = await response.json();
+                                        throw new Error(error.error || 'Failed to send email');
+                                      }
+
+                                      showSnackbar('Email sent successfully', 'success');
+                                      await refreshSelectedApplication(selectedApplication.id);
+                                    } catch (error) {
+                                      console.error('Error sending email:', error);
+                                      showSnackbar(error.message || 'Failed to send email', 'error');
+                                    } finally {
+                                      setSendingEmail(false);
+                                    }
+                                  }}
+                                  disabled={!selectedApplication.lender_questionnaire_completed_file_path || sendingEmail}
+                                  className='px-4 py-2 bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1'
+                                >
+                                  <Mail className='w-4 h-4' />
+                                  {sendingEmail ? 'Sending...' : 'Send Email'}
+                                </button>
+                              </div>
+                            </div>
+                          </>
+                        );
+                      })()}
+                    </div>
+                  </div>
+                )}
 
                 {/* Multi-Community Properties Section */}
                 {(() => {
@@ -3012,8 +3339,9 @@ const AdminApplications = ({ userRole }) => {
                   </div>
                 </div>
 
-                {/* Task-Based Workflow (hidden for multi-community; use per-property tasks above) */}
-                {!selectedApplication.hoa_properties?.is_multi_community && (
+                {/* Task-Based Workflow (hidden for multi-community and lender questionnaire; use per-property tasks above) */}
+                {!selectedApplication.hoa_properties?.is_multi_community && 
+                 selectedApplication.application_type !== 'lender_questionnaire' && (
                   <div>
                     <h3 className='text-lg font-semibold text-gray-800 mb-4'>
                       Tasks

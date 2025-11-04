@@ -293,7 +293,7 @@ export default async function handler(req, res) {
     <div class="footer">
         <p><strong>Goodman Management Group</strong></p>
         <p>This document was generated on ${new Date().toLocaleString()}</p>
-        <p>For questions or concerns, please contact us at resales@gmgva.com or (804) 360-2115</p>
+        <p>For questions or concerns, please contact GMG ResaleFlow at resales@gmgva.com or (804) 360-2115</p>
     </div>
 </body>
 </html>`;

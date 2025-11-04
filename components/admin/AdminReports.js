@@ -176,6 +176,23 @@ const AdminReports = () => {
     }).format(amount);
   };
 
+  const getStatusLabel = (status) => {
+    const labels = {
+      draft: 'Draft',
+      submitted: 'Submitted',
+      awaiting_property_owner_response: 'Under Review',
+      under_review: 'Under Review',
+      compliance_pending: 'Compliance Pending',
+      compliance_completed: 'Compliance Completed',
+      approved: 'Approved',
+      completed: 'Completed',
+      rejected: 'Rejected',
+      payment_completed: 'Payment Completed',
+      payment_failed: 'Payment Failed',
+    };
+    return labels[status] || status.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase());
+  };
+
   const getStatusBadgeColor = (status) => {
     switch (status) {
       case 'completed':
@@ -386,7 +403,7 @@ const AdminReports = () => {
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusBadgeColor(app.status)}`}>
-                        {app.status.replace('_', ' ')}
+                        {getStatusLabel(app.status)}
                       </span>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">

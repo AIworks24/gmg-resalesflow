@@ -330,6 +330,23 @@ const AdminDashboard = ({ userRole }) => {
     return colors[status] || 'bg-gray-100 text-gray-800';
   };
 
+  const getStatusLabel = (status) => {
+    const labels = {
+      draft: 'Draft',
+      submitted: 'Submitted',
+      awaiting_property_owner_response: 'Under Review',
+      under_review: 'Under Review',
+      compliance_pending: 'Compliance Pending',
+      compliance_completed: 'Compliance Completed',
+      approved: 'Approved',
+      completed: 'Completed',
+      rejected: 'Rejected',
+      payment_completed: 'Payment Completed',
+      payment_failed: 'Payment Failed',
+    };
+    return labels[status] || status.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase());
+  };
+
   const getFormStatusIcon = (status) => {
     switch (status) {
       case 'completed':
@@ -2080,9 +2097,7 @@ const AdminDashboard = ({ userRole }) => {
               >
                 <option value='all'>All Statuses</option>
                 <option value='submitted'>New Submissions</option>
-                <option value='awaiting_property_owner_response'>
-                  Awaiting Response
-                </option>
+                <option value='awaiting_property_owner_response'>Under Review</option>
                 <option value='under_review'>Under Review</option>
                 <option value='compliance_completed'>
                   Compliance Completed
@@ -2210,9 +2225,7 @@ const AdminDashboard = ({ userRole }) => {
                       <span
                         className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusColor(app.status)}`}
                       >
-                        {app.status
-                          .replace(/_/g, ' ')
-                          .replace(/\b\w/g, (l) => l.toUpperCase())}
+                        {getStatusLabel(app.status)}
                       </span>
                       {app.property_owner_response_due &&
                         isOverdue(app.property_owner_response_due) && (
