@@ -58,16 +58,10 @@ const getForcedPriceSync = (property) => {
   return null;
 };
 
-// Helper function to check if forced price should apply based on application type
-const shouldApplyForcedPrice = (applicationType) => {
-  // Force price only applies to standard resale applications
-  const excludedTypes = [
-    'settlement_va',
-    'settlement_nc',
-    'lender_questionnaire',
-    'public_offering'
-  ];
-  return !excludedTypes.includes(applicationType);
+// Helper function to check if forced price should apply
+// Force price ONLY applies when submitterType is 'builder' AND public offering is NOT requested
+const shouldApplyForcedPrice = (submitterType, publicOffering = false) => {
+  return submitterType === 'builder' && !publicOffering;
 };
 
 // Helper function to calculate total amount
@@ -147,13 +141,8 @@ const calculateTotal = (formData, stripePrices, hoaProperties) => {
     return 200.00;
   }
   
-  // Check for forced price override (single property) - only for standard resale applications
-  // Note: applicationType is not available in calculateTotal, so we'll check submitterType and publicOffering
-  const isExcludedType = formData.submitterType === 'settlement' || 
-                         formData.submitterType === 'lender_questionnaire' || 
-                         formData.publicOffering;
-  
-  if (!isExcludedType && formData.hoaProperty && hoaProperties) {
+  // Check for forced price override (single property) - ONLY for builder/developer WITHOUT public offering
+  if (shouldApplyForcedPrice(formData.submitterType, formData.publicOffering) && formData.hoaProperty && hoaProperties) {
     const selectedProperty = hoaProperties.find(prop => prop.name === formData.hoaProperty);
     if (selectedProperty) {
       const forcedPrice = getForcedPriceSync(selectedProperty);
@@ -204,10 +193,14 @@ const calculateTotalDatabase = async (formData, hoaProperties, applicationType) 
         const { calculateMultiCommunityPricing } = await import('../lib/multiCommunityUtils');
         
         // Calculate multi-community pricing (includes forced price checks per property)
+        // Pass submitterType and publicOffering to check if forced price applies
         const pricing = await calculateMultiCommunityPricing(
           selectedProperty.id,
           formData.packageType,
-          applicationType
+          applicationType,
+          null, // supabaseClient
+          formData.submitterType,
+          formData.publicOffering
         );
         
         // Add convenience fee if credit card and total > 0
@@ -216,8 +209,8 @@ const calculateTotalDatabase = async (formData, hoaProperties, applicationType) 
       }
     }
     
-    // Single property pricing - check for forced price first (only for standard resale applications)
-    if (shouldApplyForcedPrice(applicationType) && formData.hoaProperty && hoaProperties) {
+    // Single property pricing - check for forced price first (ONLY for builder/developer WITHOUT public offering)
+    if (shouldApplyForcedPrice(formData.submitterType, formData.publicOffering) && formData.hoaProperty && hoaProperties) {
       const selectedProperty = hoaProperties.find(prop => prop.name === formData.hoaProperty);
       if (selectedProperty) {
         const forcedPrice = getForcedPriceSync(selectedProperty);
@@ -310,7 +303,7 @@ const HOASelectionStep = React.memo(
           setLinkedProperties(linked);
           
           // Calculate pricing for multi-community
-          const pricing = await calculateMultiCommunityPricing(hoa.id, formData.packageType || 'standard', 'standard');
+          const pricing = await calculateMultiCommunityPricing(hoa.id, formData.packageType || 'standard', 'standard', null, formData.submitterType, formData.publicOffering);
           
           // Generate notification
           const notification = generateMultiCommunityNotification(hoa.id, linked, pricing);
@@ -363,7 +356,7 @@ const HOASelectionStep = React.memo(
               const linked = await getLinkedProperties(selectedHOA.id);
               setLinkedProperties(linked);
               
-              const pricing = await calculateMultiCommunityPricing(selectedHOA.id, formData.packageType || 'standard', 'standard');
+              const pricing = await calculateMultiCommunityPricing(selectedHOA.id, formData.packageType || 'standard', 'standard', null, formData.submitterType, formData.publicOffering);
               const notification = generateMultiCommunityNotification(selectedHOA.id, linked, pricing);
               setMultiCommunityNotification(notification);
             } catch (error) {
@@ -891,8 +884,8 @@ const PackagePaymentStep = ({
             
             // Calculate both standard and rush pricing
             const [standardPricing, rushPricing] = await Promise.all([
-              calculateMultiCommunityPricing(selectedProperty.id, 'standard', 'standard'),
-              calculateMultiCommunityPricing(selectedProperty.id, 'rush', 'standard')
+              calculateMultiCommunityPricing(selectedProperty.id, 'standard', 'standard', null, formData.submitterType, formData.publicOffering),
+              calculateMultiCommunityPricing(selectedProperty.id, 'rush', 'standard', null, formData.submitterType, formData.publicOffering)
             ]);
             
             setStandardMultiCommunityPricing(standardPricing);
@@ -1461,8 +1454,8 @@ const PackagePaymentStep = ({
                   let basePrice = '317.95';
                   
                   if (selectedProperty) {
-                    // Only show forced price if it applies to this application type
-                    if (shouldApplyForcedPrice(applicationType)) {
+                    // Only show forced price if submitterType is 'builder' AND public offering is NOT requested
+                    if (shouldApplyForcedPrice(formData.submitterType, formData.publicOffering)) {
                       const forcedPrice = getForcedPriceSync(selectedProperty);
                       if (forcedPrice !== null) {
                         // Show forced price as base (for rush, the +$70.66 will be shown below)
@@ -1671,8 +1664,8 @@ const PackagePaymentStep = ({
                     // Check for forced price first
                     const selectedProperty = hoaProperties?.find(prop => prop.name === formData.hoaProperty);
                     if (selectedProperty) {
-                      // Only show forced price if it applies to this application type
-                      if (shouldApplyForcedPrice(applicationType)) {
+                      // Only show forced price if submitterType is 'builder' AND public offering is NOT requested
+                      if (shouldApplyForcedPrice(formData.submitterType, formData.publicOffering)) {
                         const forcedPrice = getForcedPriceSync(selectedProperty);
                         if (forcedPrice !== null) {
                           return forcedPrice.toFixed(2);

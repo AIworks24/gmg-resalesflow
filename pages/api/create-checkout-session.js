@@ -61,11 +61,14 @@ export default async function handler(req, res) {
         console.log('All properties for transaction:', allProperties.map(p => p.name || p.property_name));
         
         // Calculate multi-community pricing
+        // Pass submitterType and publicOffering to check if forced price applies
         multiCommunityPricing = await calculateMultiCommunityPricing(
           hoaProperty.id, 
           packageType, 
           applicationType,
-          supabase
+          supabase,
+          formData.submitterType,
+          formData.publicOffering
         );
         console.log('Multi-community pricing:', multiCommunityPricing);
       } else {
@@ -184,8 +187,8 @@ export default async function handler(req, res) {
         // Get property ID from hoaProperty (should be available from earlier fetch)
         const propertyId = allProperties.length > 0 ? allProperties[0].id : null;
         
-        // Get base price without credit card fee (pass propertyId to check for forced price)
-        basePrice = await getApplicationTypePricing(applicationType, packageType, propertyId, supabase);
+        // Get base price without credit card fee (pass propertyId, submitterType, and publicOffering to check for forced price)
+        basePrice = await getApplicationTypePricing(applicationType, packageType, propertyId, supabase, formData.submitterType, formData.publicOffering);
         
         // Calculate total amount
         // Note: getApplicationTypePricing already handles forced price + rush fees correctly
@@ -196,8 +199,8 @@ export default async function handler(req, res) {
           const { shouldApplyForcedPrice } = require('../../lib/applicationTypes');
           const { getForcedPriceValue } = require('../../lib/propertyPricingUtils');
           
-          // Only check for forced price if it applies to this application type
-          if (shouldApplyForcedPrice(applicationType)) {
+          // Only check for forced price if submitterType is 'builder' AND public offering is NOT requested
+          if (shouldApplyForcedPrice(formData.submitterType, formData.publicOffering)) {
             const forcedPrice = await getForcedPriceValue(propertyId, supabase);
             if (forcedPrice !== null) {
               // basePrice already includes forced price + rush fee (if rush)
@@ -208,7 +211,7 @@ export default async function handler(req, res) {
               totalAmount = await calculateTotalAmount(applicationType, packageType, paymentMethod);
             }
           } else {
-            // Forced price doesn't apply to this application type, use standard calculation
+            // Forced price doesn't apply (not builder or public offering requested), use standard calculation
             totalAmount = await calculateTotalAmount(applicationType, packageType, paymentMethod);
           }
         } else {
