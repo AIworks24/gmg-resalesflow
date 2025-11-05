@@ -19,3 +19,5 @@ CHECK (inspection_status IN ('not_started', 'in_progress', 'completed', 'failed'
 COMMENT ON COLUMN application_property_groups.inspection_status IS 'Status of inspection form for this property';
 COMMENT ON COLUMN application_property_groups.inspection_completed_at IS 'Timestamp when inspection form was completed for this property';
 
+
+

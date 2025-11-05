@@ -20,3 +20,5 @@ DROP FUNCTION IF EXISTS sync_all_multi_community_flags();
 
 COMMENT ON TABLE linked_properties IS 'Rollback completed - triggers and functions removed';
 
+
+

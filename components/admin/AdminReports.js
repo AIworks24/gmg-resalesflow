@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useRouter } from 'next/router';
 import {
   FileText,
@@ -13,10 +13,12 @@ import {
   LogOut,
   RefreshCw,
   BarChart3,
+  AlertTriangle,
 } from 'lucide-react';
 import useAdminAuthStore from '../../stores/adminAuthStore';
 import { useApplications } from '../../hooks/useApplications';
 import AdminLayout from './AdminLayout';
+import useSWR from 'swr';
 
 const AdminReports = () => {
   const [dateFilter, setDateFilter] = useState('all');
@@ -24,9 +26,41 @@ const AdminReports = () => {
     startDate: '',
     endDate: ''
   });
+  const [activeTab, setActiveTab] = useState('reports'); // 'reports' or 'expiring-documents'
 
   const router = useRouter();
   const { signOut, user, role } = useAdminAuthStore();
+  
+  // Fetch expiring documents (admin only)
+  const fetcher = async (url) => {
+    const res = await fetch(url);
+    if (!res.ok) {
+      const error = new Error('Failed to fetch expiring documents');
+      error.info = await res.json();
+      error.status = res.status;
+      throw error;
+    }
+    return res.json();
+  };
+
+  const { 
+    data: expiringDocsData, 
+    error: expiringDocsError, 
+    isLoading: isLoadingExpiringDocs,
+    mutate: refetchExpiringDocs 
+  } = useSWR(
+    role === 'admin' ? '/api/admin/expiring-documents?days=30' : null,
+    fetcher,
+    { 
+      revalidateOnFocus: true,
+      revalidateOnReconnect: true,
+      // Refresh when tab becomes active
+      refreshInterval: 0, // Disable auto-refresh, rely on manual refresh and focus
+    }
+  );
+
+  // Filter documents: show expired or expiring within 30 days (already filtered by API)
+  const expiringDocuments = expiringDocsData?.documents || [];
 
   // Get date range for filtering
   const getDateRange = () => {
@@ -213,6 +247,56 @@ const AdminReports = () => {
     }
   };
 
+  const formatDate = (dateString) => {
+    if (!dateString) return 'N/A';
+    return new Date(dateString).toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric'
+    });
+  };
+
+  const getExpirationStatusColor = (daysUntilExpiration) => {
+    if (daysUntilExpiration < 0) {
+      return 'bg-red-100 text-red-800'; // Expired
+    } else if (daysUntilExpiration <= 7) {
+      return 'bg-red-100 text-red-800'; // Urgent (7 days or less)
+    } else if (daysUntilExpiration <= 30) {
+      return 'bg-yellow-100 text-yellow-800'; // Warning (8-30 days)
+    } else {
+      return 'bg-green-100 text-green-800'; // Normal (30+ days)
+    }
+  };
+
+  const getExpirationStatusLabel = (daysUntilExpiration) => {
+    if (daysUntilExpiration < 0) {
+      return `Expired ${Math.abs(daysUntilExpiration)} days ago`;
+    } else if (daysUntilExpiration === 0) {
+      return 'Expires today';
+    } else if (daysUntilExpiration === 1) {
+      return 'Expires tomorrow';
+    } else {
+      return `Expires in ${daysUntilExpiration} days`;
+    }
+  };
+
+  const handleDocumentClick = (propertyId) => {
+    // Invalidate cache before navigating so data refreshes when returning
+    refetchExpiringDocs();
+    router.push(`/admin/property-files/${propertyId}`);
+  };
+
+  // Refresh data when tab becomes active or when returning to the page
+  useEffect(() => {
+    if (activeTab === 'expiring-documents' && role === 'admin') {
+      // Refresh when tab becomes active (with a small delay to avoid unnecessary calls)
+      const timer = setTimeout(() => {
+        refetchExpiringDocs();
+      }, 100);
+      return () => clearTimeout(timer);
+    }
+  }, [activeTab, role, refetchExpiringDocs]);
+
   return (
     <AdminLayout>
       <div className="max-w-7xl mx-auto p-6">
@@ -228,210 +312,364 @@ const AdminReports = () => {
               </p>
             </div>
             <button
-              onClick={() => refetch()}
-              disabled={isFetching}
+              onClick={() => {
+                if (activeTab === 'reports') {
+                  refetch();
+                } else {
+                  refetchExpiringDocs();
+                }
+              }}
+              disabled={activeTab === 'reports' ? isFetching : isLoadingExpiringDocs}
               className='flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50'
             >
-              <RefreshCw className={`w-4 h-4 ${isFetching ? 'animate-spin' : ''}`} />
-              {isFetching ? 'Refreshing...' : 'Refresh'}
+              <RefreshCw className={`w-4 h-4 ${(activeTab === 'reports' ? isFetching : isLoadingExpiringDocs) ? 'animate-spin' : ''}`} />
+              {(activeTab === 'reports' ? isFetching : isLoadingExpiringDocs) ? 'Refreshing...' : 'Refresh'}
             </button>
           </div>
         </div>
 
-        {/* Date Filter Controls */}
-        <div className="bg-white p-6 rounded-lg shadow-md border mb-8">
-          <div className="flex items-center gap-4 flex-wrap">
-            <div className="flex items-center gap-2">
-              <Calendar className="w-4 h-4 text-gray-500" />
-              <span className="text-sm font-medium text-gray-700">Time Period:</span>
-            </div>
-            <select
-              value={dateFilter}
-              onChange={(e) => setDateFilter(e.target.value)}
-              className="px-3 py-1 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            >
-              <option value="all">All Time</option>
-              <option value="today">Today</option>
-              <option value="week">This Week</option>
-              <option value="month">This Month</option>
-              <option value="quarter">This Quarter</option>
-              <option value="custom">Custom Range</option>
-            </select>
+        {/* Tabs - Admin only for Expiring Documents */}
+        {role === 'admin' && (
+          <div className="mb-6 border-b border-gray-200">
+            <nav className="flex space-x-8">
+              <button
+                onClick={() => {
+                  setActiveTab('reports');
+                }}
+                className={`py-4 px-1 border-b-2 font-medium text-sm ${
+                  activeTab === 'reports'
+                    ? 'border-blue-500 text-blue-600'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                }`}
+              >
+                Reports & Analytics
+              </button>
+              <button
+                onClick={() => {
+                  setActiveTab('expiring-documents');
+                  // Refresh data when switching to this tab
+                  refetchExpiringDocs();
+                }}
+                className={`py-4 px-1 border-b-2 font-medium text-sm ${
+                  activeTab === 'expiring-documents'
+                    ? 'border-blue-500 text-blue-600'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                }`}
+              >
+                Expiring Documents
+                {expiringDocuments.length > 0 && (
+                  <span className="ml-2 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">
+                    {expiringDocuments.length}
+                  </span>
+                )}
+              </button>
+            </nav>
+          </div>
+        )}
 
-            {dateFilter === 'custom' && (
-              <div className="flex items-center gap-2">
-                <input
-                  type="date"
-                  value={customDateRange.startDate}
-                  onChange={(e) => setCustomDateRange({...customDateRange, startDate: e.target.value})}
-                  className="px-3 py-1 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-                <span className="text-gray-500">to</span>
-                <input
-                  type="date"
-                  value={customDateRange.endDate}
-                  onChange={(e) => setCustomDateRange({...customDateRange, endDate: e.target.value})}
-                  className="px-3 py-1 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
+        {/* Expiring Documents Tab Content */}
+        {activeTab === 'expiring-documents' && role === 'admin' && (
+          <div className="bg-white rounded-lg shadow-md border overflow-hidden">
+            <div className="px-6 py-4 border-b">
+              <h2 className="text-lg font-semibold text-gray-900">Documents by Expiration</h2>
+              <p className="text-sm text-gray-600 mt-1">
+                Documents expiring within 30 days or already expired, across all properties, ordered by expiration date (soonest first)
+              </p>
+            </div>
+            {isLoadingExpiringDocs ? (
+              <div className="text-center py-12">
+                <RefreshCw className="w-8 h-8 animate-spin text-gray-400 mx-auto mb-4" />
+                <p className="text-gray-500">Loading expiring documents...</p>
+              </div>
+            ) : expiringDocsError ? (
+              <div className="text-center py-12">
+                <AlertTriangle className="w-12 h-12 text-red-400 mx-auto mb-4" />
+                <h3 className="text-lg font-medium text-gray-900 mb-2">Error loading documents</h3>
+                <p className="text-gray-500">{expiringDocsError.message || 'Failed to load expiring documents'}</p>
+              </div>
+            ) : expiringDocuments.length === 0 ? (
+              <div className="text-center py-12">
+                <FileText className="w-12 h-12 text-gray-400 mx-auto mb-4" />
+                <h3 className="text-lg font-medium text-gray-900 mb-2">No expiring documents</h3>
+                <p className="text-gray-500">All documents are up to date or have no expiration dates set.</p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead className="bg-gray-50 border-b">
+                    <tr>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Expiration Date
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Status
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Document Name
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Property
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Property Owner
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Location
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-gray-200">
+                    {expiringDocuments.map((doc) => (
+                      <tr
+                        key={doc.id}
+                        onClick={() => handleDocumentClick(doc.property_id)}
+                        className="hover:bg-blue-50 cursor-pointer transition-colors"
+                      >
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <div className="text-sm font-medium text-gray-900">
+                            {formatDate(doc.expiration_date)}
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getExpirationStatusColor(doc.days_until_expiration)}`}>
+                            {getExpirationStatusLabel(doc.days_until_expiration)}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="text-sm font-medium text-gray-900">
+                            {doc.document_name || doc.document_key}
+                          </div>
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="text-sm font-medium text-gray-900">
+                            {doc.property_name || 'N/A'}
+                          </div>
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="text-sm text-gray-900">
+                            {doc.property_owner_name || 'N/A'}
+                          </div>
+                          {doc.property_owner_email && (
+                            <div className="text-sm text-gray-500">{doc.property_owner_email}</div>
+                          )}
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="text-sm text-gray-500">
+                            {doc.property_location || 'N/A'}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             )}
-
-            <button
-              onClick={() => refetch()}
-              disabled={isFetching}
-              className="flex items-center gap-2 px-3 py-1 bg-blue-600 text-white rounded-md hover:bg-blue-700 text-sm disabled:opacity-50"
-            >
-              <RefreshCw className={`w-4 h-4 ${isFetching ? 'animate-spin' : ''}`} />
-              Refresh
-            </button>
           </div>
-        </div>
+        )}
 
-        {/* Statistics Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
-          <div className="bg-white p-6 rounded-lg shadow-md border">
-            <div className="flex items-center gap-3">
-              <FileText className="w-8 h-8 text-blue-600" />
-              <div>
-                <p className="text-sm text-gray-600">Total Applications</p>
-                <p className="text-2xl font-bold text-gray-900">{stats.totalApplications}</p>
+        {/* Reports Tab Content */}
+        {activeTab === 'reports' && (
+          <>
+
+            {/* Date Filter Controls */}
+            <div className="bg-white p-6 rounded-lg shadow-md border mb-8">
+              <div className="flex items-center gap-4 flex-wrap">
+                <div className="flex items-center gap-2">
+                  <Calendar className="w-4 h-4 text-gray-500" />
+                  <span className="text-sm font-medium text-gray-700">Time Period:</span>
+                </div>
+                <select
+                  value={dateFilter}
+                  onChange={(e) => setDateFilter(e.target.value)}
+                  className="px-3 py-1 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="all">All Time</option>
+                  <option value="today">Today</option>
+                  <option value="week">This Week</option>
+                  <option value="month">This Month</option>
+                  <option value="quarter">This Quarter</option>
+                  <option value="custom">Custom Range</option>
+                </select>
+
+                {dateFilter === 'custom' && (
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="date"
+                      value={customDateRange.startDate}
+                      onChange={(e) => setCustomDateRange({...customDateRange, startDate: e.target.value})}
+                      className="px-3 py-1 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                    <span className="text-gray-500">to</span>
+                    <input
+                      type="date"
+                      value={customDateRange.endDate}
+                      onChange={(e) => setCustomDateRange({...customDateRange, endDate: e.target.value})}
+                      className="px-3 py-1 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                )}
+
+                <button
+                  onClick={() => refetch()}
+                  disabled={isFetching}
+                  className="flex items-center gap-2 px-3 py-1 bg-blue-600 text-white rounded-md hover:bg-blue-700 text-sm disabled:opacity-50"
+                >
+                  <RefreshCw className={`w-4 h-4 ${isFetching ? 'animate-spin' : ''}`} />
+                  Refresh
+                </button>
               </div>
             </div>
-          </div>
-          
-          <div className="bg-white p-6 rounded-lg shadow-md border">
-            <div className="flex items-center gap-3">
-              <Calendar className="w-8 h-8 text-green-600" />
-              <div>
-                <p className="text-sm text-gray-600">This Month</p>
-                <p className="text-2xl font-bold text-gray-900">{stats.thisMonthApplications}</p>
+
+            {/* Statistics Cards */}
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+              <div className="bg-white p-6 rounded-lg shadow-md border">
+                <div className="flex items-center gap-3">
+                  <FileText className="w-8 h-8 text-blue-600" />
+                  <div>
+                    <p className="text-sm text-gray-600">Total Applications</p>
+                    <p className="text-2xl font-bold text-gray-900">{stats.totalApplications}</p>
+                  </div>
+                </div>
+              </div>
+              
+              <div className="bg-white p-6 rounded-lg shadow-md border">
+                <div className="flex items-center gap-3">
+                  <Calendar className="w-8 h-8 text-green-600" />
+                  <div>
+                    <p className="text-sm text-gray-600">This Month</p>
+                    <p className="text-2xl font-bold text-gray-900">{stats.thisMonthApplications}</p>
+                  </div>
+                </div>
+              </div>
+              
+              <div className="bg-white p-6 rounded-lg shadow-md border">
+                <div className="flex items-center gap-3">
+                  <DollarSign className="w-8 h-8 text-yellow-600" />
+                  <div>
+                    <p className="text-sm text-gray-600">Total Revenue</p>
+                    <p className="text-2xl font-bold text-gray-900">{formatCurrency(stats.totalRevenue)}</p>
+                  </div>
+                </div>
+              </div>
+              
+              <div className="bg-white p-6 rounded-lg shadow-md border">
+                <div className="flex items-center gap-3">
+                  <Clock className="w-8 h-8 text-orange-600" />
+                  <div>
+                    <p className="text-sm text-gray-600">Pending Applications</p>
+                    <p className="text-2xl font-bold text-gray-900">{stats.pendingApplications}</p>
+                  </div>
+                </div>
               </div>
             </div>
-          </div>
-          
-          <div className="bg-white p-6 rounded-lg shadow-md border">
-            <div className="flex items-center gap-3">
-              <DollarSign className="w-8 h-8 text-yellow-600" />
-              <div>
-                <p className="text-sm text-gray-600">Total Revenue</p>
-                <p className="text-2xl font-bold text-gray-900">{formatCurrency(stats.totalRevenue)}</p>
+
+            {/* Export Buttons */}
+            <div className="bg-white p-6 rounded-lg shadow-md border mb-8">
+              <h2 className="text-lg font-semibold text-gray-900 mb-4">Export Data</h2>
+              <div className="flex gap-4">
+                <button
+                  onClick={handleExportApplications}
+                  className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700"
+                >
+                  <Download className="w-4 h-4" />
+                  Export Applications CSV
+                </button>
+                <button
+                  onClick={handleExportProperties}
+                  className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
+                >
+                  <Download className="w-4 h-4" />
+                  Export Properties CSV
+                </button>
               </div>
             </div>
-          </div>
-          
-          <div className="bg-white p-6 rounded-lg shadow-md border">
-            <div className="flex items-center gap-3">
-              <Clock className="w-8 h-8 text-orange-600" />
-              <div>
-                <p className="text-sm text-gray-600">Pending Applications</p>
-                <p className="text-2xl font-bold text-gray-900">{stats.pendingApplications}</p>
+
+            {/* Recent Applications Table */}
+            <div className="bg-white rounded-lg shadow-md border overflow-hidden">
+              <div className="px-6 py-4 border-b">
+                <h2 className="text-lg font-semibold text-gray-900">Recent Applications</h2>
               </div>
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead className="bg-gray-50 border-b">
+                    <tr>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Date
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Property
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Submitter
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Status
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Amount
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-gray-200">
+                    {applications.slice(0, 20).map((app) => (
+                      <tr key={app.id} className="hover:bg-gray-50">
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                          {new Date(app.created_at).toLocaleDateString()}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <div>
+                            <div className="text-sm font-medium text-gray-900">
+                              {app.property_address}
+                            </div>
+                            {app.unit_number && (
+                              <div className="text-sm text-gray-500">Unit {app.unit_number}</div>
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <div>
+                            <div className="text-sm font-medium text-gray-900">
+                              {app.submitter_name}
+                            </div>
+                            <div className="text-sm text-gray-500">{app.submitter_email}</div>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusBadgeColor(app.status)}`}>
+                            {getStatusLabel(app.status)}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                          {formatCurrency(app.total_amount || 0)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {applications.length === 0 && !isLoading && (
+                <div className="text-center py-12">
+                  <FileText className="w-12 h-12 text-gray-400 mx-auto mb-4" />
+                  <h3 className="text-lg font-medium text-gray-900 mb-2">No applications found</h3>
+                  <p className="text-gray-500">No applications match the selected date range.</p>
+                </div>
+              )}
             </div>
-          </div>
-        </div>
-
-        {/* Export Buttons */}
-        <div className="bg-white p-6 rounded-lg shadow-md border mb-8">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">Export Data</h2>
-          <div className="flex gap-4">
-            <button
-              onClick={handleExportApplications}
-              className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700"
-            >
-              <Download className="w-4 h-4" />
-              Export Applications CSV
-            </button>
-            <button
-              onClick={handleExportProperties}
-              className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
-            >
-              <Download className="w-4 h-4" />
-              Export Properties CSV
-            </button>
-          </div>
-        </div>
-
-        {/* Recent Applications Table */}
-        <div className="bg-white rounded-lg shadow-md border overflow-hidden">
-          <div className="px-6 py-4 border-b">
-            <h2 className="text-lg font-semibold text-gray-900">Recent Applications</h2>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead className="bg-gray-50 border-b">
-                <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Date
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Property
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Submitter
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Status
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Amount
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
-                {applications.slice(0, 20).map((app) => (
-                  <tr key={app.id} className="hover:bg-gray-50">
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      {new Date(app.created_at).toLocaleDateString()}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div>
-                        <div className="text-sm font-medium text-gray-900">
-                          {app.property_address}
-                        </div>
-                        {app.unit_number && (
-                          <div className="text-sm text-gray-500">Unit {app.unit_number}</div>
-                        )}
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div>
-                        <div className="text-sm font-medium text-gray-900">
-                          {app.submitter_name}
-                        </div>
-                        <div className="text-sm text-gray-500">{app.submitter_email}</div>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusBadgeColor(app.status)}`}>
-                        {getStatusLabel(app.status)}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      {formatCurrency(app.total_amount || 0)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          {applications.length === 0 && !isLoading && (
-            <div className="text-center py-12">
-              <FileText className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-              <h3 className="text-lg font-medium text-gray-900 mb-2">No applications found</h3>
-              <p className="text-gray-500">No applications match the selected date range.</p>
-            </div>
-          )}
-        </div>
+          </>
+        )}
       </div>
 
       {/* Floating Loading Animation */}
-      {(isLoading || isFetching) && (
+      {((activeTab === 'reports' && (isLoading || isFetching)) || (activeTab === 'expiring-documents' && isLoadingExpiringDocs)) && (
         <div className="fixed top-4 right-4 z-50">
           <div className="bg-white rounded-lg shadow-lg border px-4 py-3 flex items-center gap-3">
             <RefreshCw className="w-5 h-5 animate-spin text-blue-600" />
             <span className="text-sm text-gray-700">
-              {isLoading && !applicationsData ? 'Loading reports...' : 'Refreshing...'}
+              {activeTab === 'reports' 
+                ? (isLoading && !applicationsData ? 'Loading reports...' : 'Refreshing...')
+                : 'Loading expiring documents...'
+              }
             </span>
           </div>
         </div>

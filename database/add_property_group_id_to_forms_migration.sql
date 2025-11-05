@@ -11,3 +11,5 @@ ON property_owner_forms(property_group_id);
 -- Add comment for documentation
 COMMENT ON COLUMN property_owner_forms.property_group_id IS 'Reference to application_property_groups for multi-community applications';
 
+
+
