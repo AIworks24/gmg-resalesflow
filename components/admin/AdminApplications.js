@@ -28,7 +28,7 @@ import {
   Download,
 } from 'lucide-react';
 import { useRouter } from 'next/router';
-import { mapFormDataToPDFFields } from '../../lib/pdfService';
+import { mapFormDataToPDFFields } from '../../lib/pdfFieldMapper';
 import AdminPropertyInspectionForm from './AdminPropertyInspectionForm';
 import AdminResaleCertificateForm from './AdminResaleCertificateForm';
 import AdminSettlementForm from './AdminSettlementForm';
@@ -85,6 +85,8 @@ const AdminApplications = ({ userRole }) => {
   const [loadingGroups, setLoadingGroups] = useState(false);
   const [sendingGroupEmail, setSendingGroupEmail] = useState(null);
   const [regeneratingGroupDocs, setRegeneratingGroupDocs] = useState(null);
+  const [simplePdfReady, setSimplePdfReady] = useState(false);
+  const [editingPdf, setEditingPdf] = useState(false);
 
   // Sync selectedStatus with URL query parameter when it changes (for dashboard navigation)
   useEffect(() => {
@@ -116,9 +118,170 @@ const AdminApplications = ({ userRole }) => {
     {
       refreshInterval: 0, // Disable auto-refresh (manual refresh only)
       revalidateOnFocus: false,
-      dedupingInterval: 5000, // Prevent duplicate requests within 5 seconds
+      dedupingInterval: 1000, // Reduced from 5s to 1s for faster real-time updates
     }
   );
+
+  // Set up real-time subscription for applications table
+  useEffect(() => {
+    if (!supabase) {
+      console.warn('Supabase client not available for real-time subscription');
+      return;
+    }
+
+    console.log('Setting up real-time application subscription');
+
+    // Create a channel for real-time updates
+    const channel = supabase
+      .channel('applications-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: '*', // Listen for INSERT, UPDATE, DELETE
+          schema: 'public',
+          table: 'applications',
+        },
+        (payload) => {
+          console.log('Real-time application change detected:', payload.eventType, payload.new?.id || payload.old?.id);
+          
+          // For INSERT events, optimistically add then refresh silently
+          if (payload.eventType === 'INSERT') {
+            const newApp = payload.new;
+            // Skip if it's a draft (we filter those out)
+            if (newApp.status === 'draft') {
+              return;
+            }
+            
+            console.log('New application inserted, updating silently...');
+            // Optimistically add to cache immediately (no loading state)
+            mutate(
+              (currentData) => {
+                if (!currentData?.data) {
+                  // If no data yet, trigger normal load
+                  return currentData;
+                }
+                // Check if already exists (prevent duplicates)
+                if (currentData.data.some(app => app.id === newApp.id)) {
+                  return currentData;
+                }
+                // Add new application to the beginning of the list
+                return {
+                  ...currentData,
+                  data: [newApp, ...currentData.data],
+                  count: (currentData.count || 0) + 1,
+                };
+              },
+              { 
+                revalidate: true, // Fetch full data in background
+                populateCache: true,
+                rollbackOnError: true
+              }
+            ).catch(err => console.warn('Failed to update applications list:', err));
+          }
+          // For UPDATE events, refresh silently
+          else if (payload.eventType === 'UPDATE') {
+            const newStatus = payload.new?.status;
+            const oldStatus = payload.old?.status;
+            const updatedApp = payload.new;
+            
+            // Skip draft-only updates
+            if (newStatus === 'draft' && oldStatus === 'draft') {
+              return;
+            }
+            
+            // If status changed from draft to submitted, refresh immediately
+            if (oldStatus === 'draft' && newStatus !== 'draft') {
+              console.log('Application submitted, updating silently...');
+              // Optimistically update, then refresh in background
+              mutate(
+                (currentData) => {
+                  if (!currentData?.data) return currentData;
+                  // Check if exists, if not add it (draft -> submitted means it should appear)
+                  const exists = currentData.data.some(app => app.id === updatedApp.id);
+                  if (exists) {
+                    return {
+                      ...currentData,
+                      data: currentData.data.map(app => 
+                        app.id === updatedApp.id ? { ...app, ...updatedApp } : app
+                      ),
+                    };
+                  } else {
+                    // Add to list if it wasn't there before
+                    return {
+                      ...currentData,
+                      data: [updatedApp, ...currentData.data],
+                      count: (currentData.count || 0) + 1,
+                    };
+                  }
+                },
+                { 
+                  revalidate: true,
+                  populateCache: true,
+                  rollbackOnError: true
+                }
+              ).catch(err => console.warn('Failed to refresh applications list:', err));
+            } 
+            // For other updates, optimistically update then refresh silently
+            else if (newStatus !== 'draft') {
+              console.log('Application updated, updating silently...');
+              mutate(
+                (currentData) => {
+                  if (!currentData?.data) return currentData;
+                  // Update the application in the list
+                  return {
+                    ...currentData,
+                    data: currentData.data.map(app => 
+                      app.id === updatedApp.id ? { ...app, ...updatedApp } : app
+                    ),
+                  };
+                },
+                { 
+                  revalidate: true,
+                  populateCache: true,
+                  rollbackOnError: true
+                }
+              ).catch(err => console.warn('Failed to update applications list:', err));
+            }
+          }
+          // For DELETE events, remove immediately
+          else if (payload.eventType === 'DELETE') {
+            const deletedApp = payload.old;
+            console.log('Application deleted, updating silently...');
+            mutate(
+              (currentData) => {
+                if (!currentData?.data) return currentData;
+                // Remove deleted application from the list
+                return {
+                  ...currentData,
+                  data: currentData.data.filter(app => app.id !== deletedApp.id),
+                  count: Math.max(0, (currentData.count || 0) - 1),
+                };
+              },
+              { 
+                revalidate: true,
+                populateCache: true,
+                rollbackOnError: true
+              }
+            ).catch(err => console.warn('Failed to update applications list:', err));
+          }
+        }
+      )
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          console.log('✅ Real-time subscription active for applications');
+        } else if (status === 'CHANNEL_ERROR') {
+          console.error('❌ Real-time subscription error for applications');
+        } else {
+          console.log('Application subscription status:', status);
+        }
+      });
+
+    // Cleanup subscription on unmount
+    return () => {
+      console.log('Cleaning up real-time application subscription');
+      supabase.removeChannel(channel);
+    };
+  }, [supabase, mutate]); // Removed swrData from dependencies to avoid recreating subscription
 
   // Snackbar helper function
   const showSnackbar = (message, type = 'success') => {
@@ -244,6 +407,40 @@ const AdminApplications = ({ userRole }) => {
   useEffect(() => {
     setCurrentPage(1);
   }, [dateFilter, customDateRange, assignedToMe, selectedStatus, selectedApplicationType, searchTerm]);
+
+  // Load SimplePDF script
+  useEffect(() => {
+    // Check if SimplePDF is already loaded
+    if (window.simplePDF) {
+      setSimplePdfReady(true);
+      return;
+    }
+
+    // Load SimplePDF script
+    const script = document.createElement('script');
+    script.src = 'https://unpkg.com/@simplepdf/web-embed-pdf';
+    script.defer = true;
+    script.onload = () => {
+      // Wait for simplePDF to be available
+      const checkSimplePDF = setInterval(() => {
+        if (window.simplePDF) {
+          setSimplePdfReady(true);
+          clearInterval(checkSimplePDF);
+        }
+      }, 100);
+      // Timeout after 5 seconds
+      setTimeout(() => clearInterval(checkSimplePDF), 5000);
+    };
+    script.onerror = () => {
+      console.error('Failed to load SimplePDF script');
+    };
+    document.head.appendChild(script);
+
+    return () => {
+      // Cleanup: remove script if component unmounts (optional)
+      // Note: We don't remove it to keep it available for other components
+    };
+  }, []);
 
 
   // Load property files when attachment modal opens
@@ -436,6 +633,19 @@ const AdminApplications = ({ userRole }) => {
     return { applications: paginated, totalCount: count };
   }, [swrData, dateFilter, customDateRange, selectedStatus, selectedApplicationType, searchTerm, assignedToMe, userEmail, currentPage, itemsPerPage, userRole]);
 
+  // Check if application was created before auto-assignment feature was implemented
+  // Auto-assignment was implemented on 2025-01-15
+  // Show button only for applications created before this feature
+  const isLegacyApplication = (application) => {
+    if (!application.created_at) return false;
+    
+    // Auto-assignment feature implementation date
+    // Applications created before this date should show the manual button
+    const autoAssignFeatureDate = new Date('2025-01-15T00:00:00Z');
+    const appCreatedDate = new Date(application.created_at);
+    
+    return appCreatedDate < autoAssignFeatureDate;
+  };
 
   const handleAssignApplication = async (applicationId, assignedTo) => {
     setAssigningApplication(applicationId);
@@ -464,7 +674,42 @@ const AdminApplications = ({ userRole }) => {
         showSnackbar(error.error || 'Failed to assign application', 'error');
       }
     } catch (error) {
+      console.error('Error assigning application:', error);
       showSnackbar('Failed to assign application', 'error');
+    } finally {
+      setAssigningApplication(null);
+    }
+  };
+
+  const handleAutoAssignApplication = async (applicationId) => {
+    setAssigningApplication(applicationId);
+    try {
+      const response = await fetch('/api/auto-assign-application', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ applicationId }),
+      });
+
+      const result = await response.json();
+
+      if (response.ok && result.success) {
+        showSnackbar(`Application auto-assigned to property owner`, 'success');
+        await mutate(); // Refresh the applications list
+        
+        // Refresh the selected application if it's open in the modal
+        if (selectedApplication && selectedApplication.id === applicationId) {
+          await refreshSelectedApplication(applicationId);
+        }
+      } else {
+        const errorMsg = result.error || 'Failed to auto-assign application';
+        showSnackbar(errorMsg, 'error');
+        console.error('Auto-assignment error:', errorMsg);
+      }
+    } catch (error) {
+      console.error('Error auto-assigning application:', error);
+      showSnackbar('Failed to auto-assign application', 'error');
     } finally {
       setAssigningApplication(null);
     }
@@ -744,16 +989,19 @@ const AdminApplications = ({ userRole }) => {
     const isLenderQuestionnaire = application.application_type === 'lender_questionnaire';
     
     if (isLenderQuestionnaire) {
-      // Lender questionnaire workflow - 3 steps (Download + Upload + Email)
+      // Lender questionnaire workflow - 3 steps (Download + Upload/Edit + Email)
       const hasOriginalFile = !!application.lender_questionnaire_file_path;
+      const hasDownloaded = !!application.lender_questionnaire_downloaded_at;
       const hasCompletedFile = !!application.lender_questionnaire_completed_file_path;
+      const hasEditedFile = !!application.lender_questionnaire_edited_file_path;
+      const hasCompletedOrEdited = hasCompletedFile || hasEditedFile;
       const hasNotificationSent = application.notifications?.some(n => n.notification_type === 'application_approved');
       const hasEmailCompletedAt = application.email_completed_at;
       
       return {
-        download: hasOriginalFile ? 'completed' : 'not_started',
-        upload: hasCompletedFile ? 'completed' : (hasOriginalFile ? 'not_started' : 'not_started'),
-        email: (hasNotificationSent || hasEmailCompletedAt) ? 'completed' : (hasCompletedFile ? 'not_started' : 'not_started')
+        download: hasDownloaded ? 'completed' : (hasOriginalFile ? 'not_started' : 'not_started'),
+        upload: hasCompletedOrEdited ? 'completed' : (hasDownloaded ? 'not_started' : 'not_started'),
+        email: (hasNotificationSent || hasEmailCompletedAt) ? 'completed' : (hasCompletedOrEdited ? 'not_started' : 'not_started')
       };
     }
     
@@ -2160,8 +2408,9 @@ const AdminApplications = ({ userRole }) => {
     );
   }
 
-  // Show initial loading state
-  if (isLoading) {
+  // Show initial loading state only on first load (not during real-time updates)
+  // If we have data, don't show loading screen even if SWR is revalidating
+  if (isLoading && !swrData) {
     return (
       <AdminLayout>
         <div className='flex items-center justify-center min-h-screen'>
@@ -2750,23 +2999,35 @@ const AdminApplications = ({ userRole }) => {
                     <div className='flex items-center justify-between'>
                       <div className='flex items-center gap-3'>
                         <User className='w-5 h-5 text-gray-400' />
-                        <div>
+                        <div className='flex-1'>
                           <label className='block text-sm font-medium text-gray-700 mb-1'>
                             Assigned to:
                           </label>
-                          <select
-                            value={selectedApplication.assigned_to || ''}
-                            onChange={(e) => handleAssignApplication(selectedApplication.id, e.target.value || null)}
-                            disabled={assigningApplication === selectedApplication.id}
-                            className='px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white min-w-[200px]'
-                          >
-                            <option value="">Unassigned</option>
-                            {staffMembers.map((staff) => (
-                              <option key={staff.email} value={staff.email}>
-                                {staff.first_name} {staff.last_name} ({staff.role})
-                              </option>
-                            ))}
-                          </select>
+                          <div className='flex gap-2 items-end'>
+                            <select
+                              value={selectedApplication.assigned_to || ''}
+                              onChange={(e) => handleAssignApplication(selectedApplication.id, e.target.value || null)}
+                              disabled={assigningApplication === selectedApplication.id}
+                              className='px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white min-w-[200px] flex-1'
+                            >
+                              <option value="">Unassigned</option>
+                              {staffMembers.map((staff) => (
+                                <option key={staff.email} value={staff.email}>
+                                  {staff.first_name} {staff.last_name} ({staff.role})
+                                </option>
+                              ))}
+                            </select>
+                            {!selectedApplication.assigned_to && isLegacyApplication(selectedApplication) && (
+                              <button
+                                onClick={() => handleAutoAssignApplication(selectedApplication.id)}
+                                disabled={assigningApplication === selectedApplication.id}
+                                className='px-3 py-2 text-sm bg-blue-100 text-blue-800 rounded-md hover:bg-blue-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap'
+                                title='Auto-assign to property owner (legacy application)'
+                              >
+                                Auto-Assign
+                              </button>
+                            )}
+                          </div>
                         </div>
                       </div>
                       {assigningApplication === selectedApplication.id && (
@@ -2824,6 +3085,24 @@ const AdminApplications = ({ userRole }) => {
                                       if (error) throw error;
                                       if (data?.signedUrl) {
                                         window.open(data.signedUrl, '_blank');
+                                        
+                                        // Track download
+                                        try {
+                                          const trackResponse = await fetch('/api/track-lender-questionnaire-download', {
+                                            method: 'POST',
+                                            headers: { 'Content-Type': 'application/json' },
+                                            body: JSON.stringify({
+                                              applicationId: selectedApplication.id,
+                                            }),
+                                          });
+                                          
+                                          if (trackResponse.ok) {
+                                            await refreshSelectedApplication(selectedApplication.id);
+                                          }
+                                        } catch (trackError) {
+                                          console.error('Error tracking download:', trackError);
+                                          // Don't show error to user, download was successful
+                                        }
                                       }
                                     } catch (error) {
                                       console.error('Error downloading file:', error);
@@ -2844,7 +3123,7 @@ const AdminApplications = ({ userRole }) => {
                               )}
                             </div>
 
-                            {/* Step 2: Reupload the Form */}
+                            {/* Step 2: Reupload or Edit the Form */}
                             <div className={`border rounded-lg p-4 ${getTaskStatusColor(taskStatuses.upload)}`}>
                               <div className='flex items-center justify-between'>
                                 <div className='flex items-center gap-3'>
@@ -2853,83 +3132,145 @@ const AdminApplications = ({ userRole }) => {
                                   </div>
                                   {getTaskStatusIcon(taskStatuses.upload)}
                                   <div>
-                                    <h4 className='font-medium'>Reupload the Form</h4>
+                                    <h4 className='font-medium'>Reupload or Edit the Form</h4>
                                     <p className='text-sm opacity-75'>{getTaskStatusText(taskStatuses.upload)}</p>
-                                    <p className='text-xs opacity-60 mt-1'>Upload the completed lender questionnaire form after filling it out</p>
+                                    <p className='text-xs opacity-60 mt-1'>Upload the completed lender questionnaire form or edit the PDF directly</p>
                                     {selectedApplication.lender_questionnaire_completed_uploaded_at && (
                                       <p className='text-sm opacity-75 mt-1'>
                                         Uploaded: {new Date(selectedApplication.lender_questionnaire_completed_uploaded_at).toLocaleString()}
                                       </p>
                                     )}
+                                    {selectedApplication.lender_questionnaire_edited_at && (
+                                      <p className='text-sm opacity-75 mt-1'>
+                                        Edited: {new Date(selectedApplication.lender_questionnaire_edited_at).toLocaleString()}
+                                      </p>
+                                    )}
                                   </div>
                                 </div>
-                                <div className='flex gap-2'>
-                                  {selectedApplication.lender_questionnaire_completed_file_path ? (
-                                    <>
-                                      <button
-                                        onClick={async () => {
-                                          try {
-                                            const { data, error } = await supabase.storage
-                                              .from('bucket0')
-                                              .createSignedUrl(selectedApplication.lender_questionnaire_completed_file_path, 3600);
-                                            
-                                            if (error) throw error;
-                                            if (data?.signedUrl) {
-                                              window.open(data.signedUrl, '_blank');
-                                            }
-                                          } catch (error) {
-                                            console.error('Error downloading file:', error);
-                                            showSnackbar('Failed to download file', 'error');
+                                <div className='flex gap-2 flex-wrap'>
+                                  {/* View button - enabled when there's uploaded or edited file */}
+                                  {(selectedApplication.lender_questionnaire_completed_file_path || selectedApplication.lender_questionnaire_edited_file_path) && (
+                                    <button
+                                      onClick={async () => {
+                                        try {
+                                          const filePath = selectedApplication.lender_questionnaire_completed_file_path || selectedApplication.lender_questionnaire_edited_file_path;
+                                          const { data, error } = await supabase.storage
+                                            .from('bucket0')
+                                            .createSignedUrl(filePath, 3600);
+                                          
+                                          if (error) throw error;
+                                          if (data?.signedUrl) {
+                                            window.open(data.signedUrl, '_blank');
                                           }
-                                        }}
-                                        className='px-3 py-2 bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity text-sm font-medium flex items-center gap-1'
-                                      >
-                                        <Download className='w-4 h-4' />
-                                        View
-                                      </button>
-                                      <button
-                                        onClick={() => {
-                                          const input = document.createElement('input');
-                                          input.type = 'file';
-                                          input.accept = '.pdf,.doc,.docx';
-                                          input.onchange = async (e) => {
-                                            const file = e.target.files?.[0];
-                                            if (!file) return;
+                                        } catch (error) {
+                                          console.error('Error viewing file:', error);
+                                          showSnackbar('Failed to view file', 'error');
+                                        }
+                                      }}
+                                      className='px-3 py-2 bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity text-sm font-medium flex items-center gap-1'
+                                    >
+                                      <Eye className='w-4 h-4' />
+                                      View
+                                    </button>
+                                  )}
+                                  {/* Edit PDF button */}
+                                  <button
+                                    onClick={async () => {
+                                      try {
+                                        if (!selectedApplication.lender_questionnaire_file_path) {
+                                          showSnackbar('No original file available to edit', 'error');
+                                          return;
+                                        }
+                                        
+                                        if (!simplePdfReady) {
+                                          showSnackbar('PDF editor is loading, please wait...', 'error');
+                                          return;
+                                        }
 
-                                            try {
-                                              setUploading(true);
-                                              const formData = new FormData();
-                                              formData.append('file', file);
-                                              formData.append('applicationId', selectedApplication.id);
-
-                                              const response = await fetch('/api/upload-lender-questionnaire-completed', {
-                                                method: 'POST',
-                                                body: formData,
-                                              });
-
-                                              if (!response.ok) {
-                                                const error = await response.json();
-                                                throw new Error(error.error || 'Failed to upload file');
-                                              }
-
-                                              showSnackbar('Completed form uploaded successfully', 'success');
-                                              await refreshSelectedApplication(selectedApplication.id);
-                                            } catch (error) {
-                                              console.error('Error uploading completed form:', error);
-                                              showSnackbar(error.message || 'Failed to upload completed form', 'error');
-                                            } finally {
-                                              setUploading(false);
+                                        setEditingPdf(true);
+                                        
+                                        // Get signed URL for the original file (use edited file if available for re-editing)
+                                        const fileToEdit = selectedApplication.lender_questionnaire_edited_file_path || selectedApplication.lender_questionnaire_file_path;
+                                        const { data: urlData, error: urlError } = await supabase.storage
+                                          .from('bucket0')
+                                          .createSignedUrl(fileToEdit, 3600);
+                                        
+                                        if (urlError) throw urlError;
+                                        
+                                        if (urlData?.signedUrl && window.simplePDF) {
+                                          // Open SimplePDF editor with the PDF
+                                          window.simplePDF.openEditor({
+                                            href: urlData.signedUrl,
+                                            context: {
+                                              applicationId: selectedApplication.id,
+                                              type: 'lender_questionnaire_edit'
                                             }
-                                          };
-                                          input.click();
-                                        }}
-                                        disabled={uploading || !selectedApplication.lender_questionnaire_file_path}
-                                        className='px-4 py-2 bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1'
-                                      >
-                                        <Upload className='w-4 h-4' />
-                                        {uploading ? 'Uploading...' : 'Replace'}
-                                      </button>
-                                    </>
+                                          });
+                                          
+                                          // Show instructions to user after editor opens
+                                          setTimeout(() => {
+                                            showSnackbar('PDF editor opened. After editing, download the PDF and upload it using the "Upload Completed Form" button.', 'info');
+                                            setEditingPdf(false);
+                                          }, 1500);
+                                        } else {
+                                          throw new Error('PDF editor not available');
+                                        }
+                                      } catch (error) {
+                                        console.error('Error opening PDF editor:', error);
+                                        showSnackbar(error.message || 'Failed to open PDF editor', 'error');
+                                        setEditingPdf(false);
+                                      }
+                                    }}
+                                    disabled={!selectedApplication.lender_questionnaire_file_path || editingPdf || !simplePdfReady || !selectedApplication.lender_questionnaire_downloaded_at}
+                                    className='px-3 py-2 bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1'
+                                  >
+                                    <Edit className='w-4 h-4' />
+                                    {editingPdf ? 'Opening...' : 'Edit PDF'}
+                                  </button>
+                                  {/* Upload button */}
+                                  {selectedApplication.lender_questionnaire_completed_file_path ? (
+                                    <button
+                                      onClick={() => {
+                                        const input = document.createElement('input');
+                                        input.type = 'file';
+                                        input.accept = '.pdf,.doc,.docx';
+                                        input.onchange = async (e) => {
+                                          const file = e.target.files?.[0];
+                                          if (!file) return;
+
+                                          try {
+                                            setUploading(true);
+                                            const formData = new FormData();
+                                            formData.append('file', file);
+                                            formData.append('applicationId', selectedApplication.id);
+
+                                            const response = await fetch('/api/upload-lender-questionnaire-completed', {
+                                              method: 'POST',
+                                              body: formData,
+                                            });
+
+                                            if (!response.ok) {
+                                              const error = await response.json();
+                                              throw new Error(error.error || 'Failed to upload file');
+                                            }
+
+                                            showSnackbar('Completed form uploaded successfully', 'success');
+                                            await refreshSelectedApplication(selectedApplication.id);
+                                          } catch (error) {
+                                            console.error('Error uploading completed form:', error);
+                                            showSnackbar(error.message || 'Failed to upload completed form', 'error');
+                                          } finally {
+                                            setUploading(false);
+                                          }
+                                        };
+                                        input.click();
+                                      }}
+                                      disabled={uploading || !selectedApplication.lender_questionnaire_downloaded_at}
+                                      className='px-4 py-2 bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1'
+                                    >
+                                      <Upload className='w-4 h-4' />
+                                      {uploading ? 'Uploading...' : 'Replace'}
+                                    </button>
                                   ) : (
                                     <button
                                       onClick={() => {
@@ -2967,7 +3308,7 @@ const AdminApplications = ({ userRole }) => {
                                         };
                                         input.click();
                                       }}
-                                      disabled={uploading || !selectedApplication.lender_questionnaire_file_path}
+                                      disabled={uploading || !selectedApplication.lender_questionnaire_downloaded_at}
                                       className='px-4 py-2 bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1'
                                     >
                                       <Upload className='w-4 h-4' />
@@ -2976,9 +3317,14 @@ const AdminApplications = ({ userRole }) => {
                                   )}
                                 </div>
                               </div>
-                              {selectedApplication.lender_questionnaire_completed_file_path && (
+                              {(selectedApplication.lender_questionnaire_completed_file_path || selectedApplication.lender_questionnaire_edited_file_path) && (
                                 <div className='mt-2 text-sm opacity-75'>
-                                  File: {selectedApplication.lender_questionnaire_completed_file_path.split('/').pop()}
+                                  {selectedApplication.lender_questionnaire_completed_file_path && (
+                                    <div>Uploaded File: {selectedApplication.lender_questionnaire_completed_file_path.split('/').pop()}</div>
+                                  )}
+                                  {selectedApplication.lender_questionnaire_edited_file_path && (
+                                    <div>Edited File: {selectedApplication.lender_questionnaire_edited_file_path.split('/').pop()}</div>
+                                  )}
                                 </div>
                               )}
                             </div>
@@ -3030,7 +3376,7 @@ const AdminApplications = ({ userRole }) => {
                                       setSendingEmail(false);
                                     }
                                   }}
-                                  disabled={!selectedApplication.lender_questionnaire_completed_file_path || sendingEmail}
+                                  disabled={(!selectedApplication.lender_questionnaire_completed_file_path && !selectedApplication.lender_questionnaire_edited_file_path) || sendingEmail}
                                   className='px-4 py-2 bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1'
                                 >
                                   <Mail className='w-4 h-4' />

@@ -1,3 +1,4 @@
+import { createPagesServerClient } from '@supabase/auth-helpers-nextjs';
 import { createClient } from '@supabase/supabase-js';
 import formidable from 'formidable';
 import fs from 'fs';
@@ -9,7 +10,8 @@ export const config = {
   },
 };
 
-const supabase = createClient(
+// Service role client for admin operations (file storage)
+const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
@@ -20,7 +22,22 @@ export default async function handler(req, res) {
   }
 
   try {
-    // Parse form data
+    // Create authenticated client to verify user session
+    // IMPORTANT: Do this BEFORE parsing form data to ensure cookies are available
+    const supabase = createPagesServerClient({ req, res });
+
+    // Verify user is authenticated BEFORE parsing form data
+    // This ensures session cookies are read before formidable consumes the request
+    const { data: { session }, error: authError } = await supabase.auth.getSession();
+    
+    if (authError || !session) {
+      return res.status(401).json({ error: 'Unauthorized - Please log in to upload files' });
+    }
+
+    const userId = session.user.id;
+
+    // Parse form data AFTER auth check
+    // Note: formidable may consume the request stream, but we've already read the session
     const form = formidable({
       maxFileSize: 10 * 1024 * 1024, // 10MB
       keepExtensions: true,
@@ -38,6 +55,27 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'No application ID provided' });
     }
 
+    // Verify the user owns this application
+    const { data: application, error: appError } = await supabase
+      .from('applications')
+      .select('id, user_id, application_type')
+      .eq('id', applicationId)
+      .single();
+
+    if (appError || !application) {
+      return res.status(404).json({ error: 'Application not found' });
+    }
+
+    // Verify user owns the application
+    if (application.user_id !== userId) {
+      return res.status(403).json({ error: 'Forbidden - You do not have permission to upload to this application' });
+    }
+
+    // Verify it's a lender questionnaire application
+    if (application.application_type !== 'lender_questionnaire') {
+      return res.status(400).json({ error: 'Invalid application type for this upload endpoint' });
+    }
+
     // Validate file type
     const allowedTypes = ['.pdf', '.doc', '.docx'];
     const fileExt = '.' + file.originalFilename.split('.').pop().toLowerCase();
@@ -51,20 +89,48 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'File size exceeds 10MB limit.' });
     }
 
-    // Generate unique filename
+    // Generate unique filename (always use .pdf extension)
     const timestamp = Date.now();
     const sanitizedName = file.originalFilename.replace(/[^a-zA-Z0-9.-]/g, '_');
-    const fileName = `lender_questionnaire_${timestamp}_${sanitizedName}`;
+    const baseFileName = sanitizedName.replace(/\.[^/.]+$/, ''); // Remove original extension
+    const fileName = `lender_questionnaire_${timestamp}_${baseFileName}.pdf`;
     const filePath = `lender_questionnaires/${applicationId}/${fileName}`;
 
-    // Read file data
-    const fileData = fs.readFileSync(file.filepath);
+    // Convert non-PDF files to PDF
+    let fileData;
+    let wasConverted = false;
+    
+    if (fileExt === '.pdf') {
+      // Read PDF file directly
+      fileData = fs.readFileSync(file.filepath);
+    } else if (fileExt === '.docx' || fileExt === '.doc') {
+      // Convert DOCX/DOC to PDF
+      try {
+        const { convertOfficeToPdf } = require('../../lib/docxToPdfConverter');
+        console.log(`Converting ${fileExt} file to PDF: ${file.originalFilename}`);
+        fileData = await convertOfficeToPdf(file.filepath, fileExt);
+        wasConverted = true;
+        console.log(`Successfully converted ${fileExt} to PDF`);
+      } catch (conversionError) {
+        console.error('Error converting file to PDF:', conversionError);
+        // Clean up temporary file
+        fs.unlinkSync(file.filepath);
+        return res.status(500).json({ 
+          error: `Failed to convert ${fileExt} to PDF: ${conversionError.message}. Please try converting the file to PDF first.` 
+        });
+      }
+    } else {
+      // This shouldn't happen due to validation above, but just in case
+      fs.unlinkSync(file.filepath);
+      return res.status(400).json({ error: 'Unsupported file type for conversion.' });
+    }
 
-    // Upload to Supabase storage
-    const { data: uploadData, error: uploadError } = await supabase.storage
+    // Upload to Supabase storage (always as PDF after conversion)
+    // Use admin client for storage operations
+    const { data: uploadData, error: uploadError } = await supabaseAdmin.storage
       .from('bucket0')
       .upload(filePath, fileData, {
-        contentType: file.mimetype || 'application/octet-stream',
+        contentType: 'application/pdf', // Always PDF after conversion
         upsert: false,
       });
 
@@ -78,6 +144,7 @@ export default async function handler(req, res) {
     deletionDate.setDate(deletionDate.getDate() + 30);
 
     // Update application record with file path and deletion date
+    // Use authenticated client to update (ensures user owns the application)
     const { error: updateError } = await supabase
       .from('applications')
       .update({
@@ -87,12 +154,13 @@ export default async function handler(req, res) {
         submitted_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       })
-      .eq('id', applicationId);
+      .eq('id', applicationId)
+      .eq('user_id', userId); // Double-check ownership
 
     if (updateError) {
       console.error('Error updating application:', updateError);
       // Try to delete the uploaded file if database update fails
-      await supabase.storage.from('bucket0').remove([filePath]);
+      await supabaseAdmin.storage.from('bucket0').remove([filePath]);
       return res.status(500).json({ error: 'Failed to update application: ' + updateError.message });
     }
 
@@ -101,8 +169,8 @@ export default async function handler(req, res) {
 
     // Send confirmation email
     try {
-      // Get application details for email
-      const { data: application, error: appError } = await supabase
+      // Get application details for email (use authenticated client)
+      const { data: applicationData, error: appError } = await supabase
         .from('applications')
         .select(`
           submitter_name, 
@@ -117,11 +185,12 @@ export default async function handler(req, res) {
           )
         `)
         .eq('id', applicationId)
+        .eq('user_id', userId) // Ensure we only get user's own applications
         .single();
 
-      if (!appError && application) {
+      if (!appError && applicationData) {
         // Calculate expected completion date
-        const processingDays = application.package_type === 'rush' ? 3 : 10;
+        const processingDays = applicationData.package_type === 'rush' ? 3 : 10;
         const expectedDate = new Date();
         expectedDate.setDate(expectedDate.getDate() + processingDays);
 
@@ -140,12 +209,12 @@ export default async function handler(req, res) {
           },
         });
 
-        const hoaName = application.hoa_properties?.name || 'Unknown HOA';
+        const hoaName = applicationData.hoa_properties?.name || 'Unknown HOA';
         const emailFrom = process.env.EMAIL_FROM || process.env.EMAIL_USERNAME || process.env.GMAIL_USER;
         
         await transporter.sendMail({
           from: `"GMG ResaleFlow" <${emailFrom}>`,
-          to: application.submitter_email,
+          to: applicationData.submitter_email,
           subject: `Lender Questionnaire Received - #${applicationId}`,
           html: `
             <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
@@ -155,7 +224,7 @@ export default async function handler(req, res) {
               </div>
               
               <div style="background-color: #f9f9f9; padding: 30px; border-radius: 0 0 8px 8px;">
-                <p>Dear ${application.submitter_name || 'Valued Customer'},</p>
+                <p>Dear ${applicationData.submitter_name || 'Valued Customer'},</p>
                 
                 <p>Thank you for uploading your lender's questionnaire form. We have received your request and will begin processing it immediately.</p>
                 
@@ -168,7 +237,7 @@ export default async function handler(req, res) {
                     </tr>
                     <tr>
                       <td style="padding: 8px 0; border-bottom: 1px solid #eee;"><strong>Property Address:</strong></td>
-                      <td style="padding: 8px 0; border-bottom: 1px solid #eee;">${application.property_address || 'N/A'}</td>
+                      <td style="padding: 8px 0; border-bottom: 1px solid #eee;">${applicationData.property_address || 'N/A'}</td>
                     </tr>
                     <tr>
                       <td style="padding: 8px 0; border-bottom: 1px solid #eee;"><strong>HOA Community:</strong></td>
@@ -176,11 +245,11 @@ export default async function handler(req, res) {
                     </tr>
                     <tr>
                       <td style="padding: 8px 0; border-bottom: 1px solid #eee;"><strong>Processing Type:</strong></td>
-                      <td style="padding: 8px 0; border-bottom: 1px solid #eee;">${application.package_type === 'rush' ? 'Rush (3 business days)' : 'Standard (10 calendar days)'}</td>
+                      <td style="padding: 8px 0; border-bottom: 1px solid #eee;">${applicationData.package_type === 'rush' ? 'Rush (3 business days)' : 'Standard (10 calendar days)'}</td>
                     </tr>
                     <tr>
                       <td style="padding: 8px 0; border-bottom: 1px solid #eee;"><strong>Total Amount:</strong></td>
-                      <td style="padding: 8px 0; border-bottom: 1px solid #eee;">$${application.total_amount || 'N/A'}</td>
+                      <td style="padding: 8px 0; border-bottom: 1px solid #eee;">$${applicationData.total_amount || 'N/A'}</td>
                     </tr>
                     <tr>
                       <td style="padding: 8px 0;"><strong>Expected Completion:</strong></td>
@@ -221,8 +290,11 @@ export default async function handler(req, res) {
 
     return res.status(200).json({
       success: true,
-      message: 'Lender questionnaire uploaded successfully',
+      message: wasConverted 
+        ? `Lender questionnaire uploaded and converted to PDF successfully` 
+        : 'Lender questionnaire uploaded successfully',
       filePath: filePath,
+      wasConverted: wasConverted,
     });
   } catch (error) {
     console.error('Error in upload-lender-questionnaire:', error);

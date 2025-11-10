@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import { loadStripe } from '@stripe/stripe-js';
 import { getStripeWithFallback } from '../lib/stripe';
+import { getTestModeFromRequest, setTestModeCookie, getTestModeFromCookie } from '../lib/stripeMode';
 import { useAppContext } from '../lib/AppContext';
 import { useApplicantAuth } from '../providers/ApplicantAuthProvider';
 import useApplicantAuthStore from '../stores/applicantAuthStore';
@@ -824,6 +825,7 @@ const TransactionDetailsStep = ({ formData, handleInputChange }) => (
 
 const PackagePaymentStep = ({
   formData,
+  setFormData,
   handleInputChange,
   currentStep,
   setCurrentStep,
@@ -837,6 +839,7 @@ const PackagePaymentStep = ({
   setSnackbarData,
   setShowSnackbar,
   loadApplications,
+  isTestMode, // Add test mode prop
 }) => {
   const [isProcessing, setIsProcessing] = useState(false);
   const [paymentError, setPaymentError] = useState(null);
@@ -1036,6 +1039,31 @@ const PackagePaymentStep = ({
           setApplicationId(createdApplicationId);
         }
 
+        // Auto-assign application to property owner at submission time (for all applications)
+        // This happens for both free and paid applications when they are submitted
+        if (createdApplicationId) {
+          try {
+            console.log(`[Submission] Attempting to auto-assign application ${createdApplicationId} at submission time`);
+            const assignResponse = await fetch('/api/auto-assign-application', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({ applicationId: createdApplicationId }),
+            });
+            
+            const assignResult = await assignResponse.json();
+            if (assignResult.success) {
+              console.log(`[Submission] Successfully auto-assigned application ${createdApplicationId} to ${assignResult.assignedTo}`);
+            } else {
+              console.warn(`[Submission] Failed to auto-assign application ${createdApplicationId}:`, assignResult.error);
+            }
+          } catch (assignError) {
+            console.error('[Submission] Error calling auto-assign API:', assignError);
+            // Don't fail the submission if auto-assignment fails
+          }
+        }
+
         // Forms are created automatically by the API for free transactions
         // No need to call createPropertyOwnerForms here
 
@@ -1141,6 +1169,7 @@ const PackagePaymentStep = ({
             payment_method: formData.paymentMethod,
             total_amount: totalAmount,
             status: 'pending_payment',
+            submitted_at: new Date().toISOString(), // Set submitted_at for payment flow
             updated_at: new Date().toISOString(),
             expected_completion_date: new Date(
               Date.now() +
@@ -1158,6 +1187,28 @@ const PackagePaymentStep = ({
 
           if (applicationError) throw applicationError;
           createdApplicationId = applicationResult[0].id;
+          
+          // Auto-assign application at submission time (before payment)
+          try {
+            console.log(`[Payment] Attempting to auto-assign application ${createdApplicationId} at submission (credit card - update)`);
+            const assignResponse = await fetch('/api/auto-assign-application', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({ applicationId: createdApplicationId }),
+            });
+            
+            const assignResult = await assignResponse.json();
+            if (assignResult.success) {
+              console.log(`[Payment] Successfully auto-assigned application ${createdApplicationId} to ${assignResult.assignedTo}`);
+            } else {
+              console.warn(`[Payment] Failed to auto-assign application ${createdApplicationId}:`, assignResult.error);
+            }
+          } catch (assignError) {
+            console.error('[Payment] Error calling auto-assign API:', assignError);
+            // Don't fail the payment flow if auto-assignment fails
+          }
         } else {
           // Create new application
           const hoaProperty = (hoaProperties || []).find(
@@ -1204,12 +1255,34 @@ const PackagePaymentStep = ({
           if (applicationError) throw applicationError;
           createdApplicationId = applicationResult[0].id;
           
+          // Auto-assign application at submission time (before payment)
+          try {
+            console.log(`[Payment] Attempting to auto-assign application ${createdApplicationId} at submission (credit card)`);
+            const assignResponse = await fetch('/api/auto-assign-application', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({ applicationId: createdApplicationId }),
+            });
+            
+            const assignResult = await assignResponse.json();
+            if (assignResult.success) {
+              console.log(`[Payment] Successfully auto-assigned application ${createdApplicationId} to ${assignResult.assignedTo}`);
+            } else {
+              console.warn(`[Payment] Failed to auto-assign application ${createdApplicationId}:`, assignResult.error);
+            }
+          } catch (assignError) {
+            console.error('[Payment] Error calling auto-assign API:', assignError);
+            // Don't fail the payment flow if auto-assignment fails
+          }
+          
           // Set the application ID for future updates
           setApplicationId(createdApplicationId);
         }
 
-        // Get Stripe instance with enhanced error handling
-        const stripe = await getStripeWithFallback();
+        // Get Stripe instance with enhanced error handling (use test mode if enabled)
+        const stripe = await getStripeWithFallback(isTestMode);
 
         // Create checkout session
         const response = await fetch('/api/create-checkout-session', {
@@ -1223,6 +1296,7 @@ const PackagePaymentStep = ({
             applicationId: createdApplicationId,
             formData: formData,
             amount: Math.round(totalAmount * 100), // Convert to cents
+            testMode: isTestMode, // Pass test mode to API
           }),
         });
 
@@ -1339,7 +1413,16 @@ const PackagePaymentStep = ({
           <div className='flex items-start justify-between mb-4 gap-4 md:gap-8'>
             <div className='pr-3 md:pr-6 max-w-[70%]'>
               <h4 className='text-lg font-semibold text-gray-900'>
-                {formData.submitterType === 'settlement' ? 'Dues Request - Escrow Instructions' : 
+                {formData.submitterType === 'settlement' ? (() => {
+                  const selectedProperty = hoaProperties?.find(prop => prop.name === formData.hoaProperty);
+                  const location = selectedProperty?.location?.toUpperCase() || '';
+                  if (location.includes('VA') || location.includes('VIRGINIA')) {
+                    return 'Dues Request - Escrow Instructions';
+                  } else if (location.includes('NC') || location.includes('NORTH CAROLINA')) {
+                    return 'Statement of Unpaid Assessments';
+                  }
+                  return 'Dues Request - Escrow Instructions'; // Default fallback
+                })() : 
                  formData.submitterType === 'lender_questionnaire' ? 'Standard' : 'Standard Processing'}
               </h4>
               <p className='text-sm text-gray-600'>
@@ -1439,7 +1522,16 @@ const PackagePaymentStep = ({
           <div className='flex items-start justify-between mb-4 gap-4 md:gap-8'>
             <div className='pr-3 md:pr-6 max-w-[70%]'>
               <h4 className='text-lg font-semibold text-gray-900 flex items-center'>
-                {formData.submitterType === 'settlement' ? 'Rush Dues Request - Escrow Instructions' : 'Rush Processing'}
+                {formData.submitterType === 'settlement' ? (() => {
+                  const selectedProperty = hoaProperties?.find(prop => prop.name === formData.hoaProperty);
+                  const location = selectedProperty?.location?.toUpperCase() || '';
+                  if (location.includes('VA') || location.includes('VIRGINIA')) {
+                    return 'Rush Dues Request - Escrow Instructions';
+                  } else if (location.includes('NC') || location.includes('NORTH CAROLINA')) {
+                    return 'Rush Statement of Unpaid Assessments';
+                  }
+                  return 'Rush Dues Request - Escrow Instructions'; // Default fallback
+                })() : 'Rush Processing'}
                 <span className='ml-2 px-2 py-1 bg-orange-100 text-orange-800 text-xs rounded'>
                   PRIORITY
                 </span>
@@ -1674,6 +1766,10 @@ const PackagePaymentStep = ({
                     }
                     
                     // Calculate base processing fee only (no rush, no credit card fees)
+                    if (formData.submitterType === 'lender_questionnaire') {
+                      const pricing = getPricing('lender_questionnaire', false);
+                      return (pricing.base / 100).toFixed(2); // $400.00
+                    }
                     if (formData.submitterType === 'builder' && formData.publicOffering) {
                       return '200.00';
                     }
@@ -1698,7 +1794,29 @@ const PackagePaymentStep = ({
                 {formData.packageType === 'rush' && (
                   <div className='flex justify-between'>
                     <span>Rush Processing:</span>
-                    <span>+${stripePrices ? stripePrices.rush.rushFeeDisplay.toFixed(2) : '70.66'}</span>
+                    <span>+${(() => {
+                      // Use lender questionnaire rush fee if applicable
+                      if (formData.submitterType === 'lender_questionnaire') {
+                        const pricing = getPricing('lender_questionnaire', true);
+                        return (pricing.rushFee / 100).toFixed(2); // $100.00
+                      }
+                      // Use settlement rush fee if applicable
+                      if (formData.submitterType === 'settlement') {
+                        const selectedProperty = hoaProperties?.find(prop => prop.name === formData.hoaProperty);
+                        if (selectedProperty?.location) {
+                          const location = selectedProperty.location.toUpperCase();
+                          if (location.includes('VA') || location.includes('VIRGINIA')) {
+                            const pricing = getPricing('settlement_va', true);
+                            return (pricing.rushFee / 100).toFixed(2); // $70.66
+                          } else if (location.includes('NC') || location.includes('NORTH CAROLINA')) {
+                            const pricing = getPricing('settlement_nc', true);
+                            return (pricing.rushFee / 100).toFixed(2); // $100.00
+                          }
+                        }
+                      }
+                      // Default rush fee for regular pricing
+                      return stripePrices ? stripePrices.rush.rushFeeDisplay.toFixed(2) : '70.66';
+                    })()}</span>
                   </div>
                 )}
                 {formData.paymentMethod === 'credit_card' && calculateTotal(formData, stripePrices, hoaProperties) > 0 && (
@@ -1902,6 +2020,21 @@ const AuthModal = ({ authMode, setAuthMode, setShowAuthModal, handleAuth, resetP
   const [showForgotPassword, setShowForgotPassword] = useState(false);
   const [resetMessage, setResetMessage] = useState('');
   const [isResetting, setIsResetting] = useState(false);
+  const [isAuthenticating, setIsAuthenticating] = useState(false);
+  const [authError, setAuthError] = useState('');
+
+  // Clear error when switching modes or closing
+  const handleModeSwitch = (newMode) => {
+    setAuthError('');
+    setResetMessage('');
+    setAuthMode(newMode);
+  };
+
+  const handleClose = () => {
+    setAuthError('');
+    setResetMessage('');
+    setShowAuthModal(false);
+  };
 
   return (
     <div className='fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50'>
@@ -1910,7 +2043,11 @@ const AuthModal = ({ authMode, setAuthMode, setShowAuthModal, handleAuth, resetP
           <h2 className='text-2xl font-bold text-green-800'>
             {showForgotPassword ? 'Reset Password' : authMode === 'signin' ? 'Sign In' : 'Create Account'}
           </h2>
-          <button onClick={() => setShowAuthModal(false)}>
+          <button 
+            onClick={handleClose}
+            disabled={isAuthenticating || isResetting}
+            className={isAuthenticating || isResetting ? 'opacity-50 cursor-not-allowed' : ''}
+          >
             <X className='h-6 w-6 text-gray-400' />
           </button>
         </div>
@@ -1918,6 +2055,8 @@ const AuthModal = ({ authMode, setAuthMode, setShowAuthModal, handleAuth, resetP
         <form
           onSubmit={async (e) => {
             e.preventDefault();
+            setAuthError('');
+            
             if (showForgotPassword) {
               setIsResetting(true);
               setResetMessage('');
@@ -1926,18 +2065,43 @@ const AuthModal = ({ authMode, setAuthMode, setShowAuthModal, handleAuth, resetP
                 if (result.success) {
                   setResetMessage('Check your email for password reset instructions.');
                 } else {
-                  setResetMessage(result.error || 'Failed to send reset email.');
+                  setResetMessage(result.error || 'Failed to send reset email. Please try again.');
                 }
               } catch (error) {
-                setResetMessage('Failed to send reset email.');
+                setResetMessage('Failed to send reset email. Please try again.');
               } finally {
                 setIsResetting(false);
               }
             } else {
-              handleAuth(email, password, {
-                first_name: firstName,
-                last_name: lastName,
-              });
+              setIsAuthenticating(true);
+              setAuthError('');
+              try {
+                const result = await handleAuth(email, password, {
+                  first_name: firstName,
+                  last_name: lastName,
+                });
+                
+                // If handleAuth returns an error result
+                if (result && !result.success) {
+                  setAuthError(result.error || 'Authentication failed. Please try again.');
+                  setIsAuthenticating(false);
+                } else if (result && result.success) {
+                  // Success - modal will be closed by handleAuth
+                  setIsAuthenticating(false);
+                  // Reset form fields
+                  setEmail('');
+                  setPassword('');
+                  setFirstName('');
+                  setLastName('');
+                  setAuthError('');
+                } else {
+                  // No result returned, assume success (backward compatibility)
+                  setIsAuthenticating(false);
+                }
+              } catch (error) {
+                setAuthError(error.message || 'An unexpected error occurred. Please try again.');
+                setIsAuthenticating(false);
+              }
             }
           }}
         >
@@ -1951,17 +2115,31 @@ const AuthModal = ({ authMode, setAuthMode, setShowAuthModal, handleAuth, resetP
                 placeholder='Email Address'
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className='w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500'
+                disabled={isResetting}
+                className={`w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 ${
+                  isResetting ? 'bg-gray-100 cursor-not-allowed' : ''
+                }`}
                 required
               />
               {resetMessage && (
-                <div className={`text-sm p-3 rounded-lg ${resetMessage.includes('Check') ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                <div className={`text-sm p-3 rounded-lg ${
+                  resetMessage.includes('Check') || resetMessage.includes('success')
+                    ? 'bg-green-100 text-green-700 border border-green-200' 
+                    : 'bg-red-100 text-red-700 border border-red-200'
+                }`}>
                   {resetMessage}
                 </div>
               )}
             </div>
           ) : (
             <>
+              {/* Error message display */}
+              {authError && (
+                <div className='mb-4 p-3 bg-red-50 border border-red-200 rounded-lg'>
+                  <p className='text-sm text-red-700'>{authError}</p>
+                </div>
+              )}
+
               {authMode === 'signup' && (
                 <div className='grid grid-cols-2 gap-4 mb-4'>
                   <input
@@ -1969,7 +2147,10 @@ const AuthModal = ({ authMode, setAuthMode, setShowAuthModal, handleAuth, resetP
                     placeholder='First Name'
                     value={firstName}
                     onChange={(e) => setFirstName(e.target.value)}
-                    className='px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500'
+                    disabled={isAuthenticating}
+                    className={`px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 ${
+                      isAuthenticating ? 'bg-gray-100 cursor-not-allowed' : ''
+                    }`}
                     required
                   />
                   <input
@@ -1977,7 +2158,10 @@ const AuthModal = ({ authMode, setAuthMode, setShowAuthModal, handleAuth, resetP
                     placeholder='Last Name'
                     value={lastName}
                     onChange={(e) => setLastName(e.target.value)}
-                    className='px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500'
+                    disabled={isAuthenticating}
+                    className={`px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 ${
+                      isAuthenticating ? 'bg-gray-100 cursor-not-allowed' : ''
+                    }`}
                     required
                   />
                 </div>
@@ -1989,7 +2173,10 @@ const AuthModal = ({ authMode, setAuthMode, setShowAuthModal, handleAuth, resetP
                   placeholder='Email Address'
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  className='w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500'
+                  disabled={isAuthenticating}
+                  className={`w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 ${
+                    isAuthenticating ? 'bg-gray-100 cursor-not-allowed' : ''
+                  }`}
                   required
                 />
                 <input
@@ -1997,7 +2184,10 @@ const AuthModal = ({ authMode, setAuthMode, setShowAuthModal, handleAuth, resetP
                   placeholder='Password'
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className='w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500'
+                  disabled={isAuthenticating}
+                  className={`w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 ${
+                    isAuthenticating ? 'bg-gray-100 cursor-not-allowed' : ''
+                  }`}
                   required
                 />
               </div>
@@ -2006,9 +2196,9 @@ const AuthModal = ({ authMode, setAuthMode, setShowAuthModal, handleAuth, resetP
 
           <button
             type='submit'
-            disabled={showForgotPassword && isResetting}
+            disabled={(showForgotPassword && isResetting) || (!showForgotPassword && isAuthenticating)}
             className={`w-full mt-6 px-6 py-3 rounded-lg transition-colors flex items-center justify-center ${
-              showForgotPassword && isResetting
+              (showForgotPassword && isResetting) || (!showForgotPassword && isAuthenticating)
                 ? 'bg-gray-400 cursor-not-allowed'
                 : 'bg-green-700 hover:bg-green-800'
             } text-white`}
@@ -2020,6 +2210,14 @@ const AuthModal = ({ authMode, setAuthMode, setShowAuthModal, handleAuth, resetP
                   <path className='opacity-75' fill='currentColor' d='M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z'></path>
                 </svg>
                 Sending...
+              </>
+            ) : !showForgotPassword && isAuthenticating ? (
+              <>
+                <svg className='animate-spin -ml-1 mr-3 h-5 w-5 text-white' xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24'>
+                  <circle className='opacity-25' cx='12' cy='12' r='10' stroke='currentColor' strokeWidth='4'></circle>
+                  <path className='opacity-75' fill='currentColor' d='M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z'></path>
+                </svg>
+                {authMode === 'signin' ? 'Signing in...' : 'Creating account...'}
               </>
             ) : (
               showForgotPassword ? 'Send Reset Email' : authMode === 'signin' ? 'Sign In' : 'Create Account'
@@ -2033,8 +2231,10 @@ const AuthModal = ({ authMode, setAuthMode, setShowAuthModal, handleAuth, resetP
               onClick={() => {
                 setShowForgotPassword(false);
                 setResetMessage('');
+                setAuthError('');
               }}
-              className='text-green-600 hover:text-green-800'
+              disabled={isAuthenticating || isResetting}
+              className='text-green-600 hover:text-green-800 disabled:opacity-50 disabled:cursor-not-allowed'
             >
               Back to Sign In
             </button>
@@ -2042,18 +2242,21 @@ const AuthModal = ({ authMode, setAuthMode, setShowAuthModal, handleAuth, resetP
             <>
               {authMode === 'signin' && (
                 <button
-                  onClick={() => setShowForgotPassword(true)}
-                  className='text-green-600 hover:text-green-800 text-sm'
+                  onClick={() => {
+                    setShowForgotPassword(true);
+                    setAuthError('');
+                  }}
+                  disabled={isAuthenticating}
+                  className='text-green-600 hover:text-green-800 text-sm disabled:opacity-50 disabled:cursor-not-allowed'
                 >
                   Forgot your password?
                 </button>
               )}
               <div>
                 <button
-                  onClick={() =>
-                    setAuthMode(authMode === 'signin' ? 'signup' : 'signin')
-                  }
-                  className='text-green-600 hover:text-green-800'
+                  onClick={() => handleModeSwitch(authMode === 'signin' ? 'signup' : 'signin')}
+                  disabled={isAuthenticating}
+                  className='text-green-600 hover:text-green-800 disabled:opacity-50 disabled:cursor-not-allowed'
                 >
                   {authMode === 'signin'
                     ? 'Need an account? Sign up'
@@ -2073,8 +2276,14 @@ const LenderQuestionnaireUploadStep = ({ formData, applicationId, setCurrentStep
   const [isDragging, setIsDragging] = React.useState(false);
   const [isUploading, setIsUploading] = React.useState(false);
   const [uploadProgress, setUploadProgress] = React.useState(0);
+  const [isConverting, setIsConverting] = React.useState(false);
+  const [uploadSuccess, setUploadSuccess] = React.useState(false);
+  const [needsConversion, setNeedsConversion] = React.useState(false);
   const fileInputRef = React.useRef(null);
   const dropZoneRef = React.useRef(null);
+  
+  // Get user from auth store to check authentication status
+  const { user } = useApplicantAuthStore();
 
   const handleDragEnter = (e) => {
     e.preventDefault();
@@ -2129,7 +2338,11 @@ const LenderQuestionnaireUploadStep = ({ formData, applicationId, setCurrentStep
       return;
     }
 
+    // Check if file needs conversion (non-PDF files)
+    const needsConversionCheck = fileExt !== '.pdf';
+    setNeedsConversion(needsConversionCheck);
     setSelectedFile(file);
+    setUploadSuccess(false);
   };
 
   const handleFileInputChange = (e) => {
@@ -2151,22 +2364,40 @@ const LenderQuestionnaireUploadStep = ({ formData, applicationId, setCurrentStep
 
     setIsUploading(true);
     setUploadProgress(0);
+    setIsConverting(false);
+    setUploadSuccess(false);
 
     try {
       const formData = new FormData();
       formData.append('file', selectedFile);
       formData.append('applicationId', applicationId);
 
-      // Simulate progress
+      // Check if file needs conversion
+      const fileExt = '.' + selectedFile.name.split('.').pop().toLowerCase();
+      const willConvert = fileExt !== '.pdf';
+
+      // Simulate upload progress (faster for PDF, slower for conversion)
       const progressInterval = setInterval(() => {
         setUploadProgress(prev => {
+          // If converting, slow down progress to show conversion phase
+          if (willConvert && prev >= 40 && prev < 80) {
+            // Slow progress during conversion phase
+            return prev + 2;
+          }
           if (prev >= 90) {
             clearInterval(progressInterval);
             return prev;
           }
-          return prev + 10;
+          return prev + (willConvert ? 5 : 10);
         });
       }, 200);
+
+      // Show converting status when progress reaches conversion phase
+      if (willConvert) {
+        setTimeout(() => {
+          setIsConverting(true);
+        }, 1000);
+      }
 
       const response = await fetch('/api/upload-lender-questionnaire', {
         method: 'POST',
@@ -2175,6 +2406,7 @@ const LenderQuestionnaireUploadStep = ({ formData, applicationId, setCurrentStep
 
       clearInterval(progressInterval);
       setUploadProgress(100);
+      setIsConverting(false);
 
       if (!response.ok) {
         const error = await response.json();
@@ -2183,17 +2415,83 @@ const LenderQuestionnaireUploadStep = ({ formData, applicationId, setCurrentStep
 
       const data = await response.json();
 
+      // Show success indicator
+      setUploadSuccess(true);
+      setIsUploading(false);
+
+      // Show success message
+      const successMessage = data.wasConverted
+        ? 'File uploaded and converted to PDF successfully! Your request has been submitted.'
+        : 'Lender questionnaire uploaded successfully! Your request has been submitted.';
+      
       setSnackbarData({
-        message: 'Lender questionnaire uploaded successfully! Your request has been submitted.',
+        message: successMessage,
         type: 'success'
       });
       setShowSnackbar(true);
 
-      // Load applications and redirect to dashboard
-      await loadApplications();
-      setCurrentStep(0);
+      // Wait a bit to show success indicator before redirecting
+      setTimeout(async () => {
+        try {
+          // Check auth state from the store
+          const authStore = useApplicantAuthStore.getState();
+          
+          // Verify user is still authenticated
+          if (!authStore.user || !authStore.isAuthenticated()) {
+            console.error('User session lost during upload');
+            setSnackbarData({
+              message: 'Upload successful! However, your session expired. Please refresh the page and log in again to view your applications.',
+              type: 'warning'
+            });
+            setShowSnackbar(true);
+            // Don't redirect if not authenticated
+            return;
+          }
+
+          // Try to reload applications - if this fails due to auth, we'll catch it
+          try {
+            await loadApplications();
+          } catch (loadError) {
+            console.error('Error loading applications:', loadError);
+            // If it's an auth error, don't redirect
+            if (loadError.message?.includes('auth') || loadError.message?.includes('session') || loadError.message?.includes('unauthorized') || loadError.message?.includes('401')) {
+              setSnackbarData({
+                message: 'Upload successful! However, your session expired. Please refresh the page and log in again.',
+                type: 'warning'
+              });
+              setShowSnackbar(true);
+              return;
+            }
+            // For other errors, continue - applications might still be loaded from cache
+          }
+          
+          // Final auth check before redirect
+          const finalAuthCheck = useApplicantAuthStore.getState();
+          if (finalAuthCheck.user && finalAuthCheck.isAuthenticated()) {
+            // User is still authenticated, safe to redirect
+            setCurrentStep(0);
+          } else {
+            console.warn('Auth state lost after loading applications');
+            setSnackbarData({
+              message: 'Upload successful! Please refresh the page to see your updated applications.',
+              type: 'success'
+            });
+            setShowSnackbar(true);
+          }
+        } catch (error) {
+          console.error('Error during post-upload redirect:', error);
+          // Don't redirect on error - user can manually navigate or refresh
+          setSnackbarData({
+            message: 'Upload successful! Please refresh the page to see your updated applications.',
+            type: 'success'
+          });
+          setShowSnackbar(true);
+        }
+      }, 2000); // 2 second delay to show success indicator
     } catch (error) {
       console.error('Error uploading lender questionnaire:', error);
+      setIsConverting(false);
+      setUploadSuccess(false);
       setSnackbarData({
         message: error.message || 'Failed to upload lender questionnaire. Please try again.',
         type: 'error'
@@ -2201,7 +2499,10 @@ const LenderQuestionnaireUploadStep = ({ formData, applicationId, setCurrentStep
       setShowSnackbar(true);
     } finally {
       setIsUploading(false);
-      setUploadProgress(0);
+      // Don't reset progress immediately on success - let user see it
+      if (!uploadSuccess) {
+        setUploadProgress(0);
+      }
     }
   };
 
@@ -2259,9 +2560,20 @@ const LenderQuestionnaireUploadStep = ({ formData, applicationId, setCurrentStep
               <p className='text-sm text-gray-500'>
                 {(selectedFile.size / 1024 / 1024).toFixed(2)} MB
               </p>
+              {needsConversion && (
+                <div className='p-3 bg-blue-50 border border-blue-200 rounded-lg'>
+                  <div className='flex items-center gap-2 text-blue-700'>
+                    <InfoIcon className='h-4 w-4' />
+                    <p className='text-sm font-medium'>
+                      This file will be converted to PDF automatically
+                    </p>
+                  </div>
+                </div>
+              )}
               <button
                 onClick={() => {
                   setSelectedFile(null);
+                  setNeedsConversion(false);
                   if (fileInputRef.current) {
                     fileInputRef.current.value = '';
                   }
@@ -2282,25 +2594,67 @@ const LenderQuestionnaireUploadStep = ({ formData, applicationId, setCurrentStep
         </div>
 
         {isUploading && (
-          <div className='mt-4'>
+          <div className='mt-4 space-y-2'>
             <div className='w-full bg-gray-200 rounded-full h-2.5'>
               <div
-                className='bg-green-600 h-2.5 rounded-full transition-all duration-300'
+                className={`h-2.5 rounded-full transition-all duration-300 ${
+                  isConverting ? 'bg-blue-600' : 'bg-green-600'
+                }`}
                 style={{ width: `${uploadProgress}%` }}
               ></div>
             </div>
-            <p className='text-sm text-gray-600 mt-2 text-center'>
-              Uploading... {uploadProgress}%
-            </p>
+            <div className='flex items-center justify-center gap-2'>
+              {isConverting ? (
+                <>
+                  <Clock className='h-4 w-4 text-blue-600 animate-spin' />
+                  <p className='text-sm text-blue-600 font-medium'>
+                    Converting to PDF... {uploadProgress}%
+                  </p>
+                </>
+              ) : (
+                <p className='text-sm text-gray-600'>
+                  Uploading... {uploadProgress}%
+                </p>
+              )}
+            </div>
+          </div>
+        )}
+
+        {uploadSuccess && (
+          <div className='mt-4 p-4 bg-green-50 border border-green-200 rounded-lg'>
+            <div className='flex items-center justify-center gap-2 text-green-700'>
+              <CheckCircle className='h-5 w-5' />
+              <p className='text-sm font-medium'>
+                File uploaded successfully! Redirecting to dashboard...
+              </p>
+            </div>
           </div>
         )}
 
         <button
           onClick={handleSubmit}
-          disabled={!selectedFile || isUploading}
-          className='mt-6 w-full px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed font-medium'
+          disabled={!selectedFile || isUploading || uploadSuccess}
+          className='mt-6 w-full px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed font-medium flex items-center justify-center gap-2'
         >
-          {isUploading ? 'Uploading...' : 'Submit Request'}
+          {uploadSuccess ? (
+            <>
+              <CheckCircle className='h-5 w-5' />
+              Upload Complete
+            </>
+          ) : isUploading ? (
+            <>
+              {isConverting ? (
+                <>
+                  <Clock className='h-5 w-5 animate-spin' />
+                  Converting...
+                </>
+              ) : (
+                'Uploading...'
+              )}
+            </>
+          ) : (
+            'Submit Request'
+          )}
         </button>
       </div>
     </div>
@@ -2526,6 +2880,44 @@ export default function GMGResaleFlow() {
   // Get static data from context
   const { hoaProperties, stripePrices, isDataLoaded } = useAppContext();
   
+  // Detect test mode from URL parameter (defaults to LIVE mode)
+  const [isTestMode, setIsTestMode] = useState(false);
+  
+  useEffect(() => {
+    // Check URL for test mode parameter
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const testCode = params.get('test');
+      
+      if (testCode) {
+        // Test code is present - validate it
+        const testModeEnabled = getTestModeFromRequest({ query: { test: testCode } });
+        
+        if (testModeEnabled) {
+          // Valid test code - enable test mode and store in session cookie
+          setIsTestMode(true);
+          setTestModeCookie(true);
+          console.log('[Stripe] Test mode enabled via URL parameter');
+        } else {
+          // Invalid test code - use LIVE mode and clear any test mode cookie
+          setIsTestMode(false);
+          setTestModeCookie(false);
+          console.log('[Stripe] Invalid test code, using LIVE mode');
+        }
+      } else {
+        // No test code in URL - check session cookie for persistence
+        const cookieTestMode = getTestModeFromCookie();
+        setIsTestMode(cookieTestMode);
+        
+        if (cookieTestMode) {
+          console.log('[Stripe] Test mode persisted from session cookie');
+        } else {
+          console.log('[Stripe] Using LIVE mode (default)');
+        }
+      }
+    }
+  }, []);
+  
   // Handle Stripe analytics errors (commonly blocked by ad blockers)
   useEffect(() => {
     const handleStripeErrors = (event) => {
@@ -2584,6 +2976,7 @@ export default function GMGResaleFlow() {
     type: 'success'
   });
   const [showAdBlockerWarning, setShowAdBlockerWarning] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const [formData, setFormData] = useState({
     hoaProperty: '',
@@ -2616,7 +3009,10 @@ export default function GMGResaleFlow() {
 
   // Load applications for the current user
   const loadApplications = React.useCallback(async () => {
-    if (!user) return;
+    if (!user) {
+      console.warn('Cannot load applications: user not available');
+      return;
+    }
 
     try {
       console.log('Loading applications for user:', user.id);
@@ -2633,6 +3029,10 @@ export default function GMGResaleFlow() {
 
       if (error) {
         console.error('Error loading applications:', error);
+        // If it's an auth/session error, re-throw it so caller can handle it
+        if (error.message?.includes('auth') || error.message?.includes('session') || error.message?.includes('JWT') || error.code === 'PGRST301' || error.message?.includes('401')) {
+          throw error;
+        }
         return;
       }
 
@@ -2640,6 +3040,10 @@ export default function GMGResaleFlow() {
       setApplications(data || []);
     } catch (error) {
       console.error('Error in loadApplications:', error);
+      // Re-throw auth errors so caller can handle them appropriately
+      if (error.message?.includes('auth') || error.message?.includes('session') || error.message?.includes('JWT') || error.code === 'PGRST301' || error.message?.includes('401')) {
+        throw error;
+      }
     }
   }, [user, userRole, supabase]);
 
@@ -2719,59 +3123,68 @@ export default function GMGResaleFlow() {
 
   // Handle payment success redirect
   useEffect(() => {
-    if (typeof window !== 'undefined') {
-      const urlParams = new URLSearchParams(window.location.search);
-      const paymentSuccess = urlParams.get('payment_success');
-      const sessionId = urlParams.get('session_id');
-      const appId = urlParams.get('app_id');
+    if (typeof window === 'undefined') return;
+    
+    const urlParams = new URLSearchParams(window.location.search);
+    const paymentSuccess = urlParams.get('payment_success');
+    const sessionId = urlParams.get('session_id');
+    const appId = urlParams.get('app_id');
+    const paymentCancelled = urlParams.get('payment_cancelled');
 
-      if (paymentSuccess === 'true' && sessionId && appId) {
-        // Load the application and check if it's a lender questionnaire
-        loadDraftApplication(appId).then((applicationData) => {
-          if (!applicationData) {
-            console.error('No application data returned from loadDraftApplication');
-            return;
-          }
-          
-          console.log('Payment success - Application data:', {
-            id: applicationData.id,
-            application_type: applicationData.application_type,
-            submitter_type: applicationData.submitter_type,
-          });
-          
-          // Check if this is a lender questionnaire application
-          // Check both application_type from database and submitter_type as fallback
-          const isLenderQuestionnaire = 
-            applicationData.application_type === 'lender_questionnaire' ||
-            applicationData.submitter_type === 'lender_questionnaire';
-          
-          console.log('Is lender questionnaire?', isLenderQuestionnaire);
-          
-          if (isLenderQuestionnaire) {
-            console.log('Redirecting to lender questionnaire upload step (step 6)');
-            setCurrentStep(6); // Go to lender questionnaire upload step
-          } else {
-            console.log('Redirecting to review step (step 5)');
-            setCurrentStep(5); // Go to review step
-          }
-          // Clean up URL parameters
-          window.history.replaceState({}, document.title, window.location.pathname);
-        }).catch((error) => {
-          console.error('Error in payment success handler:', error);
-        });
-      }
-
-      const paymentCancelled = urlParams.get('payment_cancelled');
-      if (paymentCancelled === 'true' && appId) {
-        // Load the application and go back to payment step
-        loadDraftApplication(appId).then(() => {
-          setCurrentStep(4); // Go back to payment step
-          // Clean up URL parameters
-          window.history.replaceState({}, document.title, window.location.pathname);
-        });
+    // Clean up URL parameters FIRST to prevent navigation errors
+    // Only clean if we have payment-related parameters
+    if (paymentSuccess || paymentCancelled || sessionId || appId) {
+      // Use replaceState to clean URL without triggering navigation
+      const cleanUrl = window.location.pathname;
+      if (window.location.href !== cleanUrl) {
+        window.history.replaceState({}, document.title, cleanUrl);
       }
     }
-  }, [loadDraftApplication]);
+
+    if (paymentSuccess === 'true' && sessionId && appId) {
+      // Load the application and check if it's a lender questionnaire
+      loadDraftApplication(appId).then((applicationData) => {
+        if (!applicationData) {
+          console.error('No application data returned from loadDraftApplication');
+          return;
+        }
+        
+        console.log('Payment success - Application data:', {
+          id: applicationData.id,
+          application_type: applicationData.application_type,
+          submitter_type: applicationData.submitter_type,
+        });
+        
+        // Check if this is a lender questionnaire application
+        // Check both application_type from database and submitter_type as fallback
+        const isLenderQuestionnaire = 
+          applicationData.application_type === 'lender_questionnaire' ||
+          applicationData.submitter_type === 'lender_questionnaire';
+        
+        console.log('Is lender questionnaire?', isLenderQuestionnaire);
+        
+        if (isLenderQuestionnaire) {
+          console.log('Redirecting to lender questionnaire upload step (step 6)');
+          setCurrentStep(6); // Go to lender questionnaire upload step
+        } else {
+          console.log('Redirecting to review step (step 5)');
+          setCurrentStep(5); // Go to review step
+        }
+      }).catch((error) => {
+        console.error('Error in payment success handler:', error);
+      });
+    }
+
+    if (paymentCancelled === 'true' && appId) {
+      // Load the application and go back to payment step
+      loadDraftApplication(appId).then(() => {
+        setCurrentStep(4); // Go back to payment step
+      }).catch((error) => {
+        console.error('Error loading application after payment cancellation:', error);
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Only run once on mount, not on every loadDraftApplication change
 
   // Simple input change handler without useCallback
   const handleInputChange = (field, value) => {
@@ -3145,23 +3558,49 @@ export default function GMGResaleFlow() {
           const result = await signIn(email, password);
           if (result.success) {
             setShowAuthModal(false);
+            // Clear form fields on successful sign in
+            return { success: true };
           } else {
-            alert(result.error || 'Sign in failed');
+            // Return error result for modal to display
+            const errorMessage = result.error || 'Sign in failed. Please check your credentials and try again.';
+            return { success: false, error: errorMessage };
           }
         } else {
           const result = await signUp(email, password, userData);
           if (result.success) {
             setShowAuthModal(false);
+            // Show success message
+            setSnackbarData({
+              message: 'Account created successfully! Please check your email to verify your account.',
+              type: 'success'
+            });
+            setShowSnackbar(true);
+            return { success: true };
           } else {
-            alert(result.error || 'Sign up failed');
+            // Return error result for modal to display
+            let errorMessage = result.error || 'Sign up failed. Please try again.';
+            // Improve error messages
+            if (errorMessage.includes('already registered') || errorMessage.includes('already exists')) {
+              errorMessage = 'This email is already registered. Please sign in instead.';
+            } else if (errorMessage.includes('invalid email')) {
+              errorMessage = 'Please enter a valid email address.';
+            } else if (errorMessage.includes('password')) {
+              errorMessage = 'Password must be at least 6 characters long.';
+            }
+            return { success: false, error: errorMessage };
           }
         }
       } catch (error) {
         console.error('🔐 Auth error:', error);
-        alert(error.message);
+        let errorMessage = error.message || 'An unexpected error occurred. Please try again.';
+        // Improve error messages
+        if (errorMessage.includes('network') || errorMessage.includes('fetch')) {
+          errorMessage = 'Network error. Please check your connection and try again.';
+        }
+        return { success: false, error: errorMessage };
       }
     },
-    [authMode, signIn, signUp]
+    [authMode, signIn, signUp, setSnackbarData, setShowSnackbar]
   );
 
   const handleSignOut = React.useCallback(async () => {
@@ -3179,6 +3618,11 @@ export default function GMGResaleFlow() {
 
 
   const handleSubmit = async () => {
+    // Prevent double submission
+    if (isSubmitting) return;
+    
+    setIsSubmitting(true);
+    
     try {
       // First, try to find existing application by applicationId or by matching pending payment application
       let existingApplicationId = applicationId;
@@ -3195,7 +3639,11 @@ export default function GMGResaleFlow() {
           .order('created_at', { ascending: false })
           .limit(1);
           
-        if (!searchError && pendingApps && pendingApps.length > 0) {
+        if (searchError) {
+          throw new Error('Failed to search for existing application. Please try again.');
+        }
+          
+        if (pendingApps && pendingApps.length > 0) {
           existingApplicationId = pendingApps[0].id;
           setApplicationId(existingApplicationId); // Update state for future use
         }
@@ -3213,10 +3661,17 @@ export default function GMGResaleFlow() {
           .select()
           .single();
 
-        if (error) throw error;
+        if (error) {
+          throw new Error('Failed to update application. Please try again.');
+        }
 
         // CREATE THE PROPERTY OWNER FORMS if not already created
-        await createPropertyOwnerForms(data.id, data);
+        try {
+          await createPropertyOwnerForms(data.id, data);
+        } catch (formsError) {
+          console.error('Error creating property owner forms:', formsError);
+          // Continue even if forms creation fails
+        }
 
         // Send confirmation email
         try {
@@ -3243,7 +3698,7 @@ export default function GMGResaleFlow() {
           });
 
           if (!emailResponse.ok) {
-            throw new Error('Failed to send confirmation email');
+            console.warn('Failed to send confirmation email, but application was submitted successfully');
           }
         } catch (emailError) {
           console.error('Error sending confirmation email:', emailError);
@@ -3262,9 +3717,13 @@ export default function GMGResaleFlow() {
           (h) => h.name === formData.hoaProperty
         );
 
+        if (!hoaProperty) {
+          throw new Error('Please select a valid HOA property.');
+        }
+
         const applicationData = {
           user_id: user.id,
-          hoa_property_id: hoaProperty?.id,
+          hoa_property_id: hoaProperty.id,
           property_address: formData.propertyAddress,
           unit_number: formData.unitNumber,
           submitter_type: formData.submitterType,
@@ -3292,10 +3751,25 @@ export default function GMGResaleFlow() {
           .insert([applicationData])
           .select();
 
-        if (error) throw error;
+        if (error) {
+          let errorMessage = 'Failed to submit application. ';
+          if (error.message.includes('duplicate') || error.message.includes('unique')) {
+            errorMessage += 'An application with these details already exists.';
+          } else if (error.message.includes('foreign key')) {
+            errorMessage += 'Invalid property selected. Please try again.';
+          } else {
+            errorMessage += 'Please check your information and try again.';
+          }
+          throw new Error(errorMessage);
+        }
 
         // CREATE THE PROPERTY OWNER FORMS
-        await createPropertyOwnerForms(data[0].id, data[0]);
+        try {
+          await createPropertyOwnerForms(data[0].id, data[0]);
+        } catch (formsError) {
+          console.error('Error creating property owner forms:', formsError);
+          // Continue even if forms creation fails
+        }
 
         // Send confirmation email
         try {
@@ -3322,7 +3796,7 @@ export default function GMGResaleFlow() {
           });
 
           if (!emailResponse.ok) {
-            throw new Error('Failed to send confirmation email');
+            console.warn('Failed to send confirmation email, but application was submitted successfully');
           }
         } catch (emailError) {
           console.error('Error sending confirmation email:', emailError);
@@ -3337,6 +3811,7 @@ export default function GMGResaleFlow() {
         setShowSnackbar(true);
       }
 
+      // Reset form and navigation
       setCurrentStep(0);
       await loadApplications();
       setApplicationId(null);
@@ -3366,7 +3841,23 @@ export default function GMGResaleFlow() {
       });
     } catch (error) {
       console.error('Error submitting application:', error);
-      alert('Error submitting application: ' + error.message);
+      // Show user-friendly error message
+      let errorMessage = error.message || 'An unexpected error occurred while submitting your application.';
+      
+      // Improve error messages
+      if (errorMessage.includes('network') || errorMessage.includes('fetch')) {
+        errorMessage = 'Network error. Please check your connection and try again.';
+      } else if (errorMessage.includes('timeout')) {
+        errorMessage = 'Request timed out. Please try again.';
+      }
+      
+      setSnackbarData({
+        message: errorMessage,
+        type: 'error'
+      });
+      setShowSnackbar(true);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -3907,6 +4398,7 @@ export default function GMGResaleFlow() {
         return (
           <PackagePaymentStep
             formData={formData}
+            setFormData={setFormData}
             handleInputChange={handleInputChange}
             currentStep={currentStep}
             setCurrentStep={setCurrentStep}
@@ -3920,6 +4412,7 @@ export default function GMGResaleFlow() {
             setSnackbarData={setSnackbarData}
             setShowSnackbar={setShowSnackbar}
             loadApplications={loadApplications}
+            isTestMode={isTestMode}
           />
         );
       case 5:
@@ -4206,10 +4699,27 @@ export default function GMGResaleFlow() {
           ) : currentStep === 5 ? (
             <button
               onClick={handleSubmit}
-              className='px-8 py-3 bg-green-700 text-white rounded-lg hover:bg-green-800 transition-colors flex items-center gap-2'
+              disabled={isSubmitting}
+              className={`px-8 py-3 bg-green-700 text-white rounded-lg transition-colors flex items-center gap-2 ${
+                isSubmitting 
+                  ? 'opacity-50 cursor-not-allowed' 
+                  : 'hover:bg-green-800'
+              }`}
             >
-              <CheckCircle className='h-5 w-5' />
-              {applicationId ? 'Submit Application' : `Submit Application & Pay $${calculateTotal(formData, stripePrices, hoaProperties).toFixed(2)}`}
+              {isSubmitting ? (
+                <>
+                  <svg className='animate-spin h-5 w-5 text-white' xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24'>
+                    <circle className='opacity-25' cx='12' cy='12' r='10' stroke='currentColor' strokeWidth='4'></circle>
+                    <path className='opacity-75' fill='currentColor' d='M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z'></path>
+                  </svg>
+                  Submitting...
+                </>
+              ) : (
+                <>
+                  <CheckCircle className='h-5 w-5' />
+                  {applicationId ? 'Submit Application' : `Submit Application & Pay $${calculateTotal(formData, stripePrices, hoaProperties).toFixed(2)}`}
+                </>
+              )}
             </button>
           ) : null}
         </div>

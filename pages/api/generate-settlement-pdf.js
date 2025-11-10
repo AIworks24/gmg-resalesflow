@@ -298,43 +298,14 @@ export default async function handler(req, res) {
 </body>
 </html>`;
 
-    // Generate PDF from HTML using PDF.co
+    // Generate PDF from HTML using Puppeteer
     const filename = `${documentType.replace(/[^a-zA-Z0-9]/g, '_')}_${application.property_address.replace(/[^a-zA-Z0-9]/g, '_')}.pdf`;
     
-    const pdfResponse = await fetch('https://api.pdf.co/v1/pdf/convert/from/html', {
-      method: 'POST',
-      headers: {
-        'x-api-key': process.env.PDFCO_API_KEY,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        html: htmlContent,
-        name: filename,
-        async: false
-      })
+    const { htmlToPdf } = require('../../lib/puppeteerPdfService');
+    const pdfBuffer = await htmlToPdf(htmlContent, {
+      format: 'Letter',
+      printBackground: true
     });
-
-    if (!pdfResponse.ok) {
-      const errorText = await pdfResponse.text();
-      console.error('PDF.co API error:', errorText);
-      throw new Error(`Failed to generate PDF: ${errorText}`);
-    }
-
-    const pdfData = await pdfResponse.json();
-    
-    // Check if the response has a download URL
-    if (!pdfData.url) {
-      console.error('PDF.co response:', pdfData);
-      throw new Error('PDF.co did not return a download URL');
-    }
-
-    // Download the PDF from PDF.co
-    const pdfDownloadResponse = await fetch(pdfData.url);
-    if (!pdfDownloadResponse.ok) {
-      throw new Error('Failed to download PDF from PDF.co');
-    }
-
-    const pdfBuffer = await pdfDownloadResponse.arrayBuffer();
     
     // Validate PDF buffer is not empty
     if (!pdfBuffer || pdfBuffer.byteLength === 0) {
@@ -347,7 +318,7 @@ export default async function handler(req, res) {
 
     const { data: uploadData, error: uploadError } = await supabase.storage
       .from('bucket0')
-      .upload(filePath, Buffer.from(pdfBuffer), {
+      .upload(filePath, pdfBuffer, {
         contentType: 'application/pdf',
         upsert: false,
       });

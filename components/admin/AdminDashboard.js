@@ -29,7 +29,7 @@ import {
   Paperclip,
 } from 'lucide-react';
 import { useRouter } from 'next/router';
-import { mapFormDataToPDFFields } from '../../lib/pdfService';
+import { mapFormDataToPDFFields } from '../../lib/pdfFieldMapper';
 import AdminLayout from './AdminLayout';
 
 const AdminDashboard = ({ userRole }) => {
@@ -194,9 +194,11 @@ const AdminDashboard = ({ userRole }) => {
     loadApplications();
   }, [selectedStatus, searchTerm]);
 
-
-  const loadApplications = async () => {
-    setRefreshing(true);
+  const loadApplications = async (silent = false) => {
+    // Only show refreshing state if not a silent update (real-time updates are silent)
+    if (!silent) {
+      setRefreshing(true);
+    }
     try {
       // First, get the total count for pagination
       let countQuery = supabase
@@ -315,6 +317,137 @@ const AdminDashboard = ({ userRole }) => {
       setRefreshing(false);
     }
   };
+
+  // Set up real-time subscription for applications table
+  useEffect(() => {
+    if (!supabase) {
+      console.warn('Supabase client not available for real-time subscription');
+      return;
+    }
+
+    console.log('Setting up real-time application subscription for dashboard');
+
+    // Debounce function to batch rapid updates (silent background refresh)
+    let debounceTimer = null;
+    const debouncedRefresh = () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        // Silent refresh - no loading indicator
+        loadApplications(true).catch(err => console.warn('Failed to refresh applications list:', err));
+      }, 150); // Small debounce for batching
+    };
+
+    // Create a channel for real-time updates
+    const channel = supabase
+      .channel('applications-changes-dashboard')
+      .on(
+        'postgres_changes',
+        {
+          event: '*', // Listen for INSERT, UPDATE, DELETE
+          schema: 'public',
+          table: 'applications',
+        },
+        (payload) => {
+          console.log('Real-time application change detected in dashboard:', payload.eventType, payload.new?.id || payload.old?.id);
+          
+          // For INSERT events, refresh immediately (new application) - no debounce for instant updates
+          if (payload.eventType === 'INSERT') {
+            const newApp = payload.new;
+            // Skip if it's a draft (we filter those out)
+            if (newApp.status === 'draft') {
+              return;
+            }
+            
+            console.log('New application inserted, updating silently...');
+            // Optimistically add to list for instant UI update
+            setApplications((currentApps) => {
+              // Check if already exists (prevent duplicates)
+              if (currentApps.some(app => app.id === newApp.id)) {
+                return currentApps;
+              }
+              // Add to beginning of list
+              return [newApp, ...currentApps];
+            });
+            // Update count optimistically
+            setTotalCount((currentCount) => currentCount + 1);
+            // Refresh full data silently in background (no loading indicator)
+            loadApplications(true).catch(err => console.warn('Failed to refresh applications list:', err));
+          }
+          // For UPDATE events, refresh if status is not draft
+          else if (payload.eventType === 'UPDATE') {
+            const newStatus = payload.new?.status;
+            const oldStatus = payload.old?.status;
+            const updatedApp = payload.new;
+            
+            // Skip draft-only updates
+            if (newStatus === 'draft' && oldStatus === 'draft') {
+              return;
+            }
+            
+            // If status changed from draft to submitted, refresh silently
+            if (oldStatus === 'draft' && newStatus !== 'draft') {
+              console.log('Application submitted, updating silently...');
+              // Optimistically add if not in list, or update if exists
+              setApplications((currentApps) => {
+                const exists = currentApps.some(app => app.id === updatedApp.id);
+                if (exists) {
+                  return currentApps.map(app => 
+                    app.id === updatedApp.id ? { ...app, ...updatedApp } : app
+                  );
+                } else {
+                  return [updatedApp, ...currentApps];
+                }
+              });
+              setTotalCount((currentCount) => currentCount + 1);
+              // Refresh silently in background
+              loadApplications(true).catch(err => console.warn('Failed to refresh applications list:', err));
+            } 
+            // For other updates, optimistically update then refresh silently
+            else if (newStatus !== 'draft') {
+              console.log('Application updated, updating silently...');
+              // Optimistically update in state
+              setApplications((currentApps) =>
+                currentApps.map(app => 
+                  app.id === updatedApp.id ? { ...app, ...updatedApp } : app
+                )
+              );
+              // Refresh silently in background
+              debouncedRefresh();
+            }
+          }
+          // For DELETE events, remove immediately (silent)
+          else if (payload.eventType === 'DELETE') {
+            const deletedApp = payload.old;
+            console.log('Application deleted, updating silently...');
+            // Optimistically remove from list
+            setApplications((currentApps) =>
+              currentApps.filter(app => app.id !== deletedApp.id)
+            );
+            // Update count
+            setTotalCount((currentCount) => Math.max(0, currentCount - 1));
+            // Refresh silently in background to verify
+            loadApplications(true).catch(err => console.warn('Failed to refresh applications list:', err));
+          }
+        }
+      )
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          console.log('✅ Real-time subscription active for applications in dashboard');
+        } else if (status === 'CHANNEL_ERROR') {
+          console.error('❌ Real-time subscription error in dashboard');
+        } else {
+          console.log('Dashboard subscription status:', status);
+        }
+      });
+
+    // Cleanup subscription on unmount
+    return () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      console.log('Cleaning up real-time subscription in dashboard');
+      supabase.removeChannel(channel);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [supabase]); // loadApplications is intentionally not in deps to avoid recreating subscription on every render
 
   const getStatusColor = (status) => {
     const colors = {

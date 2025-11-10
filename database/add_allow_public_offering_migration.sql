@@ -19,3 +19,9 @@ COMMENT ON COLUMN hoa_properties.allow_public_offering IS
 
 
 
+
+
+
+
+
+

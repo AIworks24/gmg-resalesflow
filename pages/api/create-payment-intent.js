@@ -1,4 +1,5 @@
 import { getServerStripe, calculateTotalAmount } from '../../lib/stripe';
+import { getTestModeFromRequest, getConnectedAccountId } from '../../lib/stripeMode';
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -6,7 +7,14 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { packageType, paymentMethod, applicationId, formData, paymentMethodId, amount } = req.body;
+    // Check if test mode is enabled
+    const useTestMode = getTestModeFromRequest(req);
+    const stripe = getServerStripe(req);
+    
+    const { packageType, paymentMethod, applicationId, formData, paymentMethodId, amount, testMode } = req.body;
+
+    // Also check testMode from body
+    const finalTestMode = useTestMode || testMode === true;
 
     // Validate required fields
     if (!packageType || !paymentMethod) {
@@ -22,8 +30,6 @@ export default async function handler(req, res) {
     if (totalAmount <= 0) {
       return res.status(400).json({ error: 'Invalid amount' });
     }
-
-    const stripe = getServerStripe();
 
     // Create payment intent
     const paymentIntentData = {
@@ -43,6 +49,30 @@ export default async function handler(req, res) {
         closingDate: formData?.closingDate || ''
       },
     };
+
+    // Add Stripe Connect transfer for transactions >= $200
+    // Transfer $21 to connected account, platform keeps the rest
+    const TRANSFER_THRESHOLD_CENTS = 20000; // $200.00
+    const TRANSFER_AMOUNT_CENTS = 2100; // $21.00
+    
+    if (totalAmount >= TRANSFER_THRESHOLD_CENTS) {
+      const connectedAccountId = getConnectedAccountId(finalTestMode);
+      
+      if (connectedAccountId) {
+        // Add transfer_data to payment intent
+        paymentIntentData.transfer_data = {
+          destination: connectedAccountId,
+          amount: TRANSFER_AMOUNT_CENTS, // $21 to connected account
+        };
+        
+        console.log(`[Stripe Connect] PaymentIntent - Transfer enabled: $${(TRANSFER_AMOUNT_CENTS / 100).toFixed(2)} to connected account ${connectedAccountId}`);
+        console.log(`[Stripe Connect] PaymentIntent - Total amount: $${(totalAmount / 100).toFixed(2)}, Platform keeps: $${((totalAmount - TRANSFER_AMOUNT_CENTS) / 100).toFixed(2)}`);
+      } else {
+        console.warn(`[Stripe Connect] PaymentIntent - Transfer threshold met ($${(totalAmount / 100).toFixed(2)} >= $${(TRANSFER_THRESHOLD_CENTS / 100).toFixed(2)}), but connected account ID not configured`);
+      }
+    } else {
+      console.log(`[Stripe Connect] PaymentIntent - Transfer not needed: $${(totalAmount / 100).toFixed(2)} < $${(TRANSFER_THRESHOLD_CENTS / 100).toFixed(2)}`);
+    }
 
     // If payment method ID is provided, attach it to the payment intent
     if (paymentMethodId) {

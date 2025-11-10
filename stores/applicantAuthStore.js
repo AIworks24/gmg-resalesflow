@@ -99,7 +99,20 @@ const useApplicantAuthStore = create((set, get) => ({
         },
       });
 
-      if (error) throw error;
+      if (error) {
+        // Improve error messages
+        let errorMessage = error.message;
+        if (error.message.includes('already registered') || error.message.includes('already exists') || error.message.includes('User already registered')) {
+          errorMessage = 'This email is already registered. Please sign in instead.';
+        } else if (error.message.includes('invalid email') || error.message.includes('Invalid email')) {
+          errorMessage = 'Please enter a valid email address.';
+        } else if (error.message.includes('Password')) {
+          errorMessage = 'Password must be at least 6 characters long.';
+        } else if (error.message.includes('network') || error.message.includes('fetch')) {
+          errorMessage = 'Network error. Please check your connection and try again.';
+        }
+        throw new Error(errorMessage);
+      }
 
       if (data.user) {
         // Create profile for applicant (role: 'user' or null)
@@ -114,6 +127,7 @@ const useApplicantAuthStore = create((set, get) => ({
 
         if (profileError) {
           console.error('Profile creation error:', profileError);
+          // Don't fail signup if profile creation fails - user can still sign in
         }
 
         set({
@@ -137,7 +151,20 @@ const useApplicantAuthStore = create((set, get) => ({
         password,
       });
 
-      if (error) throw error;
+      if (error) {
+        // Improve error messages
+        let errorMessage = error.message;
+        if (error.message.includes('Invalid login credentials') || error.message.includes('Invalid credentials')) {
+          errorMessage = 'Invalid email or password. Please check your credentials and try again.';
+        } else if (error.message.includes('Email not confirmed')) {
+          errorMessage = 'Please verify your email address before signing in. Check your inbox for the verification link.';
+        } else if (error.message.includes('Too many requests')) {
+          errorMessage = 'Too many login attempts. Please wait a few minutes and try again.';
+        } else if (error.message.includes('network') || error.message.includes('fetch')) {
+          errorMessage = 'Network error. Please check your connection and try again.';
+        }
+        throw new Error(errorMessage);
+      }
 
       if (data.user) {
         // Check if user is not admin/staff

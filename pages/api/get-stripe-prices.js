@@ -1,4 +1,5 @@
-const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+const { getServerStripe } = require('../../lib/stripe');
+const { getTestModeFromRequest } = require('../../lib/stripeMode');
 
 export default async function handler(req, res) {
   if (req.method !== 'GET') {
@@ -6,6 +7,10 @@ export default async function handler(req, res) {
   }
 
   try {
+    // Check if test mode is enabled
+    const useTestMode = getTestModeFromRequest(req);
+    const stripe = getServerStripe(req);
+    
     // Fetch all active prices
     const prices = await stripe.prices.list({
       active: true,

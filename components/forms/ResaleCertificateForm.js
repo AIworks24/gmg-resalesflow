@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
-import { mapFormDataToPDFFields } from '../../lib/pdfService';
+import { mapFormDataToPDFFields } from '../../lib/pdfFieldMapper';
 
 const ResaleCertificateForm = ({ applicationId, token }) => {
   const supabase = createClientComponentClient();

@@ -2,7 +2,6 @@ import { createClient } from '@supabase/supabase-js';
 import formidable from 'formidable';
 import fs from 'fs';
 
-// Disable body parsing, we'll handle it with formidable
 export const config = {
   api: {
     bodyParser: false,
@@ -39,10 +38,10 @@ export default async function handler(req, res) {
     }
 
     // Validate file type
-    const allowedTypes = ['.pdf', '.doc', '.docx'];
+    const allowedTypes = ['.pdf'];
     const fileExt = '.' + file.originalFilename.split('.').pop().toLowerCase();
     if (!allowedTypes.includes(fileExt)) {
-      return res.status(400).json({ error: 'Invalid file type. Only PDF, DOC, and DOCX files are allowed.' });
+      return res.status(400).json({ error: 'Invalid file type. Only PDF files are allowed.' });
     }
 
     // Validate file size (10MB max)
@@ -51,48 +50,21 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'File size exceeds 10MB limit.' });
     }
 
-    // Generate unique filename (always use .pdf extension)
+    // Generate unique filename
     const timestamp = Date.now();
     const sanitizedName = file.originalFilename.replace(/[^a-zA-Z0-9.-]/g, '_');
-    const baseFileName = sanitizedName.replace(/\.[^/.]+$/, ''); // Remove original extension
-    const fileName = `lender_questionnaire_completed_${timestamp}_${baseFileName}.pdf`;
+    const fileName = `lender_questionnaire_edited_${timestamp}_${sanitizedName}`;
     const filePath = `lender_questionnaires/${applicationId}/${fileName}`;
 
-    // Convert non-PDF files to PDF
-    let fileData;
-    let wasConverted = false;
-    
-    if (fileExt === '.pdf') {
-      // Read PDF file directly
-      fileData = fs.readFileSync(file.filepath);
-    } else if (fileExt === '.docx' || fileExt === '.doc') {
-      // Convert DOCX/DOC to PDF
-      try {
-        const { convertOfficeToPdf } = require('../../lib/docxToPdfConverter');
-        console.log(`Converting ${fileExt} file to PDF: ${file.originalFilename}`);
-        fileData = await convertOfficeToPdf(file.filepath, fileExt);
-        wasConverted = true;
-        console.log(`Successfully converted ${fileExt} to PDF`);
-      } catch (conversionError) {
-        console.error('Error converting file to PDF:', conversionError);
-        // Clean up temporary file
-        fs.unlinkSync(file.filepath);
-        return res.status(500).json({ 
-          error: `Failed to convert ${fileExt} to PDF: ${conversionError.message}. Please try converting the file to PDF first.` 
-        });
-      }
-    } else {
-      // This shouldn't happen due to validation above, but just in case
-      fs.unlinkSync(file.filepath);
-      return res.status(400).json({ error: 'Unsupported file type for conversion.' });
-    }
+    // Read file data
+    const fileData = fs.readFileSync(file.filepath);
 
-    // Upload to Supabase storage (always as PDF after conversion)
+    // Upload to Supabase storage
     const { data: uploadData, error: uploadError } = await supabase.storage
       .from('bucket0')
       .upload(filePath, fileData, {
-        contentType: 'application/pdf', // Always PDF after conversion
-        upsert: true, // Allow replacing existing completed files
+        contentType: 'application/pdf',
+        upsert: true, // Allow replacing existing edited files
       });
 
     if (uploadError) {
@@ -100,12 +72,18 @@ export default async function handler(req, res) {
       return res.status(500).json({ error: 'Failed to upload file: ' + uploadError.message });
     }
 
-    // Update application record with completed file path
+    // Update application record with edited file path
     const { error: updateError } = await supabase
       .from('applications')
       .update({
-        lender_questionnaire_completed_file_path: filePath,
-        lender_questionnaire_completed_uploaded_at: new Date().toISOString(),
+        lender_questionnaire_edited_file_path: filePath,
+        lender_questionnaire_edited_at: new Date().toISOString(),
+        // Also update completed file path if no uploaded file exists
+        // This allows the edited PDF to be used as the completed form
+        ...(!fields.skipCompletedUpdate && {
+          lender_questionnaire_completed_file_path: filePath,
+          lender_questionnaire_completed_uploaded_at: new Date().toISOString(),
+        }),
         updated_at: new Date().toISOString(),
       })
       .eq('id', applicationId);
@@ -122,19 +100,14 @@ export default async function handler(req, res) {
 
     return res.status(200).json({
       success: true,
-      message: wasConverted 
-        ? 'Completed lender questionnaire uploaded and converted to PDF successfully' 
-        : 'Completed lender questionnaire uploaded successfully',
+      message: 'Edited lender questionnaire uploaded successfully',
       filePath: filePath,
-      wasConverted: wasConverted,
     });
   } catch (error) {
-    console.error('Error in upload-lender-questionnaire-completed:', error);
+    console.error('Error in upload-lender-questionnaire-edited:', error);
     return res.status(500).json({ error: error.message || 'Internal server error' });
   }
 }
-
-
 
 
 

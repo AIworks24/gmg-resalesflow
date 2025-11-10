@@ -28,18 +28,21 @@ export default async function handler(req, res) {
       return res.status(404).json({ error: 'Application not found' });
     }
 
-    if (!application.lender_questionnaire_completed_file_path) {
-      return res.status(400).json({ error: 'Completed lender questionnaire form must be uploaded first' });
+    // Use edited file if available, otherwise use completed file
+    const filePath = application.lender_questionnaire_edited_file_path || application.lender_questionnaire_completed_file_path;
+    
+    if (!filePath) {
+      return res.status(400).json({ error: 'Completed or edited lender questionnaire form must be uploaded first' });
     }
 
-    // Get signed URL for the completed form
+    // Get signed URL for the file (edited or completed)
     const EXPIRY_30_DAYS = 30 * 24 * 60 * 60; // 30 days in seconds
     const { data: signedUrlData, error: urlError } = await supabase.storage
       .from('bucket0')
-      .createSignedUrl(application.lender_questionnaire_completed_file_path, EXPIRY_30_DAYS); // 30 days expiry
+      .createSignedUrl(filePath, EXPIRY_30_DAYS); // 30 days expiry
 
     if (urlError || !signedUrlData?.signedUrl) {
-      return res.status(500).json({ error: 'Failed to generate download link for completed form' });
+      return res.status(500).json({ error: 'Failed to generate download link for form' });
     }
 
     // Use nodemailer directly for email sending

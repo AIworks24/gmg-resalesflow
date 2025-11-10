@@ -195,31 +195,12 @@ export default async function handler(req, res) {
 </body>
 </html>`;
         
-        // Generate PDF from HTML using PDF.co
-        const pdfResponse = await fetch('https://api.pdf.co/v1/pdf/convert/from/html', {
-          method: 'POST',
-          headers: {
-            'x-api-key': process.env.PDFCO_API_KEY,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            html: htmlContent,
-            name: filename,
-            async: false
-          })
+        // Generate PDF from HTML using Puppeteer
+        const { htmlToPdf } = require('../../lib/puppeteerPdfService');
+        const pdfBuffer = await htmlToPdf(htmlContent, {
+          format: 'Letter',
+          printBackground: true
         });
-        
-        if (!pdfResponse.ok) {
-          throw new Error('Failed to generate inspection form PDF');
-        }
-        
-        const pdfData = await pdfResponse.json();
-        if (!pdfData.url) {
-          throw new Error('PDF.co did not return a PDF URL');
-        }
-        
-        // Download the generated PDF
-        const pdfBuffer = await fetch(pdfData.url).then(res => res.arrayBuffer());
         
         // Upload to Supabase storage
         const storagePath = `inspection-forms/${applicationId}/inspection-form-${applicationId}.pdf`;

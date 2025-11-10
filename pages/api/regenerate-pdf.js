@@ -1,7 +1,8 @@
 
 import { createClient } from '@supabase/supabase-js';
 import { createPagesServerClient } from '@supabase/auth-helpers-nextjs';
-import { mapFormDataToPDFFields, generateAndUploadPDF } from '../../lib/pdfService';
+import { mapFormDataToPDFFields } from '../../lib/pdfFieldMapper';
+import { generateAndUploadPDF } from '../../lib/pdfService';
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -150,7 +151,6 @@ export default async function handler(req, res) {
     }, 30000); // 30 seconds total timeout
     
     const fields = mapFormDataToPDFFields(enrichedFormData);
-    const apiKey = process.env.PDFCO_API_KEY;
     
     // Generate different file paths for property-specific vs application-wide PDFs
     const outputPdfPath = isPropertySpecific 
@@ -159,7 +159,7 @@ export default async function handler(req, res) {
     
     const bucketName = 'bucket0';
 
-    const { publicURL } = await generateAndUploadPDF(fields, outputPdfPath, apiKey, supabase, bucketName);
+    const { publicURL } = await generateAndUploadPDF(fields, outputPdfPath, supabase, bucketName);
     
     clearTimeout(operationTimeout);
 
