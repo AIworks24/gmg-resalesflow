@@ -4,8 +4,7 @@
  */
 
 import { PDFDocument } from 'pdf-lib';
-import fs from 'fs';
-import path from 'path';
+import { createPagesServerClient } from '@supabase/auth-helpers-nextjs';
 
 export default async function handler(req, res) {
   if (req.method !== 'GET') {
@@ -13,9 +12,22 @@ export default async function handler(req, res) {
   }
 
   try {
-    // Load the template PDF
-    const templatePath = path.join(process.cwd(), 'assets/ResaleCertificate_Template.pdf');
-    const pdfBytes = fs.readFileSync(templatePath);
+    const supabase = createPagesServerClient({ req, res });
+    const bucketName = 'bucket0';
+    const templatePath = 'templates/ResaleCertificate_Template.pdf';
+    
+    // Download template from Supabase storage
+    const { data, error } = await supabase.storage
+      .from(bucketName)
+      .download(templatePath);
+    
+    if (error) {
+      throw new Error(`Failed to download PDF template from Supabase: ${error.message}`);
+    }
+    
+    // Convert blob to array buffer
+    const arrayBuffer = await data.arrayBuffer();
+    const pdfBytes = new Uint8Array(arrayBuffer);
     const pdfDoc = await PDFDocument.load(pdfBytes);
     
     const form = pdfDoc.getForm();
