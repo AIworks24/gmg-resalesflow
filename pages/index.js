@@ -2890,20 +2890,29 @@ export default function GMGResaleFlow() {
       const testCode = params.get('test');
       
       if (testCode) {
-        // Test code is present - validate it
-        const testModeEnabled = getTestModeFromRequest({ query: { test: testCode } });
-        
-        if (testModeEnabled) {
-          // Valid test code - enable test mode and store in session cookie
-          setIsTestMode(true);
-          setTestModeCookie(true);
-          console.log('[Stripe] Test mode enabled via URL parameter');
-        } else {
-          // Invalid test code - use LIVE mode and clear any test mode cookie
-          setIsTestMode(false);
-          setTestModeCookie(false);
-          console.log('[Stripe] Invalid test code, using LIVE mode');
-        }
+        // Test code is present - validate it via API (server-side validation)
+        // This is needed because TEST_MODE_CODE is not available on client-side
+        fetch(`/api/validate-test-mode?test=${encodeURIComponent(testCode)}`)
+          .then(res => res.json())
+          .then(data => {
+            if (data.valid) {
+              // Valid test code - enable test mode and store in session cookie
+              setIsTestMode(true);
+              setTestModeCookie(true);
+              console.log('[Stripe] Test mode enabled via URL parameter');
+            } else {
+              // Invalid test code - use LIVE mode and clear any test mode cookie
+              setIsTestMode(false);
+              setTestModeCookie(false);
+              console.log('[Stripe] Invalid test code, using LIVE mode');
+            }
+          })
+          .catch(error => {
+            console.error('[Stripe] Error validating test code:', error);
+            // On error, default to LIVE mode
+            setIsTestMode(false);
+            setTestModeCookie(false);
+          });
       } else {
         // No test code in URL - check session cookie for persistence
         const cookieTestMode = getTestModeFromCookie();
