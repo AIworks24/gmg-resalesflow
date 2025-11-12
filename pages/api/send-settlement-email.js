@@ -148,8 +148,8 @@ export default async function handler(req, res) {
 </body>
 </html>`;
       
-      // Generate PDF from HTML using Puppeteer
-      const { htmlToPdf } = require('../../lib/puppeteerPdfService');
+      // Generate PDF from HTML using pdf-lib
+      const { htmlToPdf } = require('../../lib/pdfLibPdfService');
       const pdfBuffer = await htmlToPdf(htmlContent, {
         format: 'Letter',
         printBackground: true

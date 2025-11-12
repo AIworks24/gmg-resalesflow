@@ -195,8 +195,8 @@ export default async function handler(req, res) {
 </body>
 </html>`;
         
-        // Generate PDF from HTML using Puppeteer
-        const { htmlToPdf } = require('../../lib/puppeteerPdfService');
+        // Generate PDF from HTML using pdf-lib
+        const { htmlToPdf } = require('../../lib/pdfLibPdfService');
         const pdfBuffer = await htmlToPdf(htmlContent, {
           format: 'Letter',
           printBackground: true
@@ -257,20 +257,35 @@ export default async function handler(req, res) {
           
           for (const file of propertyFilesList) {
             try {
-              // Create 30-day signed URL for each file
+              // Clean filename: remove timestamp (13-digit numbers from Date.now())
+              // Handles patterns like:
+              // - "timestamp_filename.pdf" → "filename.pdf"
+              // - "document_key_timestamp_filename.pdf" → "document_key_filename.pdf"
+              // - "architectural_guidelines_1762958540289_download_file.pdf" → "architectural_guidelines_download_file.pdf"
+              let cleanFilename = file.name;
+              
+              // Split by underscore to analyze parts
+              const parts = file.name.split('_');
+              
+              // Find and remove any 13-digit timestamp (typical of Date.now())
+              // Keep all other parts including document keys
+              const cleanedParts = parts.filter(part => !/^\d{13}$/.test(part));
+              
+              if (cleanedParts.length > 0) {
+                cleanFilename = cleanedParts.join('_');
+              }
+              
+              // Create 30-day signed URL for each file (without download parameter to allow opening in browser)
               const { data: urlData, error: urlError } = await supabase.storage
                 .from('bucket0')
-                .createSignedUrl(`property_files/${application.hoa_property_id}/${file.name}`, EXPIRY_30_DAYS, {
-                  download: file.name.split('_').slice(1).join('_') // Clean filename for download
-                });
+                .createSignedUrl(`property_files/${application.hoa_property_id}/${file.name}`, EXPIRY_30_DAYS);
 
               if (urlError) {
                 console.error(`Error creating signed URL for ${file.name}:`, urlError);
                 continue;
               }
 
-              const cleanFilename = file.name.split('_').slice(1).join('_'); // Remove timestamp prefix
-              console.log('Created download link for property file:', cleanFilename);
+              console.log('Created download link for property file:', cleanFilename, '(original:', file.name, ')');
               
               downloadLinks.push({
                 filename: cleanFilename,
