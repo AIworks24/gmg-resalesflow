@@ -1,13 +1,22 @@
 {
   "crons": [
     {
-      "path": "/api/check-expiring-documents",
-      "schedule": "0 9 * * *"
+      "path": "/api/send-daily-email",
+      "schedule": "0 0 * * *"
     }
   ],
   "functions": {
-    "pages/api/check-expiring-documents.js": {
+    "pages/api/send-daily-email.js": {
       "maxDuration": 30
+    },
+    "pages/api/send-approval-email.js": {
+      "maxDuration": 60
+    },
+    "pages/api/generate-settlement-pdf.js": {
+      "maxDuration": 60
+    },
+    "pages/api/send-settlement-email.js": {
+      "maxDuration": 60
     }
   }
 }

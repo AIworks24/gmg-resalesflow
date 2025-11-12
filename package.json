@@ -10,9 +10,11 @@
     "start:dev": "cross-env NODE_ENV=development next start",
     "start": "cross-env NODE_ENV=production next start",
     "lint": "next lint",
-    "start1": "cross-env NODE_ENV=production next build && cross-env NODE_ENV=production next start"
+    "start1": "cross-env NODE_ENV=production next build && cross-env NODE_ENV=production next start",
+    "postinstall": "npx puppeteer browsers install chrome"
   },
   "dependencies": {
+    "@puppeteer/browsers": "^2.10.13",
     "@stripe/stripe-js": "^7.4.0",
     "@supabase/auth-helpers-nextjs": "^0.8.7",
     "@supabase/auth-helpers-react": "^0.4.2",
