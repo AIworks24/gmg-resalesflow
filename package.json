@@ -11,7 +11,7 @@
     "start": "cross-env NODE_ENV=production next start",
     "lint": "next lint",
     "start1": "cross-env NODE_ENV=production next build && cross-env NODE_ENV=production next start",
-    "postinstall": "npx puppeteer browsers install chrome"
+    "postinstall": "node node_modules/puppeteer/install.mjs || npx puppeteer@24.29.0 browsers install chrome"
   },
   "dependencies": {
     "@puppeteer/browsers": "^2.10.13",
