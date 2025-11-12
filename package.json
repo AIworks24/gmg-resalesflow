@@ -14,7 +14,7 @@
   },
   "dependencies": {
     "@puppeteer/browsers": "^2.10.13",
-    "@sparticuz/chromium": "^119.0.2",
+    "@sparticuz/chromium": "^115.0.0",
     "@stripe/stripe-js": "^7.4.0",
     "@supabase/auth-helpers-nextjs": "^0.8.7",
     "@supabase/auth-helpers-react": "^0.4.2",
@@ -50,5 +50,8 @@
     "eslint-config-next": "14.0.0",
     "postcss": "^8.4.31",
     "tailwindcss": "^3.3.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
