@@ -11,7 +11,7 @@
     "start": "cross-env NODE_ENV=production next start",
     "lint": "next lint",
     "start1": "cross-env NODE_ENV=production next build && cross-env NODE_ENV=production next start",
-    "postinstall": "node node_modules/puppeteer/install.mjs || npx puppeteer@24.29.0 browsers install chrome"
+    "postinstall": "npx puppeteer browsers install chrome"
   },
   "dependencies": {
     "@puppeteer/browsers": "^2.10.13",
@@ -32,7 +32,7 @@
     "pdf-lib": "^1.17.1",
     "pdf-parse": "^1.1.1",
     "pdfjs-dist": "^5.3.31",
-    "puppeteer": "^24.29.0",
+    "puppeteer": "^24.29.1",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-dropzone": "^14.2.3",
