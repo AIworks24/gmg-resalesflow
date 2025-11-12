@@ -1,5 +1,4 @@
 {
-  "buildCommand": "npm install && npx puppeteer browsers install chrome && npx cross-env NODE_ENV=production next build",
   "crons": [
     {
       "path": "/api/send-daily-email",
