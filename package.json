@@ -14,7 +14,7 @@
   },
   "dependencies": {
     "@puppeteer/browsers": "^2.10.13",
-    "@sparticuz/chromium": "^141.0.0",
+    "@sparticuz/chromium-min": "^131.0.0",
     "@stripe/stripe-js": "^7.4.0",
     "@supabase/auth-helpers-nextjs": "^0.8.7",
     "@supabase/auth-helpers-react": "^0.4.2",
@@ -32,7 +32,6 @@
     "pdf-lib": "^1.17.1",
     "pdf-parse": "^1.1.1",
     "pdfjs-dist": "^5.3.31",
-    "puppeteer": "^24.29.1",
     "puppeteer-core": "^24.29.1",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
