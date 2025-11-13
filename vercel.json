@@ -8,6 +8,15 @@
   "functions": {
     "pages/api/check-expiring-documents.js": {
       "maxDuration": 30
+    },
+    "pages/api/send-approval-email.js": {
+      "maxDuration": 60
+    },
+    "pages/api/send-settlement-email.js": {
+      "maxDuration": 60
+    },
+    "pages/api/generate-settlement-pdf.js": {
+      "maxDuration": 60
     }
   }
 }
