@@ -10,15 +10,9 @@ const nextConfig = {
     NEXT_PUBLIC_SUPABASE_ANON_KEY: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
   },
   // Externalize puppeteer packages to avoid bundling issues on Vercel
+  // This ensures the packages are available at runtime without being bundled
   experimental: {
     serverComponentsExternalPackages: ['puppeteer-core', '@sparticuz/chromium-min'],
-  },
-  // Webpack config to externalize these packages
-  webpack: (config, { isServer }) => {
-    if (isServer) {
-      config.externals = [...(config.externals || []), 'puppeteer-core', '@sparticuz/chromium-min'];
-    }
-    return config;
   },
 };
 
