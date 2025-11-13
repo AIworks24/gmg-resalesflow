@@ -49,6 +49,9 @@ export default async function handler(req, res) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
+    // Check if cache should be bypassed (for real-time refreshes)
+    const bypassCache = options.bypassCache === true || req.query.bypassCache === 'true';
+
     // Generate unique cache key based on query parameters AND user ID
     // This prevents cache collisions between multiple users
     const cacheKeyData = { table, select, options, userId: user.id };
@@ -58,19 +61,21 @@ export default async function handler(req, res) {
       .digest('hex');
     const cacheKey = `query:${table}:${cacheKeyHash}`;
 
-    // TEMPORARILY DISABLED: Try to get from cache first
-    // const cachedData = await getCache(cacheKey);
+    // Try to get from cache first (unless bypassed for real-time updates)
+    if (!bypassCache) {
+      const cachedData = await getCache(cacheKey);
 
-    // if (cachedData) {
-    //   console.log(`✅ Query cache HIT: ${table}`);
-    //   return res.status(200).json({ 
-    //     data: cachedData,
-    //     cached: true,
-    //     timestamp: new Date().toISOString()
-    //   });
-    // }
+      if (cachedData) {
+        console.log(`✅ Query cache HIT: ${table}`);
+        return res.status(200).json({ 
+          data: cachedData,
+          cached: true,
+          timestamp: new Date().toISOString()
+        });
+      }
+    }
 
-    console.log(`❌ Query cache MISS: ${table} - fetching from database`);
+    console.log(`❌ Query cache ${bypassCache ? 'BYPASSED (real-time refresh)' : 'MISS'}: ${table} - fetching from database`);
 
     // Build the query
     let query = supabase.from(table).select(select);
@@ -181,15 +186,17 @@ export default async function handler(req, res) {
       count: count !== undefined ? count : null
     };
 
-    // TEMPORARILY DISABLED: Store in cache with TTL (default 5 minutes, configurable)
-    // const ttl = options.cacheTTL || 300;
-    // if (options.cache !== false) {
-    //   await setCache(cacheKey, response, ttl);
-    // }
+    // Store in cache with shorter TTL for real-time compatibility (1-2 minutes)
+    // Shorter TTL ensures real-time updates are fresh while still reducing DB load
+    const ttl = options.cacheTTL || 120; // Default 2 minutes (was 5 minutes)
+    if (options.cache !== false && !bypassCache) {
+      await setCache(cacheKey, response, ttl);
+    }
 
     return res.status(200).json({ 
       ...response,
       cached: false,
+      bypassed: bypassCache,
       timestamp: new Date().toISOString()
     });
 

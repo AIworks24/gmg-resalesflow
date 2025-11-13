@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useRouter } from 'next/router';
 import { supabase } from '../lib/supabase';
 import { loadStripe } from '@stripe/stripe-js';
 import { getStripeWithFallback } from '../lib/stripe';
@@ -1062,6 +1063,30 @@ const PackagePaymentStep = ({
             console.error('[Submission] Error calling auto-assign API:', assignError);
             // Don't fail the submission if auto-assignment fails
           }
+
+          // ALWAYS create notifications, even if auto-assign failed
+          // (auto-assign creates notifications, but we want to ensure they're created)
+          try {
+            console.log(`[Submission] Creating notifications for application ${createdApplicationId}`);
+            const notificationResponse = await fetch('/api/notifications/create', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({ applicationId: createdApplicationId }),
+            });
+
+            if (notificationResponse.ok) {
+              const notificationResult = await notificationResponse.json();
+              console.log(`[Submission] Notifications created:`, notificationResult);
+            } else {
+              const errorText = await notificationResponse.text();
+              console.warn(`[Submission] Failed to create notifications:`, errorText);
+            }
+          } catch (notificationError) {
+            console.error('[Submission] Error creating notifications:', notificationError);
+            // Don't fail the submission if notification creation fails
+          }
         }
 
         // Forms are created automatically by the API for free transactions
@@ -1209,6 +1234,29 @@ const PackagePaymentStep = ({
             console.error('[Payment] Error calling auto-assign API:', assignError);
             // Don't fail the payment flow if auto-assignment fails
           }
+
+          // ALWAYS create notifications, even if auto-assign failed
+          try {
+            console.log(`[Payment] Creating notifications for application ${createdApplicationId}`);
+            const notificationResponse = await fetch('/api/notifications/create', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({ applicationId: createdApplicationId }),
+            });
+
+            if (notificationResponse.ok) {
+              const notificationResult = await notificationResponse.json();
+              console.log(`[Payment] Notifications created:`, notificationResult);
+            } else {
+              const errorText = await notificationResponse.text();
+              console.warn(`[Payment] Failed to create notifications:`, errorText);
+            }
+          } catch (notificationError) {
+            console.error('[Payment] Error creating notifications:', notificationError);
+            // Don't fail the payment flow if notification creation fails
+          }
         } else {
           // Create new application
           const hoaProperty = (hoaProperties || []).find(
@@ -1276,6 +1324,29 @@ const PackagePaymentStep = ({
             console.error('[Payment] Error calling auto-assign API:', assignError);
             // Don't fail the payment flow if auto-assignment fails
           }
+
+          // ALWAYS create notifications, even if auto-assign failed
+          try {
+            console.log(`[Payment] Creating notifications for application ${createdApplicationId}`);
+            const notificationResponse = await fetch('/api/notifications/create', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({ applicationId: createdApplicationId }),
+            });
+
+            if (notificationResponse.ok) {
+              const notificationResult = await notificationResponse.json();
+              console.log(`[Payment] Notifications created:`, notificationResult);
+            } else {
+              const errorText = await notificationResponse.text();
+              console.warn(`[Payment] Failed to create notifications:`, errorText);
+            }
+          } catch (notificationError) {
+            console.error('[Payment] Error creating notifications:', notificationError);
+            // Don't fail the payment flow if notification creation fails
+          }
           
           // Set the application ID for future updates
           setApplicationId(createdApplicationId);
@@ -1299,6 +1370,13 @@ const PackagePaymentStep = ({
             testMode: isTestMode, // Pass test mode to API
           }),
         });
+
+        // Check if response is OK before parsing JSON
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error('Checkout session API error:', errorText);
+          throw new Error(`Failed to create checkout session: ${response.status} ${response.statusText}`);
+        }
 
         const { sessionId, error: sessionError } = await response.json();
 
@@ -2966,6 +3044,9 @@ export default function GMGResaleFlow() {
   // Get userRole from profile
   const userRole = profile?.role;
   
+  // Get router for navigation
+  const router = useRouter();
+  
   const [applications, setApplications] = useState([]);
   const [currentStep, setCurrentStep] = useState(0);
   const [applicationId, setApplicationId] = useState(null);
@@ -3028,6 +3109,7 @@ export default function GMGResaleFlow() {
       let query = supabase
         .from('applications')
         .select('*, hoa_properties(name)')
+        .is('deleted_at', null) // Only get non-deleted applications
         .order('created_at', { ascending: false });
 
       if (userRole !== 'admin') {
@@ -3622,6 +3704,9 @@ export default function GMGResaleFlow() {
       submitterName: '',
       submitterEmail: '',
     }));
+    
+    // Force a hard reload to ensure all state is cleared and show non-logged-in view
+    window.location.reload();
   }, [signOut]);
 
 
@@ -3714,6 +3799,29 @@ export default function GMGResaleFlow() {
           // Don't fail the submission if email fails
         }
 
+        // Create notifications for property owner and staff/admin
+        try {
+          console.log(`[Submit] Creating notifications for application ${data.id}`);
+          const notificationResponse = await fetch('/api/notifications/create', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ applicationId: data.id }),
+          });
+
+          if (notificationResponse.ok) {
+            const notificationResult = await notificationResponse.json();
+            console.log(`[Submit] Notifications created:`, notificationResult);
+          } else {
+            const errorText = await notificationResponse.text();
+            console.warn(`[Submit] Failed to create notifications:`, errorText);
+          }
+        } catch (notificationError) {
+          console.error('[Submit] Error creating notifications:', notificationError);
+          // Don't fail the submission if notification creation fails
+        }
+
         // Show success snackbar
         setSnackbarData({
           message: 'Application submitted successfully! You will receive a confirmation email shortly.',
@@ -3778,6 +3886,29 @@ export default function GMGResaleFlow() {
         } catch (formsError) {
           console.error('Error creating property owner forms:', formsError);
           // Continue even if forms creation fails
+        }
+
+        // Create notifications for property owner and staff/admin
+        try {
+          console.log(`[Submit] Creating notifications for new application ${data[0].id}`);
+          const notificationResponse = await fetch('/api/notifications/create', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ applicationId: data[0].id }),
+          });
+
+          if (notificationResponse.ok) {
+            const notificationResult = await notificationResponse.json();
+            console.log(`[Submit] Notifications created:`, notificationResult);
+          } else {
+            const errorText = await notificationResponse.text();
+            console.warn(`[Submit] Failed to create notifications:`, errorText);
+          }
+        } catch (notificationError) {
+          console.error('[Submit] Error creating notifications:', notificationError);
+          // Don't fail the submission if notification creation fails
         }
 
         // Send confirmation email

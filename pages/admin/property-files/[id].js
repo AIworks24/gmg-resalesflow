@@ -11,10 +11,9 @@ const PropertyFilesPage = () => {
   
   // Fetch property using the new hook - only when id is available
   const shouldFetch = id && router.isReady;
-  const queryOptions = id ? { eq: { id } } : {};
-  
-  // Add timestamp to cache key to force refetch on page reload after being away
-  const cacheKeySuffix = shouldFetch ? `_${Date.now()}` : '';
+  // Parse ID as integer to ensure correct type
+  const propertyId = id ? parseInt(id, 10) : null;
+  const queryOptions = propertyId ? { eq: { id: propertyId } } : {};
   
   const { 
     data: property, 
@@ -24,7 +23,10 @@ const PropertyFilesPage = () => {
   } = useSupabaseQuerySingle(
     'hoa_properties',
     '*',
-    queryOptions,
+    {
+      ...queryOptions,
+      bypassCache: true, // Always bypass cache for fresh property data
+    },
     { 
       revalidateOnMount: true,
       revalidateOnFocus: true, // Refetch when tab comes back into focus
@@ -34,8 +36,18 @@ const PropertyFilesPage = () => {
   );
 
   useEffect(() => {
-    console.log('PropertyFiles: router state', { isReady: router.isReady, id, shouldFetch, isLoading, hasProperty: !!property, propertyId: property?.id, propertyObject: property });
-  }, [router.isReady, id, shouldFetch, isLoading, property]);
+    console.log('PropertyFiles: router state', { 
+      isReady: router.isReady, 
+      id, 
+      propertyId,
+      shouldFetch, 
+      isLoading, 
+      hasProperty: !!property, 
+      propertyIdFromData: property?.id, 
+      propertyKeys: property ? Object.keys(property) : [],
+      propertyObject: property 
+    });
+  }, [router.isReady, id, propertyId, shouldFetch, isLoading, property]);
 
   // Show loading state if router is not ready
   if (!router.isReady || !id) {
@@ -114,23 +126,35 @@ const PropertyFilesPage = () => {
               <span>Loading property...</span>
             </div>
           </div>
-        ) : property && property.id ? (
+        ) : property && (property.id || propertyId) ? (
           <>
-            {console.log('Rendering PropertyFileManagement with:', { id: property.id, name: property.name, fullProperty: property })}
+            {console.log('Rendering PropertyFileManagement with:', { 
+              id: property.id || propertyId, 
+              name: property.name, 
+              fullProperty: property 
+            })}
             <PropertyFileManagement 
-              key={`property-${property.id}`}
-              propertyId={property.id} 
-              propertyName={property.name}
+              key={`property-${property.id || propertyId}`}
+              propertyId={property.id || propertyId} 
+              propertyName={property.name || 'Unknown Property'}
             />
           </>
         ) : property ? (
           <>
-            {console.error('Property loaded but missing id:', { property, keys: Object.keys(property) })}
+            {console.error('Property loaded but missing id:', { 
+              property, 
+              keys: Object.keys(property),
+              propertyId,
+              routerId: id
+            })}
             <div className="flex items-center justify-center py-12">
               <div className="text-center">
                 <AlertTriangle className="w-12 h-12 text-red-500 mx-auto mb-4" />
                 <h3 className="text-lg font-semibold text-gray-900 mb-2">Property data error</h3>
-                <p className="text-gray-600 mb-4">Property loaded but missing ID field</p>
+                <p className="text-gray-600 mb-4">
+                  Property loaded but missing ID field. 
+                  {propertyId && ` Using router ID: ${propertyId}`}
+                </p>
                 <button
                   onClick={() => mutate()}
                   className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700"

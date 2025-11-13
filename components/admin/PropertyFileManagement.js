@@ -67,6 +67,44 @@ const PropertyFileManagement = ({ propertyId, propertyName }) => {
     }
   }, [propertyId]);
 
+  // Set up real-time subscription for property_documents table
+  useEffect(() => {
+    if (!propertyId) return;
+
+    console.log('🔔 Setting up real-time subscription for property_documents:', propertyId);
+
+    const channel = supabase
+      .channel(`property-documents-${propertyId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*', // Listen for INSERT, UPDATE, DELETE
+          schema: 'public',
+          table: 'property_documents',
+          filter: `property_id=eq.${propertyId}`, // Only listen to changes for this property
+        },
+        (payload) => {
+          console.log('Real-time property document change detected:', payload.eventType, payload.new?.id || payload.old?.id);
+          
+          // Reload documents to get fresh data
+          loadPropertyDocuments();
+        }
+      )
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          console.log('✅ Subscribed to property_documents real-time updates');
+        } else if (status === 'CHANNEL_ERROR') {
+          console.error('❌ Error subscribing to property_documents real-time updates');
+        }
+      });
+
+    // Cleanup subscription on unmount or propertyId change
+    return () => {
+      console.log('🔕 Unsubscribing from property_documents real-time updates');
+      supabase.removeChannel(channel);
+    };
+  }, [propertyId, supabase]);
+
   useEffect(() => {
     const handleClickOutside = (event) => {
       if (showModal && !event.target.closest('.modal-content')) {

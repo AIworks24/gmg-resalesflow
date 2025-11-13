@@ -11,7 +11,12 @@ import {
   RefreshCw,
   AlertTriangle,
   CheckCircle,
+  Home,
+  MapPin,
+  Mail,
+  Phone,
 } from 'lucide-react';
+import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
 import useAdminAuthStore from '../../stores/adminAuthStore';
 import { useUpdateUser } from '../../hooks/useUsers';
 
@@ -20,6 +25,8 @@ const StaffProfilePage = () => {
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showSuccessMessage, setShowSuccessMessage] = useState(false);
   const [formError, setFormError] = useState('');
+  const [userProperties, setUserProperties] = useState([]);
+  const [loadingProperties, setLoadingProperties] = useState(false);
 
   const [formData, setFormData] = useState({
     email: '',
@@ -43,6 +50,55 @@ const StaffProfilePage = () => {
       });
     }
   }, [profile, user]);
+
+  // Fetch properties owned by the user
+  useEffect(() => {
+    const fetchUserProperties = async () => {
+      const userEmail = profile?.email || user?.email;
+      if (!userEmail) return;
+
+      setLoadingProperties(true);
+      try {
+        const supabase = createClientComponentClient();
+        
+        // Query properties where property_owner_email matches user's email
+        // Handle both exact match and "owner." prefix cases
+        const normalizedEmail = userEmail.toLowerCase().trim();
+        
+        // Try to query with multiple conditions for efficiency
+        // Match: exact email, email with "owner." prefix, and case variations
+        const { data, error } = await supabase
+          .from('hoa_properties')
+          .select('*')
+          .or(`property_owner_email.ilike.%${normalizedEmail}%,property_owner_email.ilike.%owner.${normalizedEmail}%`)
+          .order('name', { ascending: true });
+
+        if (error) {
+          console.error('Error fetching user properties:', error);
+          setUserProperties([]);
+        } else {
+          // Additional client-side filtering to ensure exact match after removing "owner." prefix
+          // This handles edge cases where ilike might match partial strings
+          const matchingProperties = (data || []).filter(property => {
+            if (!property.property_owner_email) return false;
+            
+            // Remove "owner." prefix if present and normalize
+            const propertyEmail = property.property_owner_email.replace(/^owner\./i, '').toLowerCase().trim();
+            return propertyEmail === normalizedEmail;
+          });
+          
+          setUserProperties(matchingProperties);
+        }
+      } catch (error) {
+        console.error('Exception fetching user properties:', error);
+        setUserProperties([]);
+      } finally {
+        setLoadingProperties(false);
+      }
+    };
+
+    fetchUserProperties();
+  }, [profile?.email, user?.email]);
 
   const handleSaveProfile = async (e) => {
     e.preventDefault();
@@ -263,6 +319,90 @@ const StaffProfilePage = () => {
               </button>
             </div>
           </form>
+        </div>
+
+        {/* My Properties Section */}
+        <div className="bg-white rounded-lg shadow-md border p-6 mt-6">
+          <div className="mb-6">
+            <div className="flex items-center gap-3 mb-2">
+              <Home className="w-6 h-6 text-blue-600" />
+              <h2 className="text-2xl font-bold text-gray-900">My Properties</h2>
+            </div>
+            <p className="text-gray-600">Properties owned by you</p>
+          </div>
+
+          {loadingProperties ? (
+            <div className="flex items-center justify-center py-8">
+              <RefreshCw className="w-6 h-6 animate-spin text-blue-600" />
+              <span className="ml-2 text-gray-600">Loading properties...</span>
+            </div>
+          ) : userProperties.length === 0 ? (
+            <div className="text-center py-8 text-gray-500">
+              <Home className="w-12 h-12 mx-auto mb-3 text-gray-400" />
+              <p>No properties found for your account.</p>
+              <p className="text-sm mt-1">Properties are matched by your email address.</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {userProperties.map((property) => (
+                <div
+                  key={property.id}
+                  className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow"
+                >
+                  <div className="flex items-start justify-between mb-3">
+                    <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+                      <Building className="w-5 h-5 text-blue-600" />
+                      {property.name || 'Unnamed Property'}
+                    </h3>
+                  </div>
+                  
+                  {property.location && (
+                    <div className="flex items-center gap-2 text-gray-600 mb-2">
+                      <MapPin className="w-4 h-4 text-gray-400" />
+                      <span className="text-sm">{property.location}</span>
+                    </div>
+                  )}
+
+                  {property.property_owner_name && (
+                    <div className="text-sm text-gray-600 mb-1">
+                      <span className="font-medium">Owner:</span> {property.property_owner_name}
+                    </div>
+                  )}
+
+                  {property.property_owner_email && (
+                    <div className="flex items-center gap-2 text-sm text-gray-600 mb-1">
+                      <Mail className="w-4 h-4 text-gray-400" />
+                      <span>{property.property_owner_email}</span>
+                    </div>
+                  )}
+
+                  {property.property_owner_phone && (
+                    <div className="flex items-center gap-2 text-sm text-gray-600 mb-2">
+                      <Phone className="w-4 h-4 text-gray-400" />
+                      <span>{property.property_owner_phone}</span>
+                    </div>
+                  )}
+
+                  {property.is_multi_community && (
+                    <div className="mt-2">
+                      <span className="inline-block px-2 py-1 bg-blue-100 text-blue-800 text-xs rounded">
+                        Multi-Community
+                      </span>
+                    </div>
+                  )}
+
+                  <div className="mt-3 pt-3 border-t border-gray-100">
+                    <button
+                      onClick={() => router.push(`/admin/properties`)}
+                      className="text-sm text-blue-600 hover:text-blue-800 font-medium"
+                    >
+                      View Details →
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </div>

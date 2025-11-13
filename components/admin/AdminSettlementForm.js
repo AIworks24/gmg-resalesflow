@@ -234,6 +234,7 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
             .from('hoa_properties')
             .select('*')
             .eq('id', appData.hoa_property_id)
+            .is('deleted_at', null) // Only get non-deleted properties
             .single();
           
           const propertyTimeout = new Promise((_, reject) => 

@@ -290,6 +290,7 @@ const useApplicantAuthStore = create((set, get) => ({
           notifications(id, notification_type, status, sent_at)
         `)
         .eq('user_id', user.id)
+        .is('deleted_at', null) // Only get non-deleted applications
         .order('created_at', { ascending: false });
 
       if (error) throw error;

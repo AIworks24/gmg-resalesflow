@@ -200,10 +200,11 @@ const AdminDashboard = ({ userRole }) => {
       setRefreshing(true);
     }
     try {
-      // First, get the total count for pagination
+      // First, get the total count for pagination (exclude soft-deleted)
       let countQuery = supabase
         .from('applications')
-        .select('*', { count: 'exact', head: true });
+        .select('*', { count: 'exact', head: true })
+        .is('deleted_at', null); // Only count non-deleted applications
 
       // Apply role-based filtering
       if (userRole === 'accounting') {
@@ -233,7 +234,7 @@ const AdminDashboard = ({ userRole }) => {
       
       setTotalCount(count || 0);
 
-      // Then get the paginated data
+      // Then get the paginated data (exclude soft-deleted)
       let query = supabase
         .from('applications')
         .select(
@@ -243,7 +244,8 @@ const AdminDashboard = ({ userRole }) => {
           property_owner_forms(id, form_type, status, completed_at, form_data, response_data),
           notifications(id, notification_type, status, sent_at)
         `
-        );
+        )
+        .is('deleted_at', null); // Only get non-deleted applications
 
       // Apply role-based filtering
       if (userRole === 'accounting') {

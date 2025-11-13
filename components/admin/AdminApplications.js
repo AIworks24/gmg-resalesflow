@@ -96,6 +96,9 @@ const AdminApplications = ({ userRole }) => {
     }
   }, [router.query.status, router.isReady]);
 
+  // Build dynamic API URL with sort parameters
+  const apiUrl = `/api/admin/applications?sortBy=${sortBy}&sortOrder=${sortOrder}`;
+
   // SWR fetcher function
   const fetcher = async (url) => {
     const res = await fetch(url);
@@ -108,9 +111,6 @@ const AdminApplications = ({ userRole }) => {
     return res.json();
   };
 
-  // Build dynamic API URL with sort parameters
-  const apiUrl = `/api/admin/applications?sortBy=${sortBy}&sortOrder=${sortOrder}`;
-
   // Fetch applications using SWR (will auto-refresh when URL changes)
   const { data: swrData, error: swrError, isLoading, mutate } = useSWR(
     apiUrl,
@@ -121,6 +121,19 @@ const AdminApplications = ({ userRole }) => {
       dedupingInterval: 1000, // Reduced from 5s to 1s for faster real-time updates
     }
   );
+
+  // Force refresh with cache bypass (for real-time updates)
+  // This ensures workflow steps update correctly after task completion
+  // Defined after mutate is available from useSWR
+  const forceRefreshWithBypass = async () => {
+    const bypassUrl = `${apiUrl}${apiUrl.includes('?') ? '&' : '?'}bypassCache=true`;
+    try {
+      const freshData = await fetcher(bypassUrl);
+      mutate(freshData, { revalidate: false }); // Update cache with fresh data
+    } catch (error) {
+      console.warn('Failed to force refresh with bypass:', error);
+    }
+  };
 
   // Set up real-time subscription for applications table
   useEffect(() => {
@@ -177,6 +190,11 @@ const AdminApplications = ({ userRole }) => {
                 rollbackOnError: true
               }
             ).catch(err => console.warn('Failed to update applications list:', err));
+            
+            // Force refresh with bypass cache to ensure workflow steps update correctly
+            setTimeout(() => {
+              forceRefreshWithBypass();
+            }, 300);
           }
           // For UPDATE events, refresh silently
           else if (payload.eventType === 'UPDATE') {
@@ -220,6 +238,11 @@ const AdminApplications = ({ userRole }) => {
                   rollbackOnError: true
                 }
               ).catch(err => console.warn('Failed to refresh applications list:', err));
+              
+              // Force refresh with bypass cache to ensure workflow steps update correctly
+              setTimeout(() => {
+                forceRefreshWithBypass();
+              }, 300);
             } 
             // For other updates, optimistically update then refresh silently
             else if (newStatus !== 'draft') {
@@ -241,6 +264,11 @@ const AdminApplications = ({ userRole }) => {
                   rollbackOnError: true
                 }
               ).catch(err => console.warn('Failed to update applications list:', err));
+              
+              // Force refresh with bypass cache to ensure workflow steps update correctly
+              setTimeout(() => {
+                forceRefreshWithBypass();
+              }, 300);
             }
           }
           // For DELETE events, remove immediately
@@ -263,6 +291,11 @@ const AdminApplications = ({ userRole }) => {
                 rollbackOnError: true
               }
             ).catch(err => console.warn('Failed to update applications list:', err));
+            
+            // Force refresh with bypass cache to ensure workflow steps update correctly
+            setTimeout(() => {
+              forceRefreshWithBypass();
+            }, 300);
           }
         }
       )
@@ -810,24 +843,40 @@ const AdminApplications = ({ userRole }) => {
 
     if (isSettlementApp) {
       // Settlement workflow - 3 tasks (Form + PDF + Email)
+      // Check both form status AND completion timestamps (tasks can be completed via /api/complete-task)
       const settlementForm = application.property_owner_forms?.find(form => form.form_type === 'settlement_form');
       const settlementFormStatus = settlementForm?.status || 'not_started';
-      const hasPDF = application.pdf_url;
-      const hasNotificationSent = application.notifications?.some(n => n.notification_type === 'application_approved');
+      const settlementFormCompleted = !!application.settlement_form_completed_at || settlementFormStatus === 'completed';
+      const hasPDF = !!application.pdf_url || !!application.pdf_completed_at;
+      const hasEmailSent = application.notifications?.some(n => n.notification_type === 'application_approved') || !!application.email_completed_at;
 
-      if (settlementFormStatus === 'not_started' || settlementFormStatus === 'not_created') {
+      // Step 1: Form Required - if form not completed
+      if (!settlementFormCompleted && (settlementFormStatus === 'not_started' || settlementFormStatus === 'not_created')) {
         return { step: 1, text: 'Form Required', color: 'bg-yellow-100 text-yellow-800' };
       }
       
-      if (!hasPDF) {
+      // Step 2: Generate PDF - if form completed but no PDF
+      if (settlementFormCompleted && !hasPDF) {
         return { step: 2, text: 'Generate PDF', color: 'bg-orange-100 text-orange-800' };
       }
       
-      if (!hasNotificationSent) {
+      // Step 3: Send Email - if PDF generated but email not sent
+      if (hasPDF && !hasEmailSent) {
         return { step: 3, text: 'Send Email', color: 'bg-purple-100 text-purple-800' };
       }
       
-      return { step: 4, text: 'Completed', color: 'bg-green-100 text-green-800' };
+      // Step 4: Completed - all tasks done
+      if (settlementFormCompleted && hasPDF && hasEmailSent) {
+        return { step: 4, text: 'Completed', color: 'bg-green-100 text-green-800' };
+      }
+      
+      // Fallback: if form is in progress but not completed
+      if (settlementFormStatus === 'in_progress') {
+        return { step: 1, text: 'Form In Progress', color: 'bg-blue-100 text-blue-800' };
+      }
+      
+      // Default fallback
+      return { step: 1, text: 'Form Required', color: 'bg-yellow-100 text-yellow-800' };
     }
 
     // Check if this is a multi-community application
@@ -2614,46 +2663,46 @@ const AdminApplications = ({ userRole }) => {
                         <div className='text-sm text-gray-900'>
                           {(() => {
                             const appType = app.application_type || 'single_property';
+                            const isRush = app.package_type === 'rush';
+                            
+                            let typeLabel = '';
+                            let typeColor = '';
+                            
                             if (appType === 'settlement_va') {
-                              return (
-                                <div className='flex items-center gap-2'>
-                                  <span className='inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800'>
-                                    Settlement - VA
-                                  </span>
-                                  <span className='text-xs text-gray-500'>FREE</span>
-                                </div>
-                              );
+                              typeLabel = 'Settlement - VA';
+                              typeColor = 'bg-green-100 text-green-800';
                             } else if (appType === 'settlement_nc') {
-                              return (
-                                <span className='inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800'>
-                                  Settlement - NC
-                                </span>
-                              );
+                              typeLabel = 'Settlement - NC';
+                              typeColor = 'bg-blue-100 text-blue-800';
                             } else if (appType === 'public_offering') {
-                              return (
-                                <span className='inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-purple-100 text-purple-800'>
-                                  Public Offering
-                                </span>
-                              );
+                              typeLabel = 'Public Offering';
+                              typeColor = 'bg-purple-100 text-purple-800';
                             } else if (appType === 'multi_community') {
-                              return (
-                                <span className='inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-orange-100 text-orange-800'>
-                                  Multi-Community
-                                </span>
-                              );
+                              typeLabel = 'Multi-Community';
+                              typeColor = 'bg-orange-100 text-orange-800';
                             } else if (appType === 'lender_questionnaire') {
-                              return (
-                                <span className='inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-indigo-100 text-indigo-800'>
-                                  Lender Questionnaire
-                                </span>
-                              );
+                              typeLabel = 'Lender Questionnaire';
+                              typeColor = 'bg-indigo-100 text-indigo-800';
                             } else {
-                              return (
-                                <span className='inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-800'>
-                                  Single Property
-                                </span>
-                              );
+                              typeLabel = 'Single Property';
+                              typeColor = 'bg-gray-100 text-gray-800';
                             }
+                            
+                            return (
+                              <div className='flex items-center gap-2'>
+                                <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${typeColor}`}>
+                                  {typeLabel}
+                                </span>
+                                {isRush && (
+                                  <span className='inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-orange-100 text-orange-800'>
+                                    RUSH
+                                  </span>
+                                )}
+                                {appType === 'settlement_va' && !isRush && (
+                                  <span className='text-xs text-gray-500'>FREE</span>
+                                )}
+                              </div>
+                            );
                           })()}
                         </div>
                       </td>

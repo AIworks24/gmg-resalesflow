@@ -45,6 +45,8 @@ const AdminPropertiesManagement = () => {
   const [selectedProperty, setSelectedProperty] = useState(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [propertyToDelete, setPropertyToDelete] = useState(null);
+  const [relatedApplicationsCount, setRelatedApplicationsCount] = useState(0);
+  const [isDeleting, setIsDeleting] = useState(false);
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
@@ -99,7 +101,8 @@ const AdminPropertiesManagement = () => {
   };
 
   // Build API URL with query parameters
-  const apiUrl = `/api/admin/hoa-properties?page=${currentPage}&pageSize=${pageSize}&search=${encodeURIComponent(searchTerm)}`;
+  // Always bypass cache to ensure fresh data for properties
+  const apiUrl = `/api/admin/hoa-properties?page=${currentPage}&pageSize=${pageSize}&search=${encodeURIComponent(searchTerm)}&bypassCache=true`;
 
   // Fetch properties using SWR
   const { data: swrData, error: swrError, isLoading, mutate } = useSWR(
@@ -311,22 +314,153 @@ const AdminPropertiesManagement = () => {
   };
 
   const handleDelete = async () => {
-    if (!propertyToDelete) return;
+    if (!propertyToDelete || isDeleting) return;
 
+    setIsDeleting(true);
     try {
+      // Get all applications that reference this property
+      const { data: directApplications, error: appsError } = await supabase
+        .from('applications')
+        .select('id')
+        .eq('hoa_property_id', propertyToDelete.id);
+
+      if (appsError) {
+        console.error('Error fetching direct applications:', appsError);
+      }
+
+      // Get all property groups that reference this property (for multi-community apps)
+      const { data: propertyGroups, error: groupsError } = await supabase
+        .from('application_property_groups')
+        .select('application_id, id')
+        .eq('property_id', propertyToDelete.id);
+
+      if (groupsError) {
+        console.error('Error fetching property groups:', groupsError);
+      }
+
+      // Collect all unique application IDs that need to be deleted
+      const applicationIdsToDelete = new Set();
+      
+      // Add direct applications
+      if (directApplications) {
+        directApplications.forEach(app => applicationIdsToDelete.add(app.id));
+      }
+
+      // Add applications from property groups
+      if (propertyGroups) {
+        propertyGroups.forEach(group => {
+          if (group.application_id) {
+            applicationIdsToDelete.add(group.application_id);
+          }
+        });
+      }
+
+      // Delete all related applications and their data
+      if (applicationIdsToDelete.size > 0) {
+        const appIdsArray = Array.from(applicationIdsToDelete);
+        
+        // For each application, delete related data first
+        for (const appId of appIdsArray) {
+          // Delete notifications for this application first using API endpoint with service role
+          try {
+            const notificationsResponse = await fetch('/api/admin/delete-application-notifications', {
+              method: 'DELETE',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({ applicationId: appId }),
+            });
+
+            if (!notificationsResponse.ok) {
+              const errorData = await notificationsResponse.json();
+              console.error(`Error deleting notifications for application ${appId}:`, errorData);
+              throw new Error(`Failed to delete notifications for application ${appId}: ${errorData.error || 'Unknown error'}`);
+            }
+          } catch (notificationsError) {
+            console.error(`Error deleting notifications for application ${appId}:`, notificationsError);
+            throw notificationsError; // Don't continue if notifications deletion fails
+          }
+
+          // Soft delete property owner forms for this application
+          // Note: We'll keep forms as hard delete since they're child records
+          const { error: formsError } = await supabase
+            .from('property_owner_forms')
+            .delete()
+            .eq('application_id', appId);
+
+          if (formsError) {
+            console.error(`Error deleting forms for application ${appId}:`, formsError);
+            // Continue with deletion even if forms deletion fails
+          }
+
+          // Soft delete application property groups for this application
+          // Note: We'll keep groups as hard delete since they're child records
+          const { error: groupsDeleteError } = await supabase
+            .from('application_property_groups')
+            .delete()
+            .eq('application_id', appId);
+
+          if (groupsDeleteError) {
+            console.error(`Error deleting property groups for application ${appId}:`, groupsDeleteError);
+            // Continue with deletion even if groups deletion fails
+          }
+
+          // Soft delete the application itself (set deleted_at timestamp instead of hard deleting)
+          const { error: appDeleteError } = await supabase
+            .from('applications')
+            .update({ deleted_at: new Date().toISOString() })
+            .eq('id', appId);
+
+          if (appDeleteError) {
+            console.error(`Error deleting application ${appId}:`, appDeleteError);
+            throw new Error(`Failed to delete application ${appId}: ${appDeleteError.message}`);
+          }
+        }
+      }
+
+      // Also soft delete any remaining property groups that reference this property
+      // (in case some weren't caught above)
+      // Note: We'll keep groups as hard delete since they're child records
+      if (propertyGroups && propertyGroups.length > 0) {
+        const { error: remainingGroupsError } = await supabase
+          .from('application_property_groups')
+          .delete()
+          .eq('property_id', propertyToDelete.id);
+
+        if (remainingGroupsError) {
+          console.error('Error deleting remaining property groups:', remainingGroupsError);
+          // Continue with property deletion
+        }
+      }
+
+      // Soft delete the property (set deleted_at timestamp instead of hard deleting)
       const { error } = await supabase
         .from('hoa_properties')
-        .delete()
+        .update({ deleted_at: new Date().toISOString() })
         .eq('id', propertyToDelete.id);
 
       if (error) throw error;
 
       setShowDeleteConfirm(false);
       setPropertyToDelete(null);
+      setRelatedApplicationsCount(0);
+      setIsDeleting(false);
       mutate();
+      
+      const deletedCount = applicationIdsToDelete.size;
+      if (deletedCount > 0) {
+        showSnackbar(
+          `Property and ${deletedCount} related application(s) deleted successfully!`,
+          'success'
+        );
+      } else {
+        showSnackbar('Property deleted successfully!', 'success');
+      }
     } catch (error) {
       console.error('Error deleting property:', error);
-      alert('Error deleting property: ' + error.message);
+      showSnackbar('Error deleting property: ' + (error.message || 'Unknown error occurred'), 'error');
+      setIsDeleting(false);
+      // Don't close modal on error so user can try again or cancel
     }
   };
 
@@ -343,6 +477,7 @@ const AdminPropertiesManagement = () => {
       const { data, error } = await supabase
         .from('hoa_properties')
         .select('id, name, location')
+        .is('deleted_at', null) // Only get non-deleted properties
         .order('name');
 
       if (error) throw error;
@@ -862,8 +997,26 @@ const AdminPropertiesManagement = () => {
                       <Edit className="w-4 h-4" />
                     </button>
                     <button
-                      onClick={() => {
+                      onClick={async () => {
                         setPropertyToDelete(property);
+                        // Check for related applications before showing confirmation
+                        try {
+                          const { count: applicationCount } = await supabase
+                            .from('applications')
+                            .select('*', { count: 'exact', head: true })
+                            .eq('hoa_property_id', property.id);
+
+                          const { count: groupCount } = await supabase
+                            .from('application_property_groups')
+                            .select('*', { count: 'exact', head: true })
+                            .eq('property_id', property.id);
+
+                          const totalCount = (applicationCount || 0) + (groupCount || 0);
+                          setRelatedApplicationsCount(totalCount);
+                        } catch (error) {
+                          console.error('Error checking related applications:', error);
+                          setRelatedApplicationsCount(0);
+                        }
                         setShowDeleteConfirm(true);
                       }}
                       className="text-red-600 hover:text-red-900"
@@ -1275,22 +1428,75 @@ const AdminPropertiesManagement = () => {
         {showDeleteConfirm && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
             <div className="bg-white rounded-lg max-w-md w-full p-6">
-              <h2 className="text-lg font-semibold mb-4">Confirm Delete</h2>
-              <p className="text-gray-600 mb-6">
-                Are you sure you want to delete property "{propertyToDelete?.name}"? This action cannot be undone.
-              </p>
+              <div className="flex items-center gap-3 mb-4">
+                <AlertTriangle className="w-6 h-6 text-red-600" />
+                <h2 className="text-lg font-semibold">Confirm Delete</h2>
+              </div>
+              <div className="mb-6">
+                {isDeleting ? (
+                  <div className="flex items-center gap-3 py-4">
+                    <RefreshCw className="w-5 h-5 text-blue-600 animate-spin" />
+                    <div>
+                      <p className="text-gray-700 font-medium mb-1">
+                        Deleting property and related data...
+                      </p>
+                      <p className="text-sm text-gray-600">
+                        {relatedApplicationsCount > 0 
+                          ? `Removing ${relatedApplicationsCount} application(s) and all associated data. This may take a moment.`
+                          : 'Please wait while we delete the property.'
+                        }
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <p className="text-gray-700 mb-3">
+                      Are you sure you want to delete property <strong>"{propertyToDelete?.name}"</strong>?
+                    </p>
+                    {relatedApplicationsCount > 0 && (
+                      <div className="bg-red-50 border border-red-200 rounded-md p-3 mb-3">
+                        <p className="text-sm text-red-800 font-medium mb-1">
+                          ⚠️ Warning: This will also delete {relatedApplicationsCount} related application(s)
+                        </p>
+                        <p className="text-xs text-red-700">
+                          All applications, forms, and related data associated with this property will be permanently deleted.
+                        </p>
+                      </div>
+                    )}
+                    <p className="text-sm text-gray-600">
+                      This action cannot be undone.
+                    </p>
+                  </>
+                )}
+              </div>
               <div className="flex justify-end gap-3">
                 <button
-                  onClick={() => setShowDeleteConfirm(false)}
-                  className="px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50"
+                  onClick={() => {
+                    if (isDeleting) return; // Prevent closing during deletion
+                    setShowDeleteConfirm(false);
+                    setPropertyToDelete(null);
+                    setRelatedApplicationsCount(0);
+                    setIsDeleting(false);
+                  }}
+                  disabled={isDeleting}
+                  className="px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Cancel
                 </button>
                 <button
                   onClick={handleDelete}
-                  className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700"
+                  disabled={isDeleting}
+                  className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
                 >
-                  Delete
+                  {isDeleting && (
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                  )}
+                  {isDeleting 
+                    ? 'Deleting...' 
+                    : relatedApplicationsCount > 0 
+                      ? `Delete Property & ${relatedApplicationsCount} Application(s)` 
+                      : 'Delete Property'
+                  }
                 </button>
               </div>
             </div>

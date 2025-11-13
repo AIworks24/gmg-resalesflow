@@ -118,12 +118,43 @@ export default async function handler(req, res) {
           .from('applications')
           .update(updateData)
           .eq('stripe_payment_intent_id', paymentIntent.id)
-          .select('id')
+          .select(`
+            id,
+            submitter_email,
+            submitter_name,
+            property_address,
+            package_type,
+            total_amount
+          `)
           .single();
 
         // Handle multi-community applications
         const applicationId = paymentIntent.metadata.applicationId || updatedApplication?.id;
         const isMultiCommunity = paymentIntent.metadata.isMultiCommunity === 'true';
+        
+        // Send payment confirmation email
+        if (updatedApplication && updatedApplication.submitter_email) {
+          try {
+            const { sendPaymentConfirmationEmail } = require('../../../lib/emailService');
+            
+            await sendPaymentConfirmationEmail({
+              to: updatedApplication.submitter_email,
+              applicationId: updatedApplication.id,
+              customerName: updatedApplication.submitter_name || paymentIntent.metadata.customerName || 'Customer',
+              propertyAddress: updatedApplication.property_address || paymentIntent.metadata.propertyAddress || 'Unknown',
+              packageType: updatedApplication.package_type || paymentIntent.metadata.packageType || 'standard',
+              totalAmount: updatedApplication.total_amount || (paymentIntent.amount_total / 100).toFixed(2),
+              stripeChargeId: paymentIntent.id,
+            });
+
+            console.log(`[Webhook] Payment confirmation email sent successfully to ${updatedApplication.submitter_email}`);
+          } catch (emailError) {
+            console.error('[Webhook] Failed to send payment confirmation email:', emailError);
+            // Don't fail the webhook if email fails
+          }
+        } else {
+          console.warn(`[Webhook] Cannot send payment confirmation email - missing submitter_email for application ${applicationId}`);
+        }
         
         if (applicationId) {
           // Note: Auto-assignment now happens at submission time, not at payment time
@@ -144,6 +175,21 @@ export default async function handler(req, res) {
             } else {
               console.warn(`[Webhook] Failed to auto-assign application ${applicationId}:`, assignResult?.error || 'Unknown error');
             }
+          }
+
+          // ALWAYS create notifications after payment, even if auto-assign failed
+          try {
+            console.log(`[Webhook] Creating notifications for application ${applicationId} after payment`);
+            const { createNotifications } = await import('../notifications/create');
+            const notificationResult = await createNotifications(applicationId, supabase);
+            if (notificationResult.success) {
+              console.log(`[Webhook] Notifications created: ${notificationResult.notificationsCreated} notifications, ${notificationResult.emailsQueued || 0} emails queued`);
+            } else {
+              console.warn(`[Webhook] Failed to create notifications:`, notificationResult.error);
+            }
+          } catch (notificationError) {
+            console.error('[Webhook] Error creating notifications:', notificationError);
+            // Don't fail the webhook if notification creation fails
           }
           
           // Check if this is a lender questionnaire application

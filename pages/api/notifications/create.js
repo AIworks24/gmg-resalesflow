@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
+import { sendPropertyManagerNotificationEmail } from '../../../lib/emailService';
 
 /**
  * Format application type for display in notifications
@@ -17,10 +18,109 @@ function formatApplicationType(applicationType) {
 }
 
 /**
+ * Check if an email is a fake/placeholder email that shouldn't receive notifications
+ */
+function isFakeEmail(email) {
+  if (!email || typeof email !== 'string') return true;
+  
+  const normalizedEmail = email.toLowerCase().trim();
+  
+  // Common fake/placeholder email patterns
+  const fakePatterns = [
+    /^test@/i,
+    /@example\./i,
+    /@test\./i,
+    /@placeholder\./i,
+    /@dummy\./i,
+    /^noreply@/i,
+    /^no-reply@/i,
+    /^admin@example\./i,
+    /^fake@/i,
+    /^placeholder@/i,
+    /^dummy@/i,
+    /^temp@/i,
+    /^temporary@/i,
+    /@localhost/i,
+    /@test\.com$/i,
+    /@example\.com$/i,
+    /@example\.org$/i,
+    /@example\.net$/i,
+  ];
+  
+  // Check against patterns
+  for (const pattern of fakePatterns) {
+    if (pattern.test(normalizedEmail)) {
+      return true;
+    }
+  }
+  
+  // Check for obviously invalid emails
+  if (normalizedEmail.length < 5 || !normalizedEmail.includes('@') || !normalizedEmail.includes('.')) {
+    return true;
+  }
+  
+  return false;
+}
+
+/**
  * Helper function to create notifications (can be called directly or via API)
  */
 export async function createNotifications(applicationId, supabaseClient) {
   try {
+    // Check if notifications already exist for this application
+    // If they exist, update their timestamp instead of creating duplicates
+    const { data: existingNotifications } = await supabaseClient
+      .from('notifications')
+      .select('id')
+      .eq('application_id', applicationId)
+      .eq('notification_type', 'new_application')
+      .limit(1);
+
+    if (existingNotifications && existingNotifications.length > 0) {
+      console.log(`[Notifications] Notifications already exist for application ${applicationId}, updating timestamp`);
+      
+      // Update the existing notification's timestamp to now
+      // IMPORTANT: Use a single timestamp to ensure consistency
+      const now = new Date().toISOString();
+      
+      const { data: updatedNotifications, error: updateError } = await supabaseClient
+        .from('notifications')
+        .update({
+          sent_at: now,
+          created_at: now, // Update created_at to reflect new submission
+          is_read: false, // Mark as unread since it's a new submission
+          read_at: null,
+          updated_at: now // Track when it was updated
+        })
+        .eq('application_id', applicationId)
+        .eq('notification_type', 'new_application')
+        .select('id, sent_at, created_at, updated_at, recipient_email, application_id'); // Return key fields for verification
+      
+      if (updateError) {
+        console.error('[Notifications] Error updating existing notification timestamp:', updateError);
+        return {
+          success: false,
+          error: 'Failed to update notification timestamp',
+          details: updateError.message
+        };
+      }
+      
+      console.log(`[Notifications] Updated ${updatedNotifications?.length || 0} notification(s) timestamp:`, {
+        notificationIds: updatedNotifications?.map(n => n.id),
+        newSentAt: updatedNotifications?.[0]?.sent_at,
+        newCreatedAt: updatedNotifications?.[0]?.created_at,
+      });
+      
+      return { 
+        success: true, 
+        notificationsCreated: 0, 
+        notificationsUpdated: updatedNotifications?.length || existingNotifications.length,
+        updatedNotifications: updatedNotifications,
+        message: 'Updated existing notification timestamp',
+        skipped: false 
+      };
+    }
+
     // Get full application data
     const { data: application, error: appError } = await supabaseClient
       .from('applications')
@@ -41,76 +141,85 @@ export async function createNotifications(applicationId, supabaseClient) {
       return { success: false, error: 'Application not found' };
     }
 
+    console.log(`[Notifications] Creating notifications for application ${applicationId}`);
+    console.log(`[Notifications] Property owner email:`, application.hoa_properties?.property_owner_email);
+    console.log(`[Notifications] Application status:`, application.status);
+
     // Skip if draft
     if (application.status === 'draft') {
+      console.log(`[Notifications] Skipping draft application ${applicationId}`);
       return { success: true, notificationsCreated: 0, message: 'Draft application, skipping notifications' };
+    }
+
+    // Skip if payment is pending (not paid yet)
+    if (application.status === 'pending_payment') {
+      console.log(`[Notifications] Skipping unpaid application ${applicationId}`);
+      return { success: true, notificationsCreated: 0, message: 'Unpaid application, skipping notifications' };
     }
 
     const notifications = [];
 
-    // 1. Notify Property Owner (if they have an account)
+    // 1. Notify Property Owner (if they have an email - even if they don't have an account)
+    // NOTE: Property owners ARE staff/admin users, so they use admin accounts
     if (application.hoa_properties?.property_owner_email) {
-      const propertyOwnerEmail = application.hoa_properties.property_owner_email;
+      const originalPropertyOwnerEmail = application.hoa_properties.property_owner_email;
+      let propertyOwnerEmail = originalPropertyOwnerEmail;
       
-      // Find user ID by email
-      const { data: ownerProfile } = await supabaseClient
-        .from('profiles')
-        .select('id, email, role')
-        .eq('email', propertyOwnerEmail)
-        .single();
-
-      // Format application type for display
-      const appTypeDisplay = formatApplicationType(application.application_type);
-      const packageDisplay = application.package_type === 'rush' ? 'Rush' : 'Standard';
+      // Check if email starts with 'owner.' - these are staff/admin accounts, skip email sending
+      const hasOwnerPrefix = propertyOwnerEmail.startsWith('owner.');
       
-      const notification = {
-        application_id: applicationId,
-        recipient_email: propertyOwnerEmail,
-        recipient_name: application.hoa_properties.property_owner_name || 'Property Owner',
-        recipient_user_id: ownerProfile?.id || null,
-        notification_type: 'new_application',
-        subject: `${appTypeDisplay} Application - ${application.property_address} | ${application.hoa_properties?.name || 'Unknown Property'}`,
-        message: `New ${appTypeDisplay.toLowerCase()} application received for ${application.property_address} in ${application.hoa_properties?.name || 'Unknown Property'}. Package: ${packageDisplay}. Submitter: ${application.submitter_name || 'Unknown'}.`,
-        status: 'unread',
-        is_read: false,
-        metadata: {
-          property_address: application.property_address,
-          hoa_name: application.hoa_properties?.name,
-          submitter_name: application.submitter_name,
-          submitter_type: application.submitter_type,
-          application_type: application.application_type,
-          package_type: application.package_type,
-        },
-      };
-
-      notifications.push(notification);
-    }
-
-    // 2. Notify all Staff/Admin users
-    const { data: staffMembers } = await supabaseClient
-      .from('profiles')
-      .select('id, email, first_name, last_name, role')
-      .in('role', ['admin', 'staff']);
-
-    if (staffMembers && staffMembers.length > 0) {
-      // Format application type for display
-      const appTypeDisplay = formatApplicationType(application.application_type);
-      const packageDisplay = application.package_type === 'rush' ? 'Rush' : 'Standard';
-      const submitterInfo = application.submitter_name 
-        ? `${application.submitter_name} (${application.submitter_type || 'Unknown'})`
-        : application.submitter_type || 'Unknown submitter';
+      // Remove "owner." prefix for processing (but remember it for email skipping)
+      propertyOwnerEmail = propertyOwnerEmail.replace(/^owner\./, '');
       
-      staffMembers.forEach((staff) => {
+      // Skip fake/placeholder emails - don't create notifications for them
+      if (isFakeEmail(propertyOwnerEmail)) {
+        console.log(`[Notifications] Skipping fake/placeholder email for property owner: ${propertyOwnerEmail}`);
+      } else {
+        // Find user ID by email - try exact match first
+        let { data: ownerProfile } = await supabaseClient
+          .from('profiles')
+          .select('id, email, role')
+          .eq('email', propertyOwnerEmail)
+          .single();
+
+        // If not found, try case-insensitive search
+        if (!ownerProfile) {
+          const { data: profiles } = await supabaseClient
+            .from('profiles')
+            .select('id, email, role')
+            .ilike('email', propertyOwnerEmail);
+          
+          if (profiles && profiles.length > 0) {
+            ownerProfile = profiles[0];
+          }
+        }
+
+        // If we found a profile, use the profile's current email instead of the stored property email
+        // This ensures we use the user's current email, not an old one stored in the property
+        if (ownerProfile && ownerProfile.email) {
+          console.log(`[Notifications] Found profile for property owner. Using current email: ${ownerProfile.email} instead of stored: ${propertyOwnerEmail}`);
+          propertyOwnerEmail = ownerProfile.email;
+        }
+
+        // Format application type for display
+        const appTypeDisplay = formatApplicationType(application.application_type);
+        const packageDisplay = application.package_type === 'rush' ? 'Rush' : 'Standard';
+        
+        // Set explicit timestamps to ensure accurate "time ago" display
+        const now = new Date().toISOString();
+        
         const notification = {
           application_id: applicationId,
-          recipient_email: staff.email,
-          recipient_name: `${staff.first_name || ''} ${staff.last_name || ''}`.trim() || staff.email,
-          recipient_user_id: staff.id,
+          recipient_email: propertyOwnerEmail, // Already cleaned (owner. prefix removed above)
+          recipient_name: application.hoa_properties.property_owner_name || 'Property Owner',
+          recipient_user_id: ownerProfile?.id || null,
           notification_type: 'new_application',
           subject: `${appTypeDisplay} Application - ${application.property_address} | ${application.hoa_properties?.name || 'Unknown Property'}`,
-          message: `New ${appTypeDisplay.toLowerCase()} application requires processing. Property: ${application.property_address} in ${application.hoa_properties?.name || 'Unknown Property'}. Package: ${packageDisplay}. Submitter: ${submitterInfo}.`,
+          message: `New ${appTypeDisplay.toLowerCase()} application received for ${application.property_address} in ${application.hoa_properties?.name || 'Unknown Property'}. Package: ${packageDisplay}. Submitter: ${application.submitter_name || 'Unknown'}.`,
           status: 'unread',
           is_read: false,
+          sent_at: now, // Explicitly set sent_at to current time
+          created_at: now, // Explicitly set created_at to current time
           metadata: {
             property_address: application.property_address,
             hoa_name: application.hoa_properties?.name,
@@ -118,30 +227,138 @@ export async function createNotifications(applicationId, supabaseClient) {
             submitter_type: application.submitter_type,
             application_type: application.application_type,
             package_type: application.package_type,
+            skip_email: hasOwnerPrefix, // Flag to skip email if original had 'owner.' prefix
+            original_email: originalPropertyOwnerEmail, // Store original for reference
           },
         };
 
         notifications.push(notification);
-      });
+        console.log(`[Notifications] Added notification for property owner: ${propertyOwnerEmail} (original: ${originalPropertyOwnerEmail}, hasOwnerPrefix: ${hasOwnerPrefix})`);
+      }
+    } else {
+      console.log(`[Notifications] No property owner email found for application ${applicationId}`);
     }
+
+    // IMPORTANT: Staff/admin users do NOT receive notifications
+    // Only the property owner for the specific application receives notifications (in-app + email)
 
     // Insert all notifications
     if (notifications.length > 0) {
+      console.log(`[Notifications] Inserting ${notifications.length} notifications into database`);
       const { data, error } = await supabaseClient
         .from('notifications')
         .insert(notifications)
         .select();
 
       if (error) {
-        console.error('Error creating notifications:', error);
+        console.error('[Notifications] Error creating notifications:', error);
         return { success: false, error: 'Failed to create notifications', details: error.message };
       }
 
-      console.log(`Successfully created ${data.length} notifications for application ${applicationId}`);
+      console.log(`[Notifications] Successfully created ${data.length} notifications for application ${applicationId}`);
+
+      // Send email notifications to all recipients
+      const emailPromises = [];
+      const isMultiCommunity = application.application_type === 'multi_community';
+      const isRush = application.package_type === 'rush';
+      
+      // Get linked properties if multi-community
+      let linkedProperties = [];
+      if (isMultiCommunity) {
+        const { data: linkedProps } = await supabaseClient
+          .from('application_properties')
+          .select(`
+            property_name,
+            location,
+            property_id
+          `)
+          .eq('application_id', applicationId);
+        linkedProperties = linkedProps || [];
+      }
+
+      // Send emails to all notification recipients (with error handling)
+      try {
+        for (const notification of data) {
+          // Skip if no email address
+          if (!notification.recipient_email) continue;
+          
+          // Skip fake/placeholder emails - don't send emails to them
+          if (isFakeEmail(notification.recipient_email)) {
+            console.log(`[Notifications] Skipping email send to fake/placeholder email: ${notification.recipient_email}`);
+            continue;
+          }
+
+          try {
+            // Check if this notification should skip email (has 'owner.' prefix in original)
+            // Property owners with 'owner.' prefix are staff/admin accounts - they get in-app notifications only
+            const shouldSkipEmail = notification.metadata?.skip_email === true;
+            
+            if (shouldSkipEmail) {
+              console.log(`[Notifications] Skipping email for property owner with 'owner.' prefix: ${notification.recipient_email} (staff/admin account - in-app notification only)`);
+              continue;
+            }
+            
+            // Determine if this is a property owner or staff/admin
+            // Compare emails (handle owner. prefix and case sensitivity)
+            const propertyOwnerEmail = application.hoa_properties?.property_owner_email?.replace(/^owner\./, '') || '';
+            const notificationEmail = notification.recipient_email?.replace(/^owner\./, '') || '';
+            const isPropertyOwner = propertyOwnerEmail && notificationEmail && 
+              propertyOwnerEmail.toLowerCase() === notificationEmail.toLowerCase();
+            
+            console.log(`[Notifications] Checking email: ${notificationEmail}, isPropertyOwner: ${isPropertyOwner}`);
+            
+            // IMPORTANT: Only send emails to property owners, NOT to staff/admin
+            // Staff/admin will still receive in-app notifications, but no emails
+            if (isPropertyOwner && application.hoa_properties) {
+              // Send property owner notification email
+              emailPromises.push(
+                sendPropertyManagerNotificationEmail({
+                  to: notification.recipient_email,
+                  applicationId: applicationId,
+                  propertyName: application.hoa_properties.name || 'Unknown Property',
+                  propertyAddress: application.property_address,
+                  submitterName: application.submitter_name || 'Unknown',
+                  submitterEmail: application.submitter_email || '',
+                  packageType: application.package_type,
+                  isRush: isRush,
+                  isMultiCommunity: isMultiCommunity,
+                  linkedProperties: linkedProperties,
+                  applicationType: application.application_type,
+                }).catch(emailError => {
+                  console.error(`Failed to send email to ${notification.recipient_email}:`, emailError);
+                  // Don't throw - continue with other emails
+                  return { success: false, error: emailError.message };
+                })
+              );
+            } else {
+              // Staff/admin: Skip email, they only get in-app notifications
+              console.log(`[Notifications] Skipping email for staff/admin: ${notificationEmail} (in-app notification only)`);
+            }
+          } catch (emailError) {
+            console.error(`Error preparing email for ${notification.recipient_email}:`, emailError);
+            // Continue with other emails
+          }
+        }
+      } catch (emailLoopError) {
+        console.error('Error in email sending loop:', emailLoopError);
+        // Don't fail notification creation if email loop fails
+      }
+
+      // Send all emails (don't wait for them to complete - fire and forget)
+      console.log(`[Notifications] Queued ${emailPromises.length} emails to send`);
+      Promise.allSettled(emailPromises).then(results => {
+        const successful = results.filter(r => r.status === 'fulfilled').length;
+        const failed = results.filter(r => r.status === 'rejected').length;
+        console.log(`[Notifications] Email notifications sent: ${successful} successful, ${failed} failed`);
+      }).catch(err => {
+        console.error('[Notifications] Error in email sending promise:', err);
+      });
+
       return {
         success: true,
         notificationsCreated: data.length,
         notifications: data,
+        emailsQueued: emailPromises.length,
       };
     }
 

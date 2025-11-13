@@ -1,17 +1,33 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
 import { Bell, X, Check, FileText, Clock, AlertCircle } from 'lucide-react';
 import { useRouter } from 'next/router';
+import useNotificationStore from '../../stores/notificationStore';
 
 const NotificationBell = ({ user, userEmail }) => {
-  const [notifications, setNotifications] = useState([]);
-  const [expiringDocs, setExpiringDocs] = useState([]);
-  const [unreadCount, setUnreadCount] = useState(0);
+  // Use global store for persistent notification state
+  const {
+    unreadCount,
+    notifications: storeNotifications,
+    expiringDocs: storeExpiringDocs,
+    isLoading: storeLoading,
+    updateUnreadCount,
+    setNotifications,
+    setExpiringDocs,
+    setLoading,
+    markAsRead: storeMarkAsRead,
+    markAllAsRead: storeMarkAllAsRead,
+    clearExpiringDoc: storeClearExpiringDoc,
+  } = useNotificationStore();
+
+  // Local state for UI only
   const [showDropdown, setShowDropdown] = useState(false);
-  const [loading, setLoading] = useState(false);
   const [clearedNotifications, setClearedNotifications] = useState(new Set());
   const supabase = createClientComponentClient();
   const router = useRouter();
+  
+  // Keep a ref to track if we've initialized to prevent unnecessary refetches
+  const initializedRef = useRef(false);
 
   // Load cleared notifications from localStorage
   useEffect(() => {
@@ -32,13 +48,22 @@ const NotificationBell = ({ user, userEmail }) => {
   // Fetch application notifications
   // IMPORTANT: Fetch ALL notifications (not just unread) to show all stored notifications
   // This ensures notifications created when user was offline are visible when they log in
-  const fetchApplicationNotifications = async () => {
-    if (!user) return;
+  const fetchApplicationNotifications = async (bypassCache = false) => {
+    if (!user) return { notifications: [], unreadCount: 0 };
     
     try {
-      // Fetch more notifications (100) to ensure we get all stored notifications
-      // The API will filter by property owner email for admin/staff/accounting
-      const response = await fetch('/api/notifications/get?limit=100&unreadOnly=false');
+      // Add timestamp to prevent caching stale data when bypassing cache
+      const cacheBuster = bypassCache ? `&_t=${Date.now()}` : '';
+      const url = `/api/notifications/get?limit=100&unreadOnly=false${cacheBuster}`;
+      
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          'Cache-Control': bypassCache ? 'no-cache, no-store, must-revalidate' : 'no-cache',
+          'Pragma': 'no-cache',
+        },
+      });
+      
       if (response.ok) {
         const data = await response.json();
         console.log(`Fetched ${data.notifications?.length || 0} notifications, ${data.unreadCount || 0} unread`);
@@ -80,29 +105,41 @@ const NotificationBell = ({ user, userEmail }) => {
   };
 
   // Fetch all notifications
-  const fetchNotifications = async () => {
+  const fetchNotifications = async (silent = false, bypassCache = false) => {
     if (!user) return;
     
-    setLoading(true);
+    // Only show loading if not a silent refresh (real-time updates are silent)
+    // IMPORTANT: Don't reset unreadCount during loading - keep existing count visible
+    if (!silent) {
+      setLoading(true);
+    }
+    
     try {
+      console.log('📥 Fetching notifications...', { silent, bypassCache });
       const [appNotifications, expiringDocsList] = await Promise.all([
-        fetchApplicationNotifications(),
+        fetchApplicationNotifications(bypassCache),
         fetchExpiringDocuments(),
       ]);
 
+      console.log('📥 Fetched notifications:', {
+        count: appNotifications.notifications.length,
+        unreadCount: appNotifications.unreadCount,
+        firstNotificationSentAt: appNotifications.notifications[0]?.sent_at,
+        firstNotificationCreatedAt: appNotifications.notifications[0]?.created_at,
+      });
+
+      // Update global store (this persists across page navigations)
+      // The count will update smoothly without flickering
       setNotifications(appNotifications.notifications);
       setExpiringDocs(expiringDocsList);
-      
-      // Calculate total unread count
-      const expiringDocsCount = expiringDocsList.reduce(
-        (sum, notification) => sum + notification.documents.length,
-        0
-      );
-      setUnreadCount(appNotifications.unreadCount + expiringDocsCount);
+      updateUnreadCount(appNotifications.notifications, expiringDocsList);
     } catch (error) {
-      console.error('Error fetching notifications:', error);
+      console.error('❌ Error fetching notifications:', error);
+      // On error, keep existing count (don't reset to 0)
     } finally {
-      setLoading(false);
+      if (!silent) {
+        setLoading(false);
+      }
     }
   };
 
@@ -119,21 +156,43 @@ const NotificationBell = ({ user, userEmail }) => {
       localStorage.setItem(storageKey, JSON.stringify(Array.from(newCleared)));
     }
     
-    setExpiringDocs(prev => prev.filter(n => n.property_id !== propertyId));
-    
-    // Update count
-    const removed = expiringDocs.find(n => n.property_id === propertyId);
-    if (removed) {
-      setUnreadCount(prev => Math.max(0, prev - removed.documents.length));
-    }
+    // Update global store
+    storeClearExpiringDoc(propertyId);
   };
 
-  // Initial fetch
+  // Initial fetch - only if we don't have recent data
   useEffect(() => {
-    if (user && userEmail) {
+    if (!user || !userEmail) return;
+    
+    const { lastFetched, unreadCount: storedCount } = useNotificationStore.getState();
+    
+    // If we have stored count, show it immediately (no flicker!)
+    // Only fetch if we don't have data or it's been more than 5 minutes
+    const shouldFetch = !lastFetched || 
+      (new Date().getTime() - new Date(lastFetched).getTime() > 5 * 60 * 1000);
+    
+    if (shouldFetch && !initializedRef.current) {
+      initializedRef.current = true;
       fetchNotifications();
+    } else if (storedCount > 0) {
+      // We have stored count, just ensure it's displayed (already in store)
+      console.log(`Using stored notification count: ${storedCount}`);
     }
-  }, [user, userEmail, clearedNotifications]);
+  }, [user, userEmail]);
+
+  // Re-fetch when clearedNotifications change (for expiring docs)
+  useEffect(() => {
+    if (user && userEmail && initializedRef.current) {
+      // Only re-fetch expiring docs, not all notifications
+      fetchExpiringDocuments().then(expiringDocsList => {
+        setExpiringDocs(expiringDocsList);
+        // Recalculate unread count with updated expiring docs
+        const currentNotifications = useNotificationStore.getState().notifications;
+        updateUnreadCount(currentNotifications, expiringDocsList);
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clearedNotifications]);
 
   // Set up real-time subscription for notifications
   useEffect(() => {
@@ -151,34 +210,105 @@ const NotificationBell = ({ user, userEmail }) => {
           table: 'notifications',
         },
         (payload) => {
-          console.log('Notification change detected:', payload.eventType, payload.new || payload.old);
+          console.log('🔔 Notification real-time event:', {
+            eventType: payload.eventType,
+            notificationId: payload.new?.id || payload.old?.id,
+            recipientEmail: payload.new?.recipient_email || payload.old?.recipient_email,
+            sentAt: payload.new?.sent_at,
+            createdAt: payload.new?.created_at,
+            fullPayload: payload,
+          });
           
-          // Only refresh if it's a notification for this user
           const notification = payload.new || payload.old;
-          if (notification) {
-            // Check multiple conditions for matching:
-            // 1. Direct recipient (user ID or email match)
-            // 2. For admin/staff: also check if application is assigned to them
-            // 3. Check if user email matches property owner email
-            const isDirectRecipient = 
-              notification.recipient_user_id === user.id ||
-              notification.recipient_email?.toLowerCase() === userEmail?.toLowerCase();
+          if (!notification) {
+            console.warn('⚠️ Notification payload missing new/old data');
+            return;
+          }
+          
+          // Check if this notification is for the current user
+          // Handle both direct email match and normalized email (with/without owner. prefix)
+          const normalizedNotificationEmail = (notification.recipient_email || '').toLowerCase().replace(/^owner\./, '');
+          const normalizedUserEmail = (userEmail || '').toLowerCase().replace(/^owner\./, '');
+          
+          const isDirectRecipient = 
+            notification.recipient_user_id === user.id ||
+            normalizedNotificationEmail === normalizedUserEmail ||
+            notification.recipient_email?.toLowerCase() === userEmail?.toLowerCase();
+          
+          console.log('🔍 Recipient check:', {
+            notificationEmail: notification.recipient_email,
+            normalizedNotificationEmail,
+            userEmail,
+            normalizedUserEmail,
+            recipientUserId: notification.recipient_user_id,
+            currentUserId: user.id,
+            isDirectRecipient,
+          });
+          
+          // Handle different event types
+          if (payload.eventType === 'UPDATE' && payload.new) {
+            console.log('🔄 UPDATE event received, processing...');
             
-            // If it's an INSERT and we can't determine if it's for this user,
-            // refresh anyway to let the API filter it properly
-            const shouldRefresh = payload.eventType === 'INSERT' || isDirectRecipient;
-            
-            if (shouldRefresh) {
-              console.log('Notification change detected, refreshing...', {
-                eventType: payload.eventType,
-                notificationId: notification.id,
-                isDirectRecipient,
-                recipientEmail: notification.recipient_email,
-                userEmail,
-              });
-              // Silent refresh - update in background by calling fetchNotifications
-              fetchNotifications();
+            if (!isDirectRecipient) {
+              console.log('⏭️ Skipping - notification not for this user');
+              return;
             }
+            
+            // UPDATE event: Always refresh notifications when updated
+            // This ensures we get the latest data from the database
+            console.log('🔄 Notification updated for this user, refreshing...', {
+              notificationId: notification.id,
+              newSentAt: payload.new.sent_at,
+              newCreatedAt: payload.new.created_at,
+            });
+            
+            // Optimistic update: Update store immediately if notification is already there
+            const currentNotifications = useNotificationStore.getState().notifications;
+            const notificationIndex = currentNotifications.findIndex(n => n.id === notification.id);
+            
+            if (notificationIndex !== -1) {
+              // Update immediately for instant UI feedback
+              const updatedNotifications = [...currentNotifications];
+              updatedNotifications[notificationIndex] = {
+                ...updatedNotifications[notificationIndex],
+                ...payload.new,
+              };
+              setNotifications(updatedNotifications);
+              
+              const expiringDocs = useNotificationStore.getState().expiringDocs;
+              updateUnreadCount(updatedNotifications, expiringDocs);
+              
+              console.log('✅ Optimistically updated notification in store');
+            }
+            
+            // Always fetch to ensure we have the latest data (bypasses cache)
+            // Use a small delay to batch multiple rapid updates
+            setTimeout(() => {
+              console.log('🔄 Fetching fresh notifications after UPDATE...');
+              fetchNotifications(true, true); // Silent + bypass cache
+            }, 100);
+          } else if (payload.eventType === 'INSERT') {
+            // INSERT event: Fetch to get full notification data
+            console.log('➕ INSERT event received');
+            if (isDirectRecipient || !notification.recipient_email) {
+              console.log('📥 Fetching notifications after INSERT...');
+              fetchNotifications(true, true); // Silent + bypass cache
+            } else {
+              console.log('⏭️ Skipping fetch - notification not for this user');
+            }
+          } else if (payload.eventType === 'DELETE') {
+            // DELETE event: Remove from store
+            console.log('🗑️ DELETE event received');
+            const currentNotifications = useNotificationStore.getState().notifications;
+            const filteredNotifications = currentNotifications.filter(n => n.id !== notification.id);
+            setNotifications(filteredNotifications);
+            
+            const expiringDocs = useNotificationStore.getState().expiringDocs;
+            updateUnreadCount(filteredNotifications, expiringDocs);
+            
+            console.log('✅ Notification deleted from store');
+          } else {
+            console.warn('⚠️ Unknown event type:', payload.eventType);
           }
         }
       )
@@ -202,21 +332,8 @@ const NotificationBell = ({ user, userEmail }) => {
   // Mark notification as read - OPTIMISTIC UPDATE
   // Updates UI immediately, syncs with backend in background
   const markAsRead = async (notificationId) => {
-    // OPTIMISTIC UPDATE: Update UI immediately
-    const notification = notifications.find(n => n.id === notificationId);
-    const wasUnread = notification && !notification.is_read;
-    
-    setNotifications(prev =>
-      prev.map(notif =>
-        notif.id === notificationId
-          ? { ...notif, is_read: true, read_at: new Date().toISOString() }
-          : notif
-      )
-    );
-    
-    if (wasUnread) {
-      setUnreadCount(prev => Math.max(0, prev - 1));
-    }
+    // Update global store immediately (optimistic update)
+    storeMarkAsRead(notificationId);
 
     // Sync with backend in background (don't block UI)
     try {
@@ -229,26 +346,21 @@ const NotificationBell = ({ user, userEmail }) => {
       if (!response.ok) {
         const errorData = await response.json();
         console.warn('Failed to mark notification as read in backend:', errorData);
-        // If backend fails, the notification will reappear on refresh
-        // User will notice if it doesn't clear after refresh/re-login
+        // Refresh to get correct state if backend fails
+        fetchNotifications(true);
       }
     } catch (error) {
       console.warn('Error syncing notification read status with backend:', error);
-      // Error logged, but UI already updated optimistically
-      // User will notice if notification doesn't clear after refresh
+      // Refresh to get correct state if sync fails
+      fetchNotifications(true);
     }
   };
 
   // Mark all as read - OPTIMISTIC UPDATE
   // Updates UI immediately, syncs with backend in background
   const markAllAsRead = async () => {
-    // OPTIMISTIC UPDATE: Update UI immediately
-    const currentUnreadCount = unreadCount;
-    
-    setNotifications(prev =>
-      prev.map(notif => ({ ...notif, is_read: true, read_at: new Date().toISOString() }))
-    );
-    setUnreadCount(0);
+    // Update global store immediately (optimistic update)
+    storeMarkAllAsRead();
 
     // Sync with backend in background (don't block UI)
     try {
@@ -261,16 +373,16 @@ const NotificationBell = ({ user, userEmail }) => {
       if (!response.ok) {
         const errorData = await response.json();
         console.warn('Failed to mark all notifications as read in backend:', errorData);
-        // If backend fails, notifications will reappear on refresh
-        // User will notice if they don't clear after refresh/re-login
+        // Refresh to get correct state if backend fails
+        fetchNotifications(true);
       } else {
         const data = await response.json();
         console.log(`Successfully marked ${data.markedRead || 0} notifications as read`);
       }
     } catch (error) {
       console.warn('Error syncing "mark all as read" with backend:', error);
-      // Error logged, but UI already updated optimistically
-      // User will notice if notifications don't clear after refresh
+      // Refresh to get correct state if sync fails
+      fetchNotifications(true);
     }
   };
 
@@ -287,19 +399,94 @@ const NotificationBell = ({ user, userEmail }) => {
     }
   };
 
-  // Format time ago
-  const getTimeAgo = (dateString) => {
-    if (!dateString) return '';
-    const date = new Date(dateString);
-    const now = new Date();
-    const diffInSeconds = Math.floor((now - date) / 1000);
+  // Note: No need for periodic updates with 12-hour time format
+  // Time format is static once displayed (doesn't change like "time ago")
 
-    if (diffInSeconds < 60) return 'just now';
-    if (diffInSeconds < 3600) return `${Math.floor(diffInSeconds / 60)}m ago`;
-    if (diffInSeconds < 86400) return `${Math.floor(diffInSeconds / 3600)}h ago`;
-    return `${Math.floor(diffInSeconds / 86400)}d ago`;
+  // Format time with smart date context:
+  // - Today: "5:44 PM"
+  // - Yesterday: "Yesterday, 5:44 PM"
+  // - 2+ days ago: "Jan 10, 2025, 5:44 PM" (exact date and time)
+  // IMPORTANT: Database stores timestamps in UTC, converts to user's local timezone
+  const formatTime = (dateString) => {
+    if (!dateString) return '';
+    
+    try {
+      let date;
+      const userTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      const now = new Date();
+      
+      if (dateString instanceof Date) {
+        date = dateString;
+      } else if (typeof dateString === 'string') {
+        // Supabase returns ISO strings from TIMESTAMP WITH TIME ZONE
+        // Ensure proper UTC parsing
+        let isoString = dateString.trim();
+        
+        // If missing timezone indicator, assume UTC
+        if (isoString.match(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/) && 
+            !isoString.endsWith('Z') && 
+            !isoString.match(/[+-]\d{2}:\d{2}$/)) {
+          isoString = isoString + 'Z';
+        }
+        
+        date = new Date(isoString);
+        
+        if (isNaN(date.getTime())) {
+          date = new Date(dateString);
+          if (isNaN(date.getTime())) {
+            console.warn('Invalid date string:', dateString);
+            return '';
+          }
+        }
+      } else {
+        console.warn('Invalid date value type:', typeof dateString);
+        return '';
+      }
+      
+      if (isNaN(date.getTime())) {
+        console.warn('Invalid date after parsing:', dateString);
+        return '';
+      }
+      
+      // Format time in 12-hour format
+      const timeString = date.toLocaleTimeString('en-US', {
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true,
+        timeZone: userTimezone
+      });
+      
+      // Calculate days difference (in user's local timezone)
+      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const notificationDate = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+      const daysDiff = Math.floor((today - notificationDate) / (1000 * 60 * 60 * 24));
+      
+      // Format based on how old the notification is
+      if (daysDiff === 0) {
+        // Today: Just show time
+        return timeString;
+      } else if (daysDiff === 1) {
+        // Yesterday: Show "Yesterday, 5:44 PM"
+        return `Yesterday, ${timeString}`;
+      } else {
+        // 2+ days ago: Show exact date and time
+        const formattedDate = date.toLocaleDateString('en-US', {
+          month: 'short',
+          day: 'numeric',
+          year: date.getFullYear() !== now.getFullYear() ? 'numeric' : undefined
+        });
+        return `${formattedDate}, ${timeString}`;
+      }
+    } catch (error) {
+      console.error('Error formatting time:', error, dateString);
+      return '';
+    }
   };
 
+  // Use notifications from store (persists across navigations)
+  const notifications = storeNotifications;
+  const expiringDocs = storeExpiringDocs;
+  const loading = storeLoading;
   const unreadNotifications = notifications.filter(n => !n.is_read);
 
   return (
@@ -359,7 +546,7 @@ const NotificationBell = ({ user, userEmail }) => {
                   {/* Application Notifications */}
                   {notifications.map((notification) => (
                     <div
-                      key={notification.id}
+                      key={`notification-${notification.id}`}
                       onClick={() => handleNotificationClick(notification)}
                       className={`p-4 hover:bg-gray-50 cursor-pointer transition-colors ${
                         !notification.is_read ? 'bg-blue-50' : ''
@@ -393,8 +580,11 @@ const NotificationBell = ({ user, userEmail }) => {
                           </p>
                           <div className="flex items-center gap-2 mt-2">
                             <Clock className="w-3 h-3 text-gray-400" />
-                            <span className="text-xs text-gray-500">
-                              {getTimeAgo(notification.created_at)}
+                            <span 
+                              className="text-xs text-gray-500" 
+                              title={notification.sent_at || notification.created_at || 'No timestamp'}
+                            >
+                              {formatTime(notification.sent_at || notification.created_at)}
                             </span>
                           </div>
                         </div>

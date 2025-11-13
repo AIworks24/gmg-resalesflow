@@ -28,3 +28,5 @@ COMMENT ON TABLE linked_properties IS 'Rollback completed - triggers and functio
 
 
 
+
+

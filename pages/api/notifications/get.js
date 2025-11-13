@@ -65,6 +65,7 @@ export default async function handler(req, res) {
             )
           )
         `)
+        .is('deleted_at', null) // Only get non-deleted notifications
         .order('created_at', { ascending: false })
         .limit(500); // Fetch up to 500 most recent notifications
 
@@ -96,7 +97,7 @@ export default async function handler(req, res) {
         return isDirectRecipient || isPropertyOwner || isAssigned;
       });
     } else {
-      // Regular users: fetch only their direct notifications
+      // Regular users: fetch only their direct notifications (exclude soft-deleted)
       let query = supabase
         .from('notifications')
         .select(`
@@ -118,6 +119,7 @@ export default async function handler(req, res) {
           )
         `)
         .or(`recipient_user_id.eq.${user.id},recipient_email.eq.${profile.email}`)
+        .is('deleted_at', null) // Only get non-deleted notifications
         .order('created_at', { ascending: false })
         .limit(parseInt(limit));
 

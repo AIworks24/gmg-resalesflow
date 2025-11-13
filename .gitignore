@@ -141,6 +141,11 @@ Resale1.pdf
 *.sqlite
 *.sqlite3
 
+# Database exports (contains sensitive data)
+database-exports/
+*.sql
+*.dump
+
 # Backup files
 *.bak
 *.backup

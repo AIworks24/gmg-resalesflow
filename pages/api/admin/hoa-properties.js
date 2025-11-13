@@ -58,10 +58,11 @@ export default async function handler(req, res) {
     const from = (page - 1) * pageSize;
     const to = from + pageSize - 1;
 
-    // Build query
+    // Build query - exclude soft-deleted properties
     let query = supabase
       .from('hoa_properties')
       .select('*', { count: 'exact' })
+      .is('deleted_at', null) // Only get non-deleted properties
       .order('name', { ascending: true });
 
     // Apply search filter if provided

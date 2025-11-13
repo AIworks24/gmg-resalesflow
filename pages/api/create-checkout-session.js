@@ -46,11 +46,12 @@ export default async function handler(req, res) {
     let multiCommunityPricing = null;
     
     try {
-      // Fetch property information to determine application type
+      // Fetch property information to determine application type (exclude soft-deleted)
       const { data: hoaProperty, error: hoaError } = await supabase
         .from('hoa_properties')
         .select('*')
         .eq('name', formData.hoaProperty)
+        .is('deleted_at', null) // Only get non-deleted properties
         .single();
 
       if (hoaError) {

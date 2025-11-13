@@ -37,30 +37,34 @@ export default async function handler(req, res) {
       dateStart = null,
       dateEnd = null,
       sortBy = 'created_at',  // Default sort field
-      sortOrder = 'desc'      // Default sort direction
+      sortOrder = 'desc',      // Default sort direction
+      bypassCache = false     // For real-time refreshes
     } = req.query;
 
     const pageNum = parseInt(page);
     const limitNum = parseInt(limit);
+    const shouldBypassCache = bypassCache === 'true' || bypassCache === true;
 
     // Generate dynamic cache key based on filters (including sort parameters and user ID to prevent collisions)
     const cacheKey = `admin:applications:${user.id}:${status}:${search}:${dateStart || 'null'}:${dateEnd || 'null'}:${sortBy}:${sortOrder}:${pageNum}:${limitNum}`;
     
-    // Try to get from cache first
-    const cachedData = await getCache(cacheKey);
+    // Try to get from cache first (unless bypassed for real-time updates)
+    if (!shouldBypassCache) {
+      const cachedData = await getCache(cacheKey);
 
-    if (cachedData) {
-      console.log('✅ Applications cache HIT:', cacheKey);
-      return res.status(200).json({ 
-        ...cachedData,
-        cached: true,
-        timestamp: new Date().toISOString()
-      });
+      if (cachedData) {
+        console.log('✅ Applications cache HIT:', cacheKey);
+        return res.status(200).json({ 
+          ...cachedData,
+          cached: true,
+          timestamp: new Date().toISOString()
+        });
+      }
     }
 
-    console.log('❌ Applications cache MISS - fetching from database:', cacheKey);
+    console.log(`❌ Applications cache ${shouldBypassCache ? 'BYPASSED (real-time refresh)' : 'MISS'} - fetching from database:`, cacheKey);
 
-    // Build query
+    // Build query - exclude soft-deleted applications
     let query = supabase
       .from('applications')
       .select(`
@@ -84,7 +88,9 @@ export default async function handler(req, res) {
           hoa_properties(id, name, location)
         )
       `, { count: 'exact' })
-      .neq('status', 'draft');
+      .is('deleted_at', null) // Only get non-deleted applications
+      .neq('status', 'draft')
+      .neq('status', 'pending_payment');
 
     // Apply role-based filtering
     if (profile.role === 'accounting') {
@@ -163,8 +169,11 @@ export default async function handler(req, res) {
       totalPages: Math.ceil((count || 0) / limitNum)
     };
 
-    // Store in cache with short TTL (30s) to reduce staleness after submissions
-    await setCache(cacheKey, responseData, 30);
+    // Store in cache with short TTL (2 minutes) for real-time compatibility
+    // Only cache if not bypassed (real-time refreshes shouldn't update cache)
+    if (!shouldBypassCache) {
+      await setCache(cacheKey, responseData, 120); // 2 minutes TTL
+    }
 
     return res.status(200).json({ 
       ...responseData,

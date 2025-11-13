@@ -38,6 +38,14 @@ const AdminLayout = ({ children, onStartTour }) => {
   }, [showUserMenu]);
 
   const handleLogout = async () => {
+    // Reset notification store on logout
+    try {
+      const useNotificationStore = (await import('../../stores/notificationStore')).default;
+      useNotificationStore.getState().reset();
+    } catch (error) {
+      console.warn('Failed to reset notification store:', error);
+    }
+    
     await supabase.auth.signOut();
     window.location.reload();
   };

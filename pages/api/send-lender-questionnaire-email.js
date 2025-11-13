@@ -78,6 +78,8 @@ export default async function handler(req, res) {
             <p style="margin-bottom: 15px;">Click the button below to download your completed lender questionnaire:</p>
             <div style="text-align: center;">
               <a href="${signedUrlData.signedUrl}" 
+                 target="_blank"
+                 rel="noopener noreferrer"
                  style="display: inline-block; padding: 12px 24px; background-color: #10B981; color: white; text-decoration: none; border-radius: 6px; font-weight: bold;">
                 Download Completed Form
               </a>

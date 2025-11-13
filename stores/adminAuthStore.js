@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { subscribeWithSelector } from 'zustand/middleware';
 import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
+import useNotificationStore from './notificationStore';
 
 const useAdminAuthStore = create(
   subscribeWithSelector((set, get) => ({
@@ -211,6 +212,12 @@ const useAdminAuthStore = create(
   },
 
   signOut: async () => {
+    // Reset notification store on logout
+    try {
+      useNotificationStore.getState().reset();
+    } catch (error) {
+      console.warn('Failed to reset notification store on logout:', error);
+    }
     const supabase = createClientComponentClient();
     
     try {
