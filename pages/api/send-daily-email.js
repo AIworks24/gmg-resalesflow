@@ -5,6 +5,23 @@ export const config = {
 };
 
 export default async function handler(req, res) {
+  // Vercel cron jobs send GET requests, but we also allow POST for manual testing
+  if (req.method !== 'GET' && req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  // Verify authentication - Vercel sends CRON_SECRET in Authorization header
+  const authHeader = req.headers['authorization'];
+  const expectedAuth = `Bearer ${process.env.CRON_SECRET}`;
+  
+  if (!process.env.CRON_SECRET) {
+    return res.status(500).json({ error: 'CRON_SECRET not configured' });
+  }
+  
+  if (authHeader !== expectedAuth) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
   try {
     // Create email transporter for sending expiration reminders
     const transporter = nodemailer.createTransport({

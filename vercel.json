@@ -3,10 +3,17 @@
     {
       "path": "/api/check-expiring-documents",
       "schedule": "0 9 * * *"
+    },
+    {
+      "path": "/api/send-daily-email",
+      "schedule": "0 0 * * *"
     }
   ],
   "functions": {
     "pages/api/check-expiring-documents.js": {
+      "maxDuration": 30
+    },
+    "pages/api/send-daily-email.js": {
       "maxDuration": 30
     }
   }

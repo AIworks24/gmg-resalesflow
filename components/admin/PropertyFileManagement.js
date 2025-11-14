@@ -44,6 +44,7 @@ const PropertyFileManagement = ({ propertyId, propertyName }) => {
   const [documentsByKey, setDocumentsByKey] = useState({});
   const [loading, setLoading] = useState(true);
   const [expandedSections, setExpandedSections] = useState({});
+  const [pendingDates, setPendingDates] = useState({}); // Track pending date values per document
   
   // Modal state
   const [showModal, setShowModal] = useState(false);
@@ -147,6 +148,8 @@ const PropertyFileManagement = ({ propertyId, propertyName }) => {
       }
       
       setDocumentsByKey(grouped);
+      // Clear pending dates when documents reload to sync with database
+      setPendingDates({});
     } catch (error) {
       console.error('Error loading property documents:', error);
       alert('Error loading documents: ' + error.message);
@@ -593,8 +596,37 @@ const PropertyFileManagement = ({ propertyId, propertyName }) => {
                                           <span className="text-gray-700 font-medium">Expiration:</span>
                                           <input
                                             type="date"
-                                            value={doc.expiration_date || ''}
-                                            onChange={(e) => updateExpirationDate(doc.id, e.target.value)}
+                                            value={pendingDates[doc.id] !== undefined ? pendingDates[doc.id] : (doc.expiration_date || '')}
+                                            onChange={(e) => {
+                                              // Update local state so input shows the new value
+                                              // This allows the date picker to work properly
+                                              // We don't save to database here - that happens on blur
+                                              const newValue = e.target.value;
+                                              setPendingDates(prev => ({
+                                                ...prev,
+                                                [doc.id]: newValue
+                                              }));
+                                            }}
+                                            onBlur={(e) => {
+                                              // Only save when the date picker closes (onBlur fires)
+                                              // When navigating months with arrows, the picker stays open so onBlur doesn't fire
+                                              // When clicking a specific date, the picker closes and onBlur fires immediately
+                                              const documentId = doc.id;
+                                              const newValue = e.target.value;
+                                              const currentValue = doc.expiration_date || '';
+                                              
+                                              // Clear pending date
+                                              setPendingDates(prev => {
+                                                const updated = { ...prev };
+                                                delete updated[documentId];
+                                                return updated;
+                                              });
+                                              
+                                              // Only update if the value actually changed
+                                              if (newValue !== currentValue) {
+                                                updateExpirationDate(documentId, newValue || null);
+                                              }
+                                            }}
                                             className={`text-sm border-2 rounded-lg px-3 py-1.5 font-medium transition-all ${
                                               expired ? 'border-red-300 bg-red-50 text-red-700' : 
                                               expiringSoon ? 'border-amber-300 bg-amber-50 text-amber-700' : 
