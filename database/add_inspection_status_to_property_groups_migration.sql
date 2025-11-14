@@ -29,3 +29,4 @@ COMMENT ON COLUMN application_property_groups.inspection_completed_at IS 'Timest
 
 
 
+

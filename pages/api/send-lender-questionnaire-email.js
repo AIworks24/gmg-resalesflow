@@ -17,10 +17,13 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Application ID is required' });
     }
 
-    // Get application details
+    // Get application details with property information
     const { data: application, error: appError } = await supabase
       .from('applications')
-      .select('*')
+      .select(`
+        *,
+        hoa_properties(name)
+      `)
       .eq('id', applicationId)
       .single();
 
@@ -45,78 +48,83 @@ export default async function handler(req, res) {
       return res.status(500).json({ error: 'Failed to generate download link for form' });
     }
 
-    // Use nodemailer directly for email sending
-    const nodemailer = await import('nodemailer');
-    const transporter = nodemailer.createTransport({
-      host: process.env.SMTP_HOST || 'smtp.gmail.com',
-      port: Number(process.env.SMTP_PORT) || 587,
-      secure: Number(process.env.SMTP_PORT) === 465,
-      auth: {
-        user: process.env.SMTP_USER || process.env.GMAIL_USER,
-        pass: process.env.SMTP_PASS || process.env.GMAIL_APP_PASSWORD,
-      },
-      tls: {
-        rejectUnauthorized: false,
-      },
-    });
+    // Prepare download links - start with the completed lender questionnaire
+    let downloadLinks = [{
+      filename: `Lender_Questionnaire_${application.property_address.replace(/[^a-zA-Z0-9]/g, '_')}.pdf`,
+      downloadUrl: signedUrlData.signedUrl,
+      type: 'pdf',
+      description: 'Completed Lender Questionnaire'
+    }];
 
-    const emailFrom = process.env.EMAIL_FROM || process.env.EMAIL_USERNAME || process.env.GMAIL_USER;
-    const emailHtml = `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-        <div style="background-color: #10B981; color: white; padding: 20px; text-align: center; border-radius: 8px 8px 0 0;">
-          <h1 style="margin: 0;">Lender Questionnaire Ready</h1>
-          <p style="margin: 10px 0 0 0;">Goodman Management Group - ResaleFlow</p>
-        </div>
+    // If include_property_documents is checked, add property documents (excluding Public Offering Statement)
+    if (application.include_property_documents && application.hoa_property_id) {
+      try {
+        console.log('Including property documents for property ID:', application.hoa_property_id);
         
-        <div style="background-color: #f9f9f9; padding: 30px; border-radius: 0 0 8px 8px;">
-          <p>Dear ${application.submitter_name || 'Valued Customer'},</p>
-          
-          <p>Your lender questionnaire for <strong>${application.property_address}</strong> has been completed and is ready for download.</p>
-          
-          <div style="background-color: white; padding: 20px; border-radius: 8px; margin: 20px 0; border: 2px solid #10B981;">
-            <h3 style="color: #10B981; margin-top: 0;">Download Your Completed Form</h3>
-            <p style="margin-bottom: 15px;">Click the button below to download your completed lender questionnaire:</p>
-            <div style="text-align: center;">
-              <a href="${signedUrlData.signedUrl}" 
-                 target="_blank"
-                 rel="noopener noreferrer"
-                 style="display: inline-block; padding: 12px 24px; background-color: #10B981; color: white; text-decoration: none; border-radius: 6px; font-weight: bold;">
-                Download Completed Form
-              </a>
-            </div>
-            <p style="margin-top: 15px; font-size: 12px; color: #6B7280;">
-              This link will expire in 30 days. Please download and save the file.
-            </p>
-          </div>
-          
-          <div style="background-color: #FEF3C7; padding: 15px; border-radius: 8px; margin: 20px 0;">
-            <h4 style="color: #D97706; margin-top: 0;">Important Information</h4>
-            <ul style="margin: 0; padding-left: 20px; color: #92400E;">
-              <li>Please review the completed form for accuracy</li>
-              <li>Download and save the file for your records</li>
-              <li>Contact us if you need any corrections</li>
-            </ul>
-          </div>
-          
-          <div style="text-align: center; margin: 30px 0;">
-            <p style="color: #6B7280; font-size: 14px;">
-              Questions? Contact GMG ResaleFlow at <a href="mailto:resales@gmgva.com" style="color: #10B981;">resales@gmgva.com</a>
-            </p>
-          </div>
-          
-          <div style="border-top: 1px solid #E5E7EB; padding-top: 20px; text-align: center; color: #6B7280; font-size: 12px;">
-            <p>Goodman Management Group<br>
-            Professional HOA Management & Resale Services</p>
-          </div>
-        </div>
-      </div>
-    `;
+        // Get property documents from property_documents table (excluding Public Offering Statement)
+        const { data: propertyDocuments, error: docsError } = await supabase
+          .from('property_documents')
+          .select('*')
+          .eq('property_id', application.hoa_property_id)
+          .neq('document_key', 'public_offering_statement') // Exclude Public Offering Statement
+          .not('file_path', 'is', null); // Only documents with files
 
-    await transporter.sendMail({
-      from: `"GMG ResaleFlow" <${emailFrom}>`,
+        if (docsError) {
+          console.error('Error fetching property documents:', docsError);
+        } else if (propertyDocuments && propertyDocuments.length > 0) {
+          console.log('Found', propertyDocuments.length, 'property documents to include');
+          
+          for (const doc of propertyDocuments) {
+            try {
+              // Create 30-day signed URL for each document
+              const { data: urlData, error: docUrlError } = await supabase.storage
+                .from('bucket0')
+                .createSignedUrl(doc.file_path, EXPIRY_30_DAYS);
+
+              if (docUrlError) {
+                console.error(`Error creating signed URL for ${doc.document_name}:`, docUrlError);
+                continue;
+              }
+
+              // Use display_name if available, otherwise use document_name
+              const displayName = doc.display_name || doc.document_name || doc.file_name || 'Property Document';
+              
+              downloadLinks.push({
+                filename: displayName,
+                downloadUrl: urlData.signedUrl,
+                type: 'document',
+                description: doc.document_name || 'Property Supporting Document',
+                size: 'Unknown' // Size not stored in property_documents table
+              });
+              
+              console.log('Added property document:', displayName);
+            } catch (error) {
+              console.error(`Failed to create download link for ${doc.document_name}:`, error);
+            }
+          }
+        } else {
+          console.log('No property documents found (excluding Public Offering Statement)');
+        }
+      } catch (error) {
+        console.error('Error creating property document download links:', error);
+        // Don't fail the email if property documents can't be added
+      }
+    }
+
+    // Use sendApprovalEmail from emailService for consistent email formatting
+    const { sendApprovalEmail } = await import('../../lib/emailService');
+    
+    await sendApprovalEmail({
       to: application.submitter_email,
-      subject: `Lender Questionnaire Ready - ${application.property_address}`,
-      html: emailHtml,
+      submitterName: application.submitter_name || 'Valued Customer',
+      propertyAddress: application.property_address,
+      hoaName: application.hoa_properties?.name || 'HOA',
+      pdfUrl: signedUrlData.signedUrl,
+      applicationId: applicationId,
+      downloadLinks: downloadLinks,
+      customSubject: `Lender Questionnaire Ready - ${application.property_address}`,
+      customTitle: 'Lender Questionnaire Ready',
+      customMessage: `Your lender questionnaire for <strong>${application.property_address}</strong> has been completed and is ready for download.`
     });
 
     // Create notification record

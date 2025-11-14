@@ -247,17 +247,17 @@ export default async function handler(req, res) {
 <head>
     <title>${documentType} - ${application.property_address}</title>
     <style>
-        body { font-family: Arial, sans-serif; margin: 40px; line-height: 1.6; }
-        .company-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 30px; padding-bottom: 20px; border-bottom: 3px solid #166534; }
+        body { font-family: Arial, sans-serif; margin: 20px; line-height: 1.4; }
+        .company-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 15px; padding-bottom: 10px; border-bottom: 3px solid #166534; }
         .company-logo { max-height: 80px; max-width: 200px; }
         .company-info { text-align: right; color: #166534; font-size: 0.9em; }
-        .company-info h2 { margin: 0 0 5px 0; font-size: 1.2em; }
-        .company-info p { margin: 3px 0; }
-        h1 { color: #166534; border-bottom: 3px solid #166534; padding-bottom: 10px; margin: 30px 0; text-align: center; }
-        .header-info { background-color: #f9fafb; padding: 20px; border-radius: 5px; margin-bottom: 30px; }
-        .section { margin: 20px 0; }
-        .section-title { color: #059669; font-size: 1.3em; font-weight: bold; margin: 20px 0 10px 0; border-bottom: 1px solid #059669; padding-bottom: 5px; }
-        .field { margin: 8px 0; }
+        .company-info h2 { margin: 0 0 3px 0; font-size: 1.2em; }
+        .company-info p { margin: 2px 0; }
+        h1 { color: #166534; border-bottom: 3px solid #166534; padding-bottom: 8px; margin: 15px 0; text-align: center; }
+        .header-info { background-color: #f9fafb; padding: 10px 15px; border-radius: 5px; margin-bottom: 10px; }
+        .section { margin: 5px 0; }
+        .section-title { color: #059669; font-size: 1.3em; font-weight: bold; margin: 8px 0 3px 0; border-bottom: 1px solid #059669; padding-bottom: 3px; }
+        .field { margin: 4px 0; }
         .label { font-weight: bold; color: #374151; display: inline-block; min-width: 200px; }
         .value { color: #111827; }
         .textarea-field { margin: 12px 0; }
@@ -298,14 +298,43 @@ export default async function handler(req, res) {
 </body>
 </html>`;
 
-    // Generate PDF from HTML using Puppeteer
+    // Generate PDF using dedicated React PDF component
     const filename = `${documentType.replace(/[^a-zA-Z0-9]/g, '_')}_${application.property_address.replace(/[^a-zA-Z0-9]/g, '_')}.pdf`;
     
-    const { htmlToPdf } = require('../../lib/puppeteerPdfService');
-    const pdfBuffer = await htmlToPdf(htmlContent, {
-      format: 'Letter',
-      printBackground: true
+    // Prepare sections data for React PDF component
+    const sectionsData = organizedSections.map(section => ({
+      title: section.section,
+      fields: section.fields.map(field => ({
+        label: formatLabel(field.key, field.label),
+        value: field.value,
+        type: field.type
+      }))
+    }));
+    
+    // Prepare logo as data URI
+    const logoDataUri = logoBase64 ? `data:image/png;base64,${logoBase64}` : null;
+    
+    // Use dedicated React PDF component
+    const React = await import('react');
+    const ReactPDF = await import('@react-pdf/renderer');
+    const { SettlementPdfDocument } = await import('../../lib/components/SettlementPdfDocument.js');
+    
+    const pdfElement = React.createElement(SettlementPdfDocument, {
+      documentType,
+      propertyAddress: application.property_address,
+      hoaName: application.hoa_properties.name,
+      generatedDate: new Date().toLocaleString(),
+      logoBase64: logoDataUri,
+      sections: sectionsData,
+      footerText: `This document was generated on ${new Date().toLocaleString()}`
     });
+    
+    const stream = await ReactPDF.default.renderToStream(pdfElement);
+    const chunks = [];
+    for await (const chunk of stream) {
+      chunks.push(chunk);
+    }
+    const pdfBuffer = Buffer.concat(chunks);
     
     // Validate PDF buffer is not empty
     if (!pdfBuffer || pdfBuffer.byteLength === 0) {

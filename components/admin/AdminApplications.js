@@ -3432,6 +3432,45 @@ const AdminApplications = ({ userRole }) => {
                                   {sendingEmail ? 'Sending...' : 'Send Email'}
                                 </button>
                               </div>
+                              {/* Include Property Documents Checkbox */}
+                              <div className='mt-4 p-3 border border-gray-200 rounded-md bg-gray-50'>
+                                <label className='flex items-start gap-3 cursor-pointer'>
+                                  <input
+                                    type='checkbox'
+                                    checked={!!selectedApplication.include_property_documents}
+                                    onChange={async (e) => {
+                                      try {
+                                        const response = await fetch('/api/update-application-field', {
+                                          method: 'POST',
+                                          headers: { 'Content-Type': 'application/json' },
+                                          body: JSON.stringify({
+                                            applicationId: selectedApplication.id,
+                                            field: 'include_property_documents',
+                                            value: e.target.checked,
+                                          }),
+                                        });
+
+                                        if (!response.ok) {
+                                          const error = await response.json();
+                                          throw new Error(error.error || 'Failed to update setting');
+                                        }
+
+                                        await refreshSelectedApplication(selectedApplication.id);
+                                      } catch (error) {
+                                        console.error('Error updating include_property_documents:', error);
+                                        showSnackbar(error.message || 'Failed to update setting', 'error');
+                                      }
+                                    }}
+                                    className='mt-1 h-4 w-4 text-green-600 border-gray-300 rounded focus:ring-green-500'
+                                  />
+                                  <div>
+                                    <div className='font-medium text-gray-900'>Include All Property Documents</div>
+                                    <div className='text-sm text-gray-600 mt-1'>
+                                      When checked, all property supporting documents (except Public Offering Statement) will be included in the email.
+                                    </div>
+                                  </div>
+                                </label>
+                              </div>
                             </div>
                           </>
                         );
@@ -3750,7 +3789,8 @@ const AdminApplications = ({ userRole }) => {
                       if (isSettlementApp) {
                         // Settlement application workflow - 3 tasks (Form + PDF + Email)
                         const settlementFormCompleted = taskStatuses.settlement === 'completed';
-                        const pdfCanBeGenerated = settlementFormCompleted && (taskStatuses.pdf === 'not_started' || taskStatuses.pdf === 'update_needed');
+                        // Allow regeneration even when PDF is completed
+                        const pdfCanBeGenerated = settlementFormCompleted && (taskStatuses.pdf === 'not_started' || taskStatuses.pdf === 'update_needed' || taskStatuses.pdf === 'completed');
                         const emailCanBeSent = taskStatuses.pdf === 'completed';
 
                         return (

@@ -114,18 +114,27 @@ export default async function handler(req, res) {
     if (publicUrl) {
       try {
         console.log('Creating download link for PDF:', publicUrl);
-        const filename = isPropertySpecific 
-          ? `Resale_Certificate_${propertyName.replace(/[^a-zA-Z0-9]/g, '_')}.pdf`
-          : `Resale_Certificate_${application.property_address.replace(/[^a-zA-Z0-9]/g, '_')}.pdf`;
+        
+        // Extract filename from URL and clean it up (remove timestamp prefix)
+        // This matches the logic used for property owner forms (settlement forms)
+        const urlParts = publicUrl.split('/');
+        let existingFilename = urlParts[urlParts.length - 1] || 
+          (isPropertySpecific 
+            ? `Resale_Certificate_${propertyName.replace(/[^a-zA-Z0-9]/g, '_')}.pdf`
+            : `Resale_Certificate_${application.property_address.replace(/[^a-zA-Z0-9]/g, '_')}.pdf`);
+        
+        // Remove leading timestamp pattern (e.g., "1762187746441-" from filename)
+        // Pattern: digits followed by hyphen at the start
+        existingFilename = existingFilename.replace(/^\d+-/, '');
         
         downloadLinks.push({
-          filename: filename,
+          filename: existingFilename,
           downloadUrl: publicUrl, // PDF is already publicly accessible
           type: 'pdf',
           description: 'Virginia Resale Certificate'
         });
         
-        console.log('Added PDF download link:', filename);
+        console.log('Added PDF download link:', existingFilename);
       } catch (error) {
         console.error('Failed to create PDF download link:', error);
       }
@@ -140,67 +149,42 @@ export default async function handler(req, res) {
         console.log('Creating inspection form PDF');
         const filename = `Property_Inspection_Form_${application.property_address.replace(/[^a-zA-Z0-9]/g, '_')}.pdf`;
         
-        // Convert form data to a readable HTML format
+        // Use dedicated React PDF component for inspection form
         const formData = inspectionForm.response_data;
-        const htmlContent = `
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Property Inspection Form - ${application.property_address}</title>
-    <style>
-        body { font-family: Arial, sans-serif; margin: 20px; }
-        h1 { color: #166534; border-bottom: 2px solid #166534; padding-bottom: 10px; }
-        h2 { color: #059669; margin-top: 30px; }
-        .field { margin: 10px 0; }
-        .label { font-weight: bold; color: #374151; }
-        .value { margin-left: 10px; color: #111827; }
-        .section { background-color: #f9fafb; padding: 15px; margin: 15px 0; border-radius: 5px; }
-        .completed { color: #059669; font-weight: bold; }
-        .date { color: #6b7280; font-size: 0.9em; }
-    </style>
-</head>
-<body>
-    <h1>Property Inspection Form</h1>
-    <div class="date">Generated on: ${new Date().toLocaleDateString()}</div>
-    <div class="date">Property Address: ${application.property_address}</div>
-    <div class="date">HOA: ${application.hoa_properties.name}</div>
-    
-    <div class="section">
-        <h2>Form Status</h2>
-        <div class="field">
-            <span class="label">Status:</span>
-            <span class="value completed">${inspectionForm.status}</span>
-        </div>
-        <div class="field">
-            <span class="label">Completed:</span>
-            <span class="value">${inspectionForm.completed_at ? new Date(inspectionForm.completed_at).toLocaleString() : 'Not completed'}</span>
-        </div>
-    </div>
-    
-    <div class="section">
-        <h2>Inspection Details</h2>
-        ${Object.entries(formData).map(([key, value]) => `
-            <div class="field">
-                <span class="label">${key.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase())}:</span>
-                <span class="value">${value !== null && value !== undefined ? value : 'Not provided'}</span>
-            </div>
-        `).join('')}
-    </div>
-    
-    <div class="section">
-        <h2>Additional Information</h2>
-        <p>This form was completed as part of the resale certificate process for ${application.property_address}.</p>
-        <p>For questions or concerns, please contact GMG ResaleFlow at resales@gmgva.com</p>
-    </div>
-</body>
-</html>`;
+        const React = await import('react');
+        const ReactPDF = await import('@react-pdf/renderer');
+        const { InspectionFormPdfDocument } = await import('../../lib/components/InspectionFormPdfDocument.js');
         
-        // Generate PDF from HTML using Puppeteer
-        const { htmlToPdf } = require('../../lib/puppeteerPdfService');
-        const pdfBuffer = await htmlToPdf(htmlContent, {
-          format: 'Letter',
-          printBackground: true
+        // Load and encode company logo
+        let logoBase64 = '';
+        try {
+          const fs = require('fs');
+          const path = require('path');
+          const logoPath = path.join(process.cwd(), 'assets', 'company_logo.png');
+          if (fs.existsSync(logoPath)) {
+            const logoBuffer = fs.readFileSync(logoPath);
+            logoBase64 = `data:image/png;base64,${logoBuffer.toString('base64')}`;
+          }
+        } catch (error) {
+          console.warn('Could not load company logo:', error);
+        }
+        
+        const pdfElement = React.createElement(InspectionFormPdfDocument, {
+          propertyAddress: application.property_address,
+          hoaName: application.hoa_properties.name,
+          generatedDate: new Date().toLocaleDateString(),
+          formStatus: inspectionForm.status,
+          completedAt: inspectionForm.completed_at,
+          formData: formData,
+          logoBase64: logoBase64
         });
+        
+        const stream = await ReactPDF.default.renderToStream(pdfElement);
+        const chunks = [];
+        for await (const chunk of stream) {
+          chunks.push(chunk);
+        }
+        const pdfBuffer = Buffer.concat(chunks);
         
         // Upload to Supabase storage
         const storagePath = `inspection-forms/${applicationId}/inspection-form-${applicationId}.pdf`;
@@ -237,57 +221,111 @@ export default async function handler(req, res) {
       console.log('No inspection form data found');
     }
     
-    // Add ALL property files for this HOA property as download links
+    // Add property documents for this HOA property as download links (excluding Public Offering Statement)
     if (application.hoa_property_id) {
       try {
-        console.log('Creating download links for property files, HOA property ID:', application.hoa_property_id);
+        console.log('Creating download links for property documents, HOA property ID:', application.hoa_property_id);
         
-        // Get all files from storage for this property
-        const { data: propertyFilesList, error: storageError } = await supabase.storage
-          .from('bucket0')
-          .list(`property_files/${application.hoa_property_id}`, {
-            limit: 100,
-            offset: 0
-          });
+        // Get property documents from property_documents table (excluding Public Offering Statement)
+        const { data: propertyDocuments, error: docsError } = await supabase
+          .from('property_documents')
+          .select('*')
+          .eq('property_id', application.hoa_property_id)
+          .neq('document_key', 'public_offering_statement') // Exclude Public Offering Statement
+          .not('file_path', 'is', null); // Only documents with files
 
-        if (storageError) {
-          console.error('Error listing property files:', storageError);
-        } else if (propertyFilesList && propertyFilesList.length > 0) {
-          console.log('Found', propertyFilesList.length, 'property files');
+        if (docsError) {
+          console.error('Error fetching property documents:', docsError);
+        } else if (propertyDocuments && propertyDocuments.length > 0) {
+          console.log('Found', propertyDocuments.length, 'property documents (excluding Public Offering Statement)');
           
-          for (const file of propertyFilesList) {
+          for (const doc of propertyDocuments) {
             try {
-              // Create 30-day signed URL for each file
-              const { data: urlData, error: urlError } = await supabase.storage
+              // Create 30-day signed URL for each document
+              const { data: urlData, error: docUrlError } = await supabase.storage
                 .from('bucket0')
-                .createSignedUrl(`property_files/${application.hoa_property_id}/${file.name}`, EXPIRY_30_DAYS, {
-                  download: file.name.split('_').slice(1).join('_') // Clean filename for download
-                });
+                .createSignedUrl(doc.file_path, EXPIRY_30_DAYS);
 
-              if (urlError) {
-                console.error(`Error creating signed URL for ${file.name}:`, urlError);
+              if (docUrlError) {
+                console.error(`Error creating signed URL for ${doc.document_name}:`, docUrlError);
                 continue;
               }
 
-              const cleanFilename = file.name.split('_').slice(1).join('_'); // Remove timestamp prefix
-              console.log('Created download link for property file:', cleanFilename);
+              // Use display_name if available, otherwise use document_name
+              const displayName = doc.display_name || doc.document_name || doc.file_name || 'Property Document';
               
               downloadLinks.push({
-                filename: cleanFilename,
+                filename: displayName,
                 downloadUrl: urlData.signedUrl,
                 type: 'document',
-                description: 'Property Supporting Document',
-                size: file.metadata?.size || 'Unknown'
+                description: doc.document_name || 'Property Supporting Document',
+                size: 'Unknown' // Size not stored in property_documents table
               });
+              
+              console.log('Added property document:', displayName);
             } catch (error) {
-              console.error(`Failed to create download link for ${file.name}:`, error);
+              console.error(`Failed to create download link for ${doc.document_name}:`, error);
             }
           }
         } else {
-          console.log('No property files found for this HOA property');
+          console.log('No property documents found (excluding Public Offering Statement)');
+          
+          // Fallback to old storage method for backward compatibility
+          try {
+            const { data: propertyFilesList, error: storageError } = await supabase.storage
+              .from('bucket0')
+              .list(`property_files/${application.hoa_property_id}`, {
+                limit: 100,
+                offset: 0
+              });
+
+            if (storageError) {
+              console.error('Error listing property files:', storageError);
+            } else if (propertyFilesList && propertyFilesList.length > 0) {
+              console.log('Found', propertyFilesList.length, 'property files (legacy storage)');
+              
+              for (const file of propertyFilesList) {
+                // Skip Public Offering Statement files (check filename)
+                if (file.name.toLowerCase().includes('public_offering') || 
+                    file.name.toLowerCase().includes('public_offering_statement')) {
+                  console.log('Skipping Public Offering Statement file:', file.name);
+                  continue;
+                }
+                
+                try {
+                  // Create 30-day signed URL for each file
+                  const { data: urlData, error: urlError } = await supabase.storage
+                    .from('bucket0')
+                    .createSignedUrl(`property_files/${application.hoa_property_id}/${file.name}`, EXPIRY_30_DAYS, {
+                      download: file.name.split('_').slice(1).join('_') // Clean filename for download
+                    });
+
+                  if (urlError) {
+                    console.error(`Error creating signed URL for ${file.name}:`, urlError);
+                    continue;
+                  }
+
+                  const cleanFilename = file.name.split('_').slice(1).join('_'); // Remove timestamp prefix
+                  console.log('Created download link for property file:', cleanFilename);
+                  
+                  downloadLinks.push({
+                    filename: cleanFilename,
+                    downloadUrl: urlData.signedUrl,
+                    type: 'document',
+                    description: 'Property Supporting Document',
+                    size: file.metadata?.size || 'Unknown'
+                  });
+                } catch (error) {
+                  console.error(`Failed to create download link for ${file.name}:`, error);
+                }
+              }
+            }
+          } catch (fallbackError) {
+            console.error('Error in fallback property files listing:', fallbackError);
+          }
         }
       } catch (error) {
-        console.error('Error creating property file download links:', error);
+        console.error('Error creating property document download links:', error);
       }
     } else {
       console.log('No HOA property ID found in application');
