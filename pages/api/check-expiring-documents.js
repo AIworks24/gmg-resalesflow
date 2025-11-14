@@ -106,55 +106,64 @@ export default async function handler(req, res) {
       });
     });
 
-    // Filter documents for admin notification (>20 days, i.e., 21-30 days)
-    const adminNotificationDocs = [];
-    for (const propertyData of Object.values(propertiesWithExpiringDocs)) {
-      const { property, documents } = propertyData;
-      const docsForAdmin = documents.filter(doc => doc.days_until_expiration > 20);
-      if (docsForAdmin.length > 0) {
-        adminNotificationDocs.push({
-          property,
-          documents: docsForAdmin
-        });
-      }
-    }
-
-    // Admin email notification - send summary of all documents expiring in >20 days
+    // Admin email notification - include ALL documents expiring within 30 days
+    // (not just >20 days, so admins see urgent documents too)
     const emailPromises = [];
     let adminEmailsSent = 0;
     
-    if (adminNotificationDocs.length > 0) {
-      // Get admin email from environment variable or use default
-      const adminEmail = process.env.ADMIN_EMAIL || 'resales@gmgva.com';
-      
-      // Collect all documents for admin summary
-      const allAdminDocs = [];
-      adminNotificationDocs.forEach(({ property, documents }) => {
-        documents.forEach(doc => {
-          allAdminDocs.push({
-            property_name: property.name,
-            property_location: property.location || 'N/A',
-            property_owner_name: property.property_owner_name || 'N/A',
-            document_type: doc.document_type,
-            file_name: doc.file_name,
-            is_specific: doc.is_specific,
-            expiration_date: doc.expiration_date,
-            days_until_expiration: doc.days_until_expiration
-          });
+    // Collect all documents for admin summary (all documents within 30 days)
+    const allAdminDocs = [];
+    for (const propertyData of Object.values(propertiesWithExpiringDocs)) {
+      const { property, documents } = propertyData;
+      documents.forEach(doc => {
+        allAdminDocs.push({
+          property_name: property.name,
+          property_location: property.location || 'N/A',
+          property_owner_name: property.property_owner_name || 'N/A',
+          document_type: doc.document_type,
+          file_name: doc.file_name,
+          is_specific: doc.is_specific,
+          expiration_date: doc.expiration_date,
+          days_until_expiration: doc.days_until_expiration
         });
       });
+    }
+    
+    // Send admin email if there are any expiring documents
+    if (allAdminDocs && allAdminDocs.length > 0) {
+      // Get admin email from environment variable or use default
+      const adminEmail = process.env.ADMIN_EMAIL || 'resales@gmgva.com';
 
       // Sort by expiration date
       allAdminDocs.sort((a, b) => new Date(a.expiration_date) - new Date(b.expiration_date));
 
-      // Create document list HTML for admin email
+      // Create document list HTML for admin email with urgency highlighting
       const adminDocumentListHtml = allAdminDocs.map(doc => {
         const displayName = doc.is_specific 
           ? `<strong>${doc.document_type}</strong><br/><span style="color: #6b7280; font-size: 0.9em;">File: ${doc.file_name}</span>`
           : `<strong>${doc.document_type}</strong>`;
         
+        // Determine urgency level and styling
+        let urgencyColor = '#10b981'; // green for >20 days
+        let urgencyBg = '#f0fdf4'; // light green
+        let urgencyText = '';
+        
+        if (doc.days_until_expiration <= 7) {
+          urgencyColor = '#dc2626'; // red for urgent
+          urgencyBg = '#fef2f2'; // light red
+          urgencyText = ' 🔴 URGENT';
+        } else if (doc.days_until_expiration <= 14) {
+          urgencyColor = '#f59e0b'; // orange for soon
+          urgencyBg = '#fffbeb'; // light orange
+          urgencyText = ' ⚠️ SOON';
+        } else if (doc.days_until_expiration <= 20) {
+          urgencyColor = '#3b82f6'; // blue for approaching
+          urgencyBg = '#eff6ff'; // light blue
+          urgencyText = ' ⚡ APPROACHING';
+        }
+        
         return `
-        <tr>
+        <tr style="background-color: ${urgencyBg};">
           <td style="padding: 12px; border-bottom: 1px solid #e5e7eb;">
             ${displayName}
           </td>
@@ -169,7 +178,7 @@ export default async function handler(req, res) {
             })}
           </td>
           <td style="padding: 12px; border-bottom: 1px solid #e5e7eb;">
-            <strong style="color: ${doc.days_until_expiration <= 7 ? '#dc2626' : doc.days_until_expiration <= 14 ? '#f59e0b' : '#10b981'};">${doc.days_until_expiration} ${doc.days_until_expiration === 1 ? 'day' : 'days'}</strong>
+            <strong style="color: ${urgencyColor}; font-size: 14px;">${doc.days_until_expiration} ${doc.days_until_expiration === 1 ? 'day' : 'days'}${urgencyText}</strong>
           </td>
         </tr>
       `;
@@ -177,13 +186,29 @@ export default async function handler(req, res) {
 
       const documentCount = allAdminDocs.length;
       const documentText = documentCount === 1 ? 'document' : 'documents';
+      
+      // Count urgent documents
+      const urgentCount = allAdminDocs.filter(doc => doc.days_until_expiration <= 7).length;
+      const soonCount = allAdminDocs.filter(doc => doc.days_until_expiration > 7 && doc.days_until_expiration <= 14).length;
+      const approachingCount = allAdminDocs.filter(doc => doc.days_until_expiration > 14 && doc.days_until_expiration <= 20).length;
+      
+      // Determine header color based on urgency
+      let headerGradient = 'linear-gradient(135deg, #10b981 0%, #059669 100%)'; // green default
+      if (urgentCount > 0) {
+        headerGradient = 'linear-gradient(135deg, #dc2626 0%, #991b1b 100%)'; // red for urgent
+      } else if (soonCount > 0) {
+        headerGradient = 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)'; // orange for soon
+      } else if (approachingCount > 0) {
+        headerGradient = 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)'; // blue for approaching
+      }
 
       // Admin email HTML template
       const adminEmailHtml = `
         <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; max-width: 650px; margin: 0 auto; background-color: #ffffff;">
-          <div style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; padding: 30px; text-align: center; border-radius: 8px 8px 0 0;">
+          <div style="background: ${headerGradient}; color: white; padding: 30px; text-align: center; border-radius: 8px 8px 0 0;">
             <h2 style="margin: 0; font-size: 24px; font-weight: 600;">Admin: Document Expiration Alert</h2>
-            <p style="margin: 10px 0 0; font-size: 14px; opacity: 0.95;">${documentCount} ${documentText} expiring in more than 20 days (21-30 days)</p>
+            <p style="margin: 10px 0 0; font-size: 14px; opacity: 0.95;">${documentCount} ${documentText} expiring within 30 days</p>
+            ${urgentCount > 0 ? `<p style="margin: 10px 0 0; font-size: 16px; font-weight: 600;">🔴 ${urgentCount} URGENT (≤7 days) | ⚠️ ${soonCount} Soon (8-14 days) | ⚡ ${approachingCount} Approaching (15-20 days)</p>` : ''}
           </div>
           
           <div style="padding: 30px; background-color: #f9fafb;">
@@ -192,7 +217,7 @@ export default async function handler(req, res) {
             </p>
             
             <p style="margin: 0 0 20px; color: #374151; font-size: 15px; line-height: 1.6;">
-              This is an automated reminder that the following ${documentText} ${documentCount === 1 ? 'is' : 'are'} expiring in more than 20 days (21-30 days):
+              This is an automated reminder that the following ${documentText} ${documentCount === 1 ? 'is' : 'are'} expiring within the next 30 days:
             </p>
             
             <table style="width: 100%; border-collapse: collapse; margin: 25px 0; background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
@@ -228,10 +253,15 @@ export default async function handler(req, res) {
       `;
 
       // Send admin email
+      const subjectUrgency = urgentCount > 0 ? `🔴 URGENT: ${urgentCount} Document${urgentCount === 1 ? '' : 's'} Expiring ≤7 Days` :
+                           soonCount > 0 ? `⚠️ ${soonCount} Document${soonCount === 1 ? '' : 's'} Expiring Soon` :
+                           approachingCount > 0 ? `⚡ ${approachingCount} Document${approachingCount === 1 ? '' : 's'} Approaching` :
+                           `${documentCount} Document${documentCount === 1 ? '' : 's'} Expiring`;
+      
       const adminMailOptions = {
         from: `"GMG Resale Flow Admin" <${process.env.GMAIL_USER}>`,
         to: adminEmail,
-        subject: `Admin Alert: ${documentCount} Document${documentCount === 1 ? '' : 's'} Expiring in >20 Days`,
+        subject: `Admin Alert: ${subjectUrgency} (${documentCount} total within 30 days)`,
         html: adminEmailHtml
       };
 
@@ -380,15 +410,17 @@ export default async function handler(req, res) {
     // Log results
     const totalProperties = Object.keys(propertiesWithExpiringDocs).length;
     const totalDocuments = expiringDocs.length;
-    const adminDocCount = adminNotificationDocs.reduce((sum, { documents }) => sum + documents.length, 0);
+    const adminDocCount = allAdminDocs.length;
+    const urgentDocCount = allAdminDocs.filter(doc => doc.days_until_expiration <= 7).length;
     
     res.status(200).json({
       success: true,
-      message: `Checked ${totalDocuments} expiring documents across ${totalProperties} properties. Sent ${adminEmailsSent} admin email(s) for ${adminDocCount} document(s) expiring in >20 days.`,
+      message: `Checked ${totalDocuments} expiring documents across ${totalProperties} properties. Sent ${adminEmailsSent} admin email(s) for ${adminDocCount} document(s) expiring within 30 days (${urgentDocCount} urgent ≤7 days).`,
       summary: {
         properties_notified: totalProperties,
         documents_expiring: totalDocuments,
         admin_documents_count: adminDocCount,
+        admin_urgent_documents: urgentDocCount,
         admin_emails_sent: adminEmailsSent,
         property_owner_emails_sent: emailPromises.length - adminEmailsSent
       }
