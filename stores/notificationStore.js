@@ -71,15 +71,10 @@ const useNotificationStore = create(
       },
 
       markAllAsRead: () => {
-        const { notifications } = get();
-        const updatedNotifications = notifications.map(notif => ({
-          ...notif,
-          is_read: true,
-          read_at: new Date().toISOString()
-        }));
-        
+        // Clear all notifications and expiring docs (delete them)
         set({
-          notifications: updatedNotifications,
+          notifications: [],
+          expiringDocs: [],
           unreadCount: 0
         });
       },

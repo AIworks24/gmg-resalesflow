@@ -356,7 +356,7 @@ const NotificationBell = ({ user, userEmail }) => {
     }
   };
 
-  // Mark all as read - OPTIMISTIC UPDATE
+  // Mark all as read - Actually clears all notifications
   // Updates UI immediately, syncs with backend in background
   const markAllAsRead = async () => {
     // Update global store immediately (optimistic update)
@@ -364,23 +364,22 @@ const NotificationBell = ({ user, userEmail }) => {
 
     // Sync with backend in background (don't block UI)
     try {
-      const response = await fetch('/api/notifications/mark-read', {
+      const response = await fetch('/api/notifications/delete-all', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ notificationIds: [] }), // Empty array = mark all
       });
 
       if (!response.ok) {
         const errorData = await response.json();
-        console.warn('Failed to mark all notifications as read in backend:', errorData);
+        console.warn('Failed to delete all notifications in backend:', errorData);
         // Refresh to get correct state if backend fails
         fetchNotifications(true);
       } else {
         const data = await response.json();
-        console.log(`Successfully marked ${data.markedRead || 0} notifications as read`);
+        console.log(`Successfully deleted ${data.deletedCount || 0} notification(s)`);
       }
     } catch (error) {
-      console.warn('Error syncing "mark all as read" with backend:', error);
+      console.warn('Error syncing "delete all notifications" with backend:', error);
       // Refresh to get correct state if sync fails
       fetchNotifications(true);
     }
@@ -520,7 +519,7 @@ const NotificationBell = ({ user, userEmail }) => {
                     onClick={markAllAsRead}
                     className="text-sm text-blue-600 hover:text-blue-800"
                   >
-                    Mark all read
+                    Clear all
                   </button>
                 )}
                 <button
