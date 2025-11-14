@@ -13,13 +13,20 @@ export default async function handler(req, res) {
   // This endpoint should be called by a cron job daily
   // You can use services like Vercel Cron, GitHub Actions, or external cron services
   
-  if (req.method !== 'POST') {
+  // Vercel cron jobs send GET requests, but we also allow POST for manual testing
+  if (req.method !== 'GET' && req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  // Optional: Add authentication token check for security
-  const authToken = req.headers['x-cron-auth'];
-  if (process.env.CRON_SECRET && authToken !== process.env.CRON_SECRET) {
+  // Verify authentication - Vercel sends CRON_SECRET in Authorization header
+  const authHeader = req.headers['authorization'];
+  const expectedAuth = `Bearer ${process.env.CRON_SECRET}`;
+  
+  if (!process.env.CRON_SECRET) {
+    return res.status(500).json({ error: 'CRON_SECRET not configured' });
+  }
+  
+  if (authHeader !== expectedAuth) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
