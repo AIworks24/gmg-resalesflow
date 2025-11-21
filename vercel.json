@@ -2,7 +2,7 @@
   "crons": [
     {
       "path": "/api/check-expiring-documents",
-      "schedule": "0 9 * * *"
+      "schedule": "0 13 * * *"
     },
     {
       "path": "/api/send-daily-email",

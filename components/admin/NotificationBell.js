@@ -3,8 +3,12 @@ import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
 import { Bell, X, Check, FileText, Clock, AlertCircle } from 'lucide-react';
 import { useRouter } from 'next/router';
 import useNotificationStore from '../../stores/notificationStore';
+import { useServerTime } from '../../hooks/useServerTime';
 
 const NotificationBell = ({ user, userEmail }) => {
+  // Get server time for accurate timestamp calculations
+  const serverTime = useServerTime();
+  
   // Use global store for persistent notification state
   const {
     unreadCount,
@@ -66,7 +70,6 @@ const NotificationBell = ({ user, userEmail }) => {
       
       if (response.ok) {
         const data = await response.json();
-        console.log(`Fetched ${data.notifications?.length || 0} notifications, ${data.unreadCount || 0} unread`);
         return {
           notifications: data.notifications || [],
           unreadCount: data.unreadCount || 0,
@@ -115,18 +118,10 @@ const NotificationBell = ({ user, userEmail }) => {
     }
     
     try {
-      console.log('📥 Fetching notifications...', { silent, bypassCache });
       const [appNotifications, expiringDocsList] = await Promise.all([
         fetchApplicationNotifications(bypassCache),
         fetchExpiringDocuments(),
       ]);
-
-      console.log('📥 Fetched notifications:', {
-        count: appNotifications.notifications.length,
-        unreadCount: appNotifications.unreadCount,
-        firstNotificationSentAt: appNotifications.notifications[0]?.sent_at,
-        firstNotificationCreatedAt: appNotifications.notifications[0]?.created_at,
-      });
 
       // Update global store (this persists across page navigations)
       // The count will update smoothly without flickering
@@ -198,8 +193,6 @@ const NotificationBell = ({ user, userEmail }) => {
   useEffect(() => {
     if (!user || !userEmail) return;
 
-    console.log('Setting up real-time notification subscription for user:', user.email);
-
     const channel = supabase
       .channel('notifications-changes')
       .on(
@@ -210,15 +203,6 @@ const NotificationBell = ({ user, userEmail }) => {
           table: 'notifications',
         },
         (payload) => {
-          console.log('🔔 Notification real-time event:', {
-            eventType: payload.eventType,
-            notificationId: payload.new?.id || payload.old?.id,
-            recipientEmail: payload.new?.recipient_email || payload.old?.recipient_email,
-            sentAt: payload.new?.sent_at,
-            createdAt: payload.new?.created_at,
-            fullPayload: payload,
-          });
-          
           const notification = payload.new || payload.old;
           if (!notification) {
             console.warn('⚠️ Notification payload missing new/old data');
@@ -235,32 +219,14 @@ const NotificationBell = ({ user, userEmail }) => {
             normalizedNotificationEmail === normalizedUserEmail ||
             notification.recipient_email?.toLowerCase() === userEmail?.toLowerCase();
           
-          console.log('🔍 Recipient check:', {
-            notificationEmail: notification.recipient_email,
-            normalizedNotificationEmail,
-            userEmail,
-            normalizedUserEmail,
-            recipientUserId: notification.recipient_user_id,
-            currentUserId: user.id,
-            isDirectRecipient,
-          });
-          
           // Handle different event types
           if (payload.eventType === 'UPDATE' && payload.new) {
-            console.log('🔄 UPDATE event received, processing...');
-            
             if (!isDirectRecipient) {
-              console.log('⏭️ Skipping - notification not for this user');
               return;
             }
             
             // UPDATE event: Always refresh notifications when updated
             // This ensures we get the latest data from the database
-            console.log('🔄 Notification updated for this user, refreshing...', {
-              notificationId: notification.id,
-              newSentAt: payload.new.sent_at,
-              newCreatedAt: payload.new.created_at,
-            });
             
             // Optimistic update: Update store immediately if notification is already there
             const currentNotifications = useNotificationStore.getState().notifications;
@@ -277,53 +243,38 @@ const NotificationBell = ({ user, userEmail }) => {
               
               const expiringDocs = useNotificationStore.getState().expiringDocs;
               updateUnreadCount(updatedNotifications, expiringDocs);
-              
-              console.log('✅ Optimistically updated notification in store');
             }
             
             // Always fetch to ensure we have the latest data (bypasses cache)
             // Use a small delay to batch multiple rapid updates
             setTimeout(() => {
-              console.log('🔄 Fetching fresh notifications after UPDATE...');
               fetchNotifications(true, true); // Silent + bypass cache
             }, 100);
           } else if (payload.eventType === 'INSERT') {
             // INSERT event: Fetch to get full notification data
-            console.log('➕ INSERT event received');
             if (isDirectRecipient || !notification.recipient_email) {
-              console.log('📥 Fetching notifications after INSERT...');
               fetchNotifications(true, true); // Silent + bypass cache
-            } else {
-              console.log('⏭️ Skipping fetch - notification not for this user');
             }
           } else if (payload.eventType === 'DELETE') {
             // DELETE event: Remove from store
-            console.log('🗑️ DELETE event received');
             const currentNotifications = useNotificationStore.getState().notifications;
             const filteredNotifications = currentNotifications.filter(n => n.id !== notification.id);
             setNotifications(filteredNotifications);
             
             const expiringDocs = useNotificationStore.getState().expiringDocs;
             updateUnreadCount(filteredNotifications, expiringDocs);
-            
-            console.log('✅ Notification deleted from store');
           } else {
             console.warn('⚠️ Unknown event type:', payload.eventType);
           }
         }
       )
       .subscribe((status) => {
-        if (status === 'SUBSCRIBED') {
-          console.log('✅ Real-time notification subscription active');
-        } else if (status === 'CHANNEL_ERROR') {
+        if (status === 'CHANNEL_ERROR') {
           console.error('❌ Real-time notification subscription error');
-        } else {
-          console.log('Notification subscription status:', status);
         }
       });
 
     return () => {
-      console.log('Cleaning up notification subscription');
       supabase.removeChannel(channel);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -376,7 +327,6 @@ const NotificationBell = ({ user, userEmail }) => {
         fetchNotifications(true);
       } else {
         const data = await response.json();
-        console.log(`Successfully deleted ${data.deletedCount || 0} notification(s)`);
       }
     } catch (error) {
       console.warn('Error syncing "delete all notifications" with backend:', error);
@@ -405,14 +355,15 @@ const NotificationBell = ({ user, userEmail }) => {
   // - Today: "5:44 PM"
   // - Yesterday: "Yesterday, 5:44 PM"
   // - 2+ days ago: "Jan 10, 2025, 5:44 PM" (exact date and time)
-  // IMPORTANT: Database stores timestamps in UTC, converts to user's local timezone
+  // IMPORTANT: Uses SERVER TIME but displays in user's local timezone
   const formatTime = (dateString) => {
     if (!dateString) return '';
     
     try {
       let date;
       const userTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-      const now = new Date();
+      // Use server time for accurate "now" comparison
+      const now = serverTime;
       
       if (dateString instanceof Date) {
         date = dateString;
@@ -627,7 +578,12 @@ const NotificationBell = ({ user, userEmail }) => {
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
-                                router.push(`/admin/property-files/${docNotification.property_id}`);
+                                // Get the document_key from the first expiring document
+                                const documentKey = docNotification.documents[0]?.document_key;
+                                const url = documentKey 
+                                  ? `/admin/property-files/${docNotification.property_id}?docKey=${encodeURIComponent(documentKey)}`
+                                  : `/admin/property-files/${docNotification.property_id}`;
+                                router.push(url);
                                 setShowDropdown(false);
                               }}
                               className="ml-auto text-xs text-blue-600 hover:text-blue-800"

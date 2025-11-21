@@ -64,11 +64,10 @@ export default async function handler(req, res) {
       // Check if this is a multi-community property
       if (hoaProperty.is_multi_community) {
         isMultiCommunity = true;
-        console.log('Multi-community property detected:', hoaProperty.name);
+        // Multi-community property detected
         
         // Get all properties for this transaction (primary + linked)
         allProperties = await getAllPropertiesForTransaction(hoaProperty.id, supabase);
-        console.log('All properties for transaction:', allProperties.map(p => p.name || p.property_name));
         
         // Calculate multi-community pricing
         // Pass submitterType and publicOffering to check if forced price applies
@@ -80,7 +79,6 @@ export default async function handler(req, res) {
           formData.submitterType,
           formData.publicOffering
         );
-        console.log('Multi-community pricing:', multiCommunityPricing);
       } else {
         allProperties = [hoaProperty];
       }
@@ -208,6 +206,7 @@ export default async function handler(req, res) {
 
     // Get pricing and messaging using database-driven approach
     let basePrice, totalAmount, messaging;
+    let hasForcedPrice = false; // Track if forced price is being used
     
     if (isMultiCommunity && multiCommunityPricing) {
       // Use multi-community pricing
@@ -218,7 +217,12 @@ export default async function handler(req, res) {
       totalAmount = multiCommunityPricing.total + (paymentMethod === 'credit_card' ? 9.95 * allProperties.length : 0);
       messaging = getApplicationTypeMessaging(applicationType);
       
-      console.log(`Multi-community pricing: Base=${basePrice}, Total=${totalAmount}, Properties=${allProperties.length}`);
+      // Check if any property in multi-community has forced price
+      if (multiCommunityPricing.associations && multiCommunityPricing.associations.some(a => a.hasForcedPrice)) {
+        hasForcedPrice = true;
+      }
+      
+      // Multi-community pricing calculated
     } else {
       // Single property pricing
       try {
@@ -243,7 +247,9 @@ export default async function handler(req, res) {
             if (forcedPrice !== null) {
               // basePrice already includes forced price + rush fee (if rush)
               // Just add convenience fee
+              hasForcedPrice = true; // Mark that forced price is being used
               totalAmount = basePrice + (paymentMethod === 'credit_card' ? 9.95 : 0);
+              // Force price enabled for property
             } else {
               // Use standard calculation with rush fees
               totalAmount = await calculateTotalAmount(applicationType, packageType, paymentMethod);
@@ -260,7 +266,7 @@ export default async function handler(req, res) {
         // Get messaging for the application type
         messaging = getApplicationTypeMessaging(applicationType);
         
-        console.log(`Database pricing: Type=${applicationType}, Package=${packageType}, Base=${basePrice}, Total=${totalAmount}`);
+        // Database pricing calculated
       } catch (error) {
         console.error('Database pricing error:', error);
         // Fallback pricing - try to determine correct pricing based on application type
@@ -318,10 +324,10 @@ export default async function handler(req, res) {
       // Auto-assign application for free transactions
       try {
         const { autoAssignApplication } = require('./auto-assign-application');
-        console.log(`[Checkout] Attempting to auto-assign free application ${applicationId}`);
+        // Attempting to auto-assign free application
         const assignResult = await autoAssignApplication(applicationId, supabase);
         if (assignResult && assignResult.success) {
-          console.log(`[Checkout] Successfully auto-assigned application ${applicationId} to ${assignResult.assignedTo}`);
+          // Application auto-assigned successfully
         } else {
           console.warn(`[Checkout] Failed to auto-assign application ${applicationId}:`, assignResult?.error);
         }
@@ -393,7 +399,8 @@ export default async function handler(req, res) {
         // Only use Stripe Price IDs for standard application types (single_property, multi_community)
         // Special application types (settlement_nc, settlement_va, lender_questionnaire, public_offering)
         // should always use price_data to ensure correct pricing
-        const shouldUsePriceIds = applicationType === 'single_property' || applicationType === 'multi_community';
+        // IMPORTANT: Never use Price IDs when forced price is enabled, as Price IDs have fixed amounts
+        const shouldUsePriceIds = (applicationType === 'single_property' || applicationType === 'multi_community') && !hasForcedPrice;
         
         let usePriceId = false;
         
@@ -408,11 +415,10 @@ export default async function handler(req, res) {
           if (priceIdOrProductId && priceIdOrProductId.startsWith('prod_')) {
             try {
               const productId = priceIdOrProductId;
-              console.log(`[Stripe] Product ID provided (${productId}), fetching price...`);
+              // Fetching product price
               
               // Fetch the product to get its default price
               const product = await stripe.products.retrieve(productId);
-              console.log(`[Stripe] Product retrieved: ${product.name}, default_price: ${product.default_price}`);
               
               if (product.default_price) {
                 // Product has a default price
@@ -422,7 +428,7 @@ export default async function handler(req, res) {
                 
                 // Fetch the price details to verify amount
                 const priceDetails = await stripe.prices.retrieve(priceIdOrProductId);
-                console.log(`[Stripe] Using default price: ${priceIdOrProductId}, amount: $${(priceDetails.unit_amount / 100).toFixed(2)}`);
+                // Using default price from product
                 
                 // Warn if price doesn't match expected amount (but still use it)
                 const expectedAmount = packageType === 'rush' ? 38861 : 31795; // in cents
@@ -432,7 +438,7 @@ export default async function handler(req, res) {
                 }
               } else {
                 // No default price, fetch all active prices and use the first one
-                console.log(`[Stripe] No default price found for product, fetching active prices...`);
+                // No default price found, fetching active prices
                 const prices = await stripe.prices.list({
                   product: productId,
                   active: true,
@@ -446,7 +452,7 @@ export default async function handler(req, res) {
                   
                   if (matchingPrice) {
                     priceIdOrProductId = matchingPrice.id;
-                    console.log(`[Stripe] Found matching price: ${priceIdOrProductId}, amount: $${(matchingPrice.unit_amount / 100).toFixed(2)}`);
+                    // Found matching price
                   } else {
                     // Use first active price and warn
                     priceIdOrProductId = prices.data[0].id;
@@ -466,8 +472,7 @@ export default async function handler(req, res) {
           
           // Use Price ID if we have one (starts with price_)
           if (priceIdOrProductId && priceIdOrProductId.startsWith('price_')) {
-            console.log(`[Stripe] Using Price ID: ${priceIdOrProductId} for ${packageType === 'rush' ? 'Rush' : 'Standard'} Processing`);
-            console.log(`[Stripe] Calculated basePriceCents: ${basePriceCents} (${(basePriceCents / 100).toFixed(2)})`);
+            // Using Stripe Price ID for processing
             
             // Verify the price matches (optional check - Stripe will charge what's set in Price ID)
             // Note: If using Price IDs, make sure they match:
@@ -487,8 +492,8 @@ export default async function handler(req, res) {
         if (!usePriceId) {
           // For special application types or when Price ID is not available, use price_data
           // This ensures correct pricing for settlement_nc, settlement_va, lender_questionnaire, etc.
-          console.log(`[Stripe] Using price_data for ${applicationType} - creating product on the fly`);
-          console.log(`[Stripe] basePriceCents: ${basePriceCents} (${(basePriceCents / 100).toFixed(2)}) for ${packageType === 'rush' ? 'Rush' : 'Standard'} Processing`);
+          // Also use price_data when forced price is enabled (Price IDs have fixed amounts)
+          // Using price_data for checkout (forced price enabled or Price ID not available)
           
           // Determine delivery time based on application type
           let deliveryTime = packageType === 'rush' ? '5 business days' : '10-15 business days';
@@ -581,7 +586,7 @@ export default async function handler(req, res) {
         console.warn(`[Stripe Connect] Transfer threshold met ($${(totalAmountCents / 100).toFixed(2)} >= $${(TRANSFER_THRESHOLD_CENTS / 100).toFixed(2)}), but connected account ID not configured`);
       }
     } else {
-      console.log(`[Stripe Connect] Transfer not needed: $${(totalAmountCents / 100).toFixed(2)} < $${(TRANSFER_THRESHOLD_CENTS / 100).toFixed(2)}`);
+        // Transfer not needed (below threshold)
     }
     
     // Create checkout session - redirect back to application flow instead of success page

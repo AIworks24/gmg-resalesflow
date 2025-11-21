@@ -279,8 +279,7 @@ const AdminDashboardMetrics = ({ userRole }) => {
               {workflowDistribution.map((item, index) => (
                 <div 
                   key={index}
-                  className='cursor-pointer hover:bg-gray-50 p-3 rounded-lg transition-colors'
-                  onClick={() => navigateToApplications({ status: item.name.toLowerCase().replace(' ', '_') })}
+                  className='p-3 rounded-lg'
                 >
                   <div className='flex items-center justify-between mb-2'>
                     <span className='text-sm font-medium text-gray-700'>{item.name}</span>

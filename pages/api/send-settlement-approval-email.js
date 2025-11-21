@@ -121,29 +121,10 @@ export default async function handler(req, res) {
       customSubject: `Thank You Submitting Your Request For ${application.property_address}`,
       customTitle: 'Thank you for submitting in your request',
       customMessage: `Your document(s) for <strong>${application.property_address}</strong> in <strong>${application.hoa_properties?.name || 'HOA'}</strong> are now ready for download.`,
+      comments: application.comments || null
     });
 
-    // Create notification record
-    const notificationSubject = `Thank You Submitting Your Request For ${application.property_address}`;
-    const notificationMessage = `Your document(s) for ${application.property_address} in ${application.hoa_properties?.name} are now ready for download.`;
-
-    const { error: notifError } = await supabase
-      .from('notifications')
-      .insert({
-        application_id: applicationId,
-        recipient_email: application.submitter_email,
-        recipient_name: application.submitter_name,
-        notification_type: 'application_approved',
-        subject: notificationSubject,
-        message: notificationMessage,
-        status: 'sent',
-        sent_at: new Date().toISOString(),
-      });
-
-    if (notifError) {
-      console.error('Failed to create notification:', notifError);
-      // Don't throw - email was sent successfully
-    }
+    // Notification creation removed - no longer needed
 
     // Mark email task as completed
     const timestamp = new Date().toISOString();

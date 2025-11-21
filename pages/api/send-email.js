@@ -26,6 +26,7 @@ export default async function handler(req, res) {
           totalAmount,
           hoaName,
           submitterType,
+          applicationType,
         } = emailData;
 
         // Validate required fields
@@ -44,6 +45,7 @@ export default async function handler(req, res) {
           totalAmount,
           hoaName,
           submitterType,
+          applicationType,
         });
         break;
 

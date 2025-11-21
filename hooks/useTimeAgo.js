@@ -1,8 +1,12 @@
 import { useState, useEffect } from 'react';
 import { getTimeAgo, getOptimalUpdateInterval } from '../lib/timeUtils';
+import { useServerTime } from './useServerTime';
 
 /**
  * React hook for "time ago" display with smart update intervals
+ * 
+ * IMPORTANT: Uses SERVER TIME (not client time) for accurate timestamps
+ * Displays in user's timezone automatically
  * 
  * This hook automatically updates the time display based on how old the date is:
  * - Recent (< 1 hour): Updates every 30 seconds
@@ -19,10 +23,10 @@ import { getTimeAgo, getOptimalUpdateInterval } from '../lib/timeUtils';
  *   <span>{timeAgo}</span>
  */
 export const useTimeAgo = (dateString) => {
-  const [currentTime, setCurrentTime] = useState(new Date());
+  const serverTime = useServerTime(); // Get server time
   const [timeAgo, setTimeAgo] = useState(() => {
     if (!dateString) return '';
-    return getTimeAgo(dateString);
+    return getTimeAgo(dateString, serverTime);
   });
   
   useEffect(() => {
@@ -33,22 +37,20 @@ export const useTimeAgo = (dateString) => {
     
     // Calculate optimal interval based on date age
     // This ensures we don't waste resources updating old dates frequently
-    const interval = getOptimalUpdateInterval(dateString);
+    const interval = getOptimalUpdateInterval(dateString, serverTime);
     
     // Update immediately on mount
-    const now = new Date();
-    setCurrentTime(now);
-    setTimeAgo(getTimeAgo(dateString, now));
+    setTimeAgo(getTimeAgo(dateString, serverTime));
     
     // Set up interval for updates
     const timer = setInterval(() => {
-      const now = new Date();
-      setCurrentTime(now);
-      setTimeAgo(getTimeAgo(dateString, now));
+      // Get fresh server time on each update
+      const currentServerTime = new Date(Date.now() + (serverTime.getTime() - Date.now()));
+      setTimeAgo(getTimeAgo(dateString, currentServerTime));
     }, interval);
     
     return () => clearInterval(timer);
-  }, [dateString]);
+  }, [dateString, serverTime]);
   
   return timeAgo;
 };
@@ -56,6 +58,8 @@ export const useTimeAgo = (dateString) => {
 /**
  * React hook for multiple "time ago" displays
  * More efficient when you have many timestamps to display
+ * 
+ * IMPORTANT: Uses SERVER TIME (not client time) for accurate timestamps
  * 
  * @param {Array<string|Date>} dateStrings - Array of dates to format
  * @returns {Array<string>} Array of formatted time ago strings
@@ -67,10 +71,10 @@ export const useTimeAgo = (dateString) => {
  *   ]);
  */
 export const useMultipleTimeAgo = (dateStrings) => {
-  const [currentTime, setCurrentTime] = useState(new Date());
+  const serverTime = useServerTime(); // Get server time
   const [timesAgo, setTimesAgo] = useState(() => {
     if (!dateStrings || !Array.isArray(dateStrings)) return [];
-    return dateStrings.map(date => date ? getTimeAgo(date) : '');
+    return dateStrings.map(date => date ? getTimeAgo(date, serverTime) : '');
   });
   
   useEffect(() => {
@@ -93,25 +97,24 @@ export const useMultipleTimeAgo = (dateStrings) => {
       return currentDate > latestDate ? current : latest;
     });
     
-    const interval = getOptimalUpdateInterval(mostRecent);
+    const interval = getOptimalUpdateInterval(mostRecent, serverTime);
     
     // Update immediately
-    const now = new Date();
-    setCurrentTime(now);
-    setTimesAgo(dateStrings.map(date => date ? getTimeAgo(date, now) : ''));
+    setTimesAgo(dateStrings.map(date => date ? getTimeAgo(date, serverTime) : ''));
     
     // Set up interval
     const timer = setInterval(() => {
-      const now = new Date();
-      setCurrentTime(now);
-      setTimesAgo(dateStrings.map(date => date ? getTimeAgo(date, now) : ''));
+      // Get fresh server time on each update
+      const currentServerTime = new Date(Date.now() + (serverTime.getTime() - Date.now()));
+      setTimesAgo(dateStrings.map(date => date ? getTimeAgo(date, currentServerTime) : ''));
     }, interval);
     
     return () => clearInterval(timer);
-  }, [dateStrings]);
+  }, [dateStrings, serverTime]);
   
   return timesAgo;
 };
+
 
 
 

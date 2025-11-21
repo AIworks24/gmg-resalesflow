@@ -47,6 +47,18 @@ export default async function handler(req, res) {
       });
     }
 
+    // Fetch application to get comments
+    const { data: application, error: appError } = await supabase
+      .from('applications')
+      .select('comments')
+      .eq('id', applicationId)
+      .single();
+
+    if (appError) {
+      console.warn('Could not fetch application comments:', appError);
+      // Continue without comments if fetch fails
+    }
+
     // Generate settlement form PDF
     const downloadLinks = [];
     try {
@@ -199,6 +211,7 @@ export default async function handler(req, res) {
       managerEmail,
       managerPhone,
       downloadLinks, // Pass PDF download links
+      comments: application?.comments || null
     });
 
     console.log('Settlement email sent successfully:', {

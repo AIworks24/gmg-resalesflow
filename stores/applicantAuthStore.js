@@ -1,6 +1,16 @@
 import { create } from 'zustand';
 import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
 
+// Helper function to determine user role based on email domain
+const determineUserRole = (email) => {
+  if (!email) return 'user';
+  const emailLower = email.toLowerCase();
+  if (emailLower.endsWith('@resales.gmgva.com') || emailLower.endsWith('@gmgva.com')) {
+    return 'external';
+  }
+  return 'user';
+};
+
 const useApplicantAuthStore = create((set, get) => ({
   // State
   user: null,
@@ -27,12 +37,13 @@ const useApplicantAuthStore = create((set, get) => ({
         
         // If profile doesn't exist, create it
         if (profileError && profileError.code === 'PGRST116') {
+          const userRole = determineUserRole(user.email);
           const { data: newProfile, error: createError } = await supabase
             .from('profiles')
             .insert([{
               id: user.id,
               email: user.email,
-              role: 'external',
+              role: userRole,
               created_at: new Date().toISOString(),
               updated_at: new Date().toISOString()
             }])
@@ -91,13 +102,26 @@ const useApplicantAuthStore = create((set, get) => ({
     const supabase = createClientComponentClient();
     
     try {
-      const { data, error } = await supabase.auth.signUp({
+      // Get the base URL for email confirmation redirect
+      const baseUrl = typeof window !== 'undefined' 
+        ? window.location.origin 
+        : process.env.NEXT_PUBLIC_SITE_URL || process.env.NEXT_PUBLIC_APP_URL || '';
+      
+      // Add timeout wrapper (30 seconds for signup with email sending)
+      const signUpPromise = supabase.auth.signUp({
         email,
         password,
         options: {
           data: userData,
+          emailRedirectTo: `${baseUrl}/auth/callback`,
         },
       });
+
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Request timeout - The signup request took too long. This may be due to email service delays. Please try again in a moment.')), 30000)
+      );
+
+      const { data, error } = await Promise.race([signUpPromise, timeoutPromise]);
 
       if (error) {
         // Improve error messages
@@ -108,20 +132,24 @@ const useApplicantAuthStore = create((set, get) => ({
           errorMessage = 'Please enter a valid email address.';
         } else if (error.message.includes('Password')) {
           errorMessage = 'Password must be at least 6 characters long.';
-        } else if (error.message.includes('network') || error.message.includes('fetch')) {
-          errorMessage = 'Network error. Please check your connection and try again.';
+        } else if (error.message.includes('network') || error.message.includes('fetch') || error.message.includes('timeout') || error.message.includes('upstream')) {
+          errorMessage = 'The signup request timed out. This may be due to email service delays. Please wait a moment and try again.';
+        } else if (error.message.includes('rate limit') || error.message.includes('over_email_send_rate_limit')) {
+          errorMessage = 'Email sending rate limit exceeded. Please wait a few minutes and try again, or contact support if this persists.';
         }
         throw new Error(errorMessage);
       }
 
       if (data.user) {
-        // Create profile for applicant (role: 'user' or null)
+        // Determine role based on email domain
+        const userRole = determineUserRole(data.user.email);
+        // Create profile for applicant
         const { error: profileError } = await supabase
           .from('profiles')
           .insert({
             id: data.user.id,
             email: data.user.email,
-            role: 'user',
+            role: userRole,
             ...userData,
           });
 
@@ -138,7 +166,14 @@ const useApplicantAuthStore = create((set, get) => ({
         return { success: true, user: data.user };
       }
     } catch (error) {
-      return { success: false, error: error.message };
+      // Handle timeout and network errors specifically
+      let errorMessage = error.message;
+      if (error.message.includes('timeout') || error.message.includes('upstream') || error.message.includes('Request timeout')) {
+        errorMessage = 'The signup request timed out. This may be due to email service delays. Please wait a moment and try again.';
+      } else if (error.message.includes('network') || error.message.includes('fetch')) {
+        errorMessage = 'Network error. Please check your connection and try again.';
+      }
+      return { success: false, error: errorMessage };
     }
   },
 
@@ -176,12 +211,13 @@ const useApplicantAuthStore = create((set, get) => ({
         
         // If profile doesn't exist, create it
         if (profileError && profileError.code === 'PGRST116') {
+          const userRole = determineUserRole(data.user.email);
           const { data: newProfile, error: createError } = await supabase
             .from('profiles')
             .insert([{
               id: data.user.id,
               email: data.user.email,
-              role: 'external',
+              role: userRole,
               created_at: new Date().toISOString(),
               updated_at: new Date().toISOString()
             }])

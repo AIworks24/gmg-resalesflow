@@ -29,6 +29,7 @@ import {
 } from 'lucide-react';
 import { useRouter } from 'next/router';
 import { mapFormDataToPDFFields } from '../../lib/pdfFieldMapper';
+import { formatDate, formatDateTime, formatDateTimeFull } from '../../lib/timeUtils';
 import AdminPropertyInspectionForm from './AdminPropertyInspectionForm';
 import AdminResaleCertificateForm from './AdminResaleCertificateForm';
 import AdminSettlementForm from './AdminSettlementForm';
@@ -141,8 +142,6 @@ const AdminApplications = ({ userRole }) => {
       console.warn('Supabase client not available for real-time subscription');
       return;
     }
-
-    console.log('Setting up real-time application subscription');
 
     // Create a channel for real-time updates
     const channel = supabase
@@ -300,18 +299,13 @@ const AdminApplications = ({ userRole }) => {
         }
       )
       .subscribe((status) => {
-        if (status === 'SUBSCRIBED') {
-          console.log('✅ Real-time subscription active for applications');
-        } else if (status === 'CHANNEL_ERROR') {
+        if (status === 'CHANNEL_ERROR') {
           console.error('❌ Real-time subscription error for applications');
-        } else {
-          console.log('Application subscription status:', status);
         }
       });
 
     // Cleanup subscription on unmount
     return () => {
-      console.log('Cleaning up real-time application subscription');
       supabase.removeChannel(channel);
     };
   }, [supabase, mutate]); // Removed swrData from dependencies to avoid recreating subscription
@@ -435,6 +429,32 @@ const AdminApplications = ({ userRole }) => {
     };
     loadStaffMembers();
   }, [router.query]);
+
+  // Handle applicationId query parameter to open modal
+  useEffect(() => {
+    const applicationId = router.query.applicationId;
+    
+    // Only proceed if we have an applicationId and router is ready
+    if (!router.isReady || !applicationId) return;
+    
+    // Don't open if modal is already open for this application
+    if (selectedApplication && selectedApplication.id === parseInt(applicationId)) {
+      return;
+    }
+    
+    // Wait for applications data to load
+    if (!swrData?.data) return;
+    
+    // Find the application in the list
+    const application = swrData.data.find(app => app.id === parseInt(applicationId));
+    
+    if (application) {
+      handleApplicationClick(application);
+    } else {
+      console.warn('Application not found in list:', applicationId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [router.query.applicationId, router.isReady, swrData?.data]);
 
   // Reset to page 1 when filters change
   useEffect(() => {
@@ -1148,6 +1168,19 @@ const AdminApplications = ({ userRole }) => {
     }
   };
 
+  // Helper function to close modal and clean up URL
+  const handleCloseModal = () => {
+    setSelectedApplication(null);
+    // Remove applicationId from URL query parameters
+    const { applicationId, ...restQuery } = router.query;
+    if (applicationId) {
+      router.replace({
+        pathname: router.pathname,
+        query: restQuery,
+      }, undefined, { shallow: true });
+    }
+  };
+
   const handleApplicationClick = async (application) => {
     try {
       setSelectedApplication(null); // Clear previous selection first
@@ -1740,19 +1773,8 @@ const AdminApplications = ({ userRole }) => {
             email_completed_at: new Date().toISOString(),
             status: 'approved',
             updated_at: new Date().toISOString(),
-            // Add notification record to indicate email was sent
-            notifications: [
-              ...(prev.notifications || []),
-              {
-                id: Date.now(), // Temporary ID
-                application_id: applicationId,
-                notification_type: 'application_approved',
-                status: 'sent',
-                sent_at: new Date().toISOString(),
-                subject: `Resale Certificate Ready - ${prev.property_address}`,
-                message: `Your Resale Certificate for ${prev.property_address} is now ready.`
-              }
-            ]
+            // Notification creation removed - no longer needed
+            notifications: prev.notifications || []
           }));
         }
         
@@ -2719,7 +2741,7 @@ const AdminApplications = ({ userRole }) => {
                             <div className='flex items-center gap-1'>
                               <Calendar className='w-3 h-3 text-gray-400' />
                               <span>
-                                {new Date(app.submitted_at).toLocaleDateString()}
+                                {formatDate(app.submitted_at)}
                               </span>
                             </div>
                             <div className='flex items-center gap-1 text-xs'>
@@ -2729,7 +2751,7 @@ const AdminApplications = ({ userRole }) => {
                                   const submittedDate = new Date(app.submitted_at);
                                   const businessDays = app.package_type === 'rush' ? 5 : 15; // Use max for standard (10-15 days)
                                   const deadline = calculateBusinessDaysDeadline(submittedDate, businessDays);
-                                  return deadline.toLocaleDateString();
+                                  return formatDate(deadline.toISOString());
                                 })()}
                               </span>
                             </div>
@@ -2883,8 +2905,14 @@ const AdminApplications = ({ userRole }) => {
 
         {/* Application Detail Modal */}
         {selectedApplication && (
-          <div className='fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50'>
-            <div className='bg-white rounded-lg max-w-4xl w-full max-h-[90vh] overflow-y-auto p-6'>
+          <div 
+            className='fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50'
+            onClick={handleCloseModal}
+          >
+            <div 
+              className='bg-white rounded-lg max-w-4xl w-full max-h-[90vh] overflow-y-auto p-6'
+              onClick={(e) => e.stopPropagation()}
+            >
               {/* Loading overlay for modal content */}
               {loadingFormData && (
                 <div className='absolute inset-0 bg-white bg-opacity-75 flex items-center justify-center z-10 rounded-lg'>
@@ -2908,7 +2936,7 @@ const AdminApplications = ({ userRole }) => {
                       <RefreshCw className='w-5 h-5' />
                     </button>
                     <button
-                      onClick={() => setSelectedApplication(null)}
+                      onClick={handleCloseModal}
                       className='text-gray-400 hover:text-gray-600'
                     >
                       <X className='w-6 h-6' />
@@ -2984,9 +3012,7 @@ const AdminApplications = ({ userRole }) => {
                       <div>
                         <strong>Closing Date:</strong>{' '}
                         {selectedApplication.closing_date
-                          ? new Date(
-                              selectedApplication.closing_date
-                            ).toLocaleDateString()
+                          ? formatDate(selectedApplication.closing_date)
                           : 'TBD'}
                       </div>
                     </div>
@@ -3115,7 +3141,7 @@ const AdminApplications = ({ userRole }) => {
                                     <p className='text-xs opacity-60 mt-1'>Download the original lender questionnaire form uploaded by the requester</p>
                                     {selectedApplication.lender_questionnaire_deletion_date && (
                                       <p className='text-xs opacity-50 mt-1'>
-                                        Auto-deletes: {new Date(selectedApplication.lender_questionnaire_deletion_date).toLocaleDateString()}
+                                        Auto-deletes: {formatDate(selectedApplication.lender_questionnaire_deletion_date)}
                                       </p>
                                     )}
                                   </div>
@@ -3186,12 +3212,12 @@ const AdminApplications = ({ userRole }) => {
                                     <p className='text-xs opacity-60 mt-1'>Upload the completed lender questionnaire form or edit the PDF directly</p>
                                     {selectedApplication.lender_questionnaire_completed_uploaded_at && (
                                       <p className='text-sm opacity-75 mt-1'>
-                                        Uploaded: {new Date(selectedApplication.lender_questionnaire_completed_uploaded_at).toLocaleString()}
+                                        Uploaded: {formatDateTimeFull(selectedApplication.lender_questionnaire_completed_uploaded_at)}
                                       </p>
                                     )}
                                     {selectedApplication.lender_questionnaire_edited_at && (
                                       <p className='text-sm opacity-75 mt-1'>
-                                        Edited: {new Date(selectedApplication.lender_questionnaire_edited_at).toLocaleString()}
+                                        Edited: {formatDateTimeFull(selectedApplication.lender_questionnaire_edited_at)}
                                       </p>
                                     )}
                                   </div>
@@ -3394,7 +3420,7 @@ const AdminApplications = ({ userRole }) => {
                                     <p className='text-xs opacity-60 mt-1'>Send the completed lender questionnaire form to the requester via email</p>
                                     {selectedApplication.email_completed_at && (
                                       <p className='text-sm opacity-75 mt-1'>
-                                        Sent: {new Date(selectedApplication.email_completed_at).toLocaleString()}
+                                        Sent: {formatDateTimeFull(selectedApplication.email_completed_at)}
                                       </p>
                                     )}
                                   </div>
@@ -3831,7 +3857,7 @@ const AdminApplications = ({ userRole }) => {
                               <div className='mt-2 space-y-1'>
                                 {selectedApplication.settlement_form_completed_at && (
                                   <div className='text-sm opacity-75'>
-                                    Task Completed: {new Date(selectedApplication.settlement_form_completed_at).toLocaleString()}
+                                    Task Completed: {formatDateTimeFull(selectedApplication.settlement_form_completed_at)}
                                   </div>
                                 )}
                               </div>
@@ -3879,7 +3905,7 @@ const AdminApplications = ({ userRole }) => {
                               <div className='mt-2 space-y-1'>
                                 {selectedApplication.pdf_completed_at && (
                                   <div className='text-sm opacity-75'>
-                                    Task Completed: {new Date(selectedApplication.pdf_completed_at).toLocaleString()}
+                                    Task Completed: {formatDateTimeFull(selectedApplication.pdf_completed_at)}
                                   </div>
                                 )}
                               </div>
@@ -3913,7 +3939,7 @@ const AdminApplications = ({ userRole }) => {
                               <div className='mt-2 space-y-1'>
                                 {selectedApplication.notifications?.find(n => n.notification_type === 'application_approved')?.sent_at && (
                                   <div className='text-sm opacity-75'>
-                                    Task Completed: {new Date(selectedApplication.notifications.find(n => n.notification_type === 'application_approved').sent_at).toLocaleString()}
+                                    Task Completed: {formatDateTimeFull(selectedApplication.notifications.find(n => n.notification_type === 'application_approved').sent_at)}
                                   </div>
                                 )}
                               </div>
@@ -3964,7 +3990,7 @@ const AdminApplications = ({ userRole }) => {
                                   <div className='mt-2 space-y-1'>
                                     {selectedApplication.inspection_form_completed_at && (
                                       <div className='text-sm opacity-75'>
-                                        Task Completed: {new Date(selectedApplication.inspection_form_completed_at).toLocaleString()}
+                                        Task Completed: {formatDateTimeFull(selectedApplication.inspection_form_completed_at)}
                                       </div>
                                     )}
                                   </div>
@@ -4006,7 +4032,7 @@ const AdminApplications = ({ userRole }) => {
                                   <div className='mt-2 space-y-1'>
                                     {selectedApplication.resale_certificate_completed_at && (
                                       <div className='text-sm opacity-75'>
-                                        Task Completed: {new Date(selectedApplication.resale_certificate_completed_at).toLocaleString()}
+                                        Task Completed: {formatDateTimeFull(selectedApplication.resale_certificate_completed_at)}
                                       </div>
                                     )}
                                   </div>
@@ -4062,7 +4088,7 @@ const AdminApplications = ({ userRole }) => {
                                   <div className='mt-2 space-y-1'>
                                     {selectedApplication.pdf_completed_at && (
                                       <div className='text-sm opacity-75'>
-                                        Task Completed: {new Date(selectedApplication.pdf_completed_at).toLocaleString()}
+                                        Task Completed: {formatDateTimeFull(selectedApplication.pdf_completed_at)}
                                       </div>
                                     )}
                                   </div>
@@ -4140,7 +4166,7 @@ const AdminApplications = ({ userRole }) => {
                 {/* Close Button */}
                 <div className='flex justify-center pt-6 border-t'>
                   <button
-                    onClick={() => setSelectedApplication(null)}
+                    onClick={handleCloseModal}
                     className='px-6 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50 font-medium'
                   >
                     Close
@@ -4370,7 +4396,7 @@ const AdminApplications = ({ userRole }) => {
                                 {file.name.split('_').slice(1).join('_')}
                               </p>
                               <p className='text-xs text-gray-500'>
-                                Uploaded {file.created_at ? new Date(file.created_at).toLocaleDateString() : 'Recently'}
+                                Uploaded {file.created_at ? formatDate(file.created_at) : 'Recently'}
                               </p>
                             </div>
                           </div>

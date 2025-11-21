@@ -80,7 +80,6 @@ const useAdminAuthStore = create(
       // Skip TOKEN_REFRESHED events if we just handled an event recently
       // TOKEN_REFRESHED happens automatically and shouldn't trigger full re-initialization
       if (event === 'TOKEN_REFRESHED' && timeSinceLastEvent < 5000) {
-        console.log('Auth state changed: TOKEN_REFRESHED (ignored - too soon after last event)');
         return; // Skip token refresh if recent event
       }
       
@@ -92,7 +91,6 @@ const useAdminAuthStore = create(
       // Debounce rapid-fire events
       debounceTimeout = setTimeout(async () => {
         lastEventTime = Date.now();
-        console.log('Auth state changed:', event, session?.user?.email || 'no user');
         
         const currentState = get();
         
@@ -277,10 +275,7 @@ const useAdminAuthStore = create(
 
 // Add development-only debugging
 if (process.env.NODE_ENV === 'development') {
-  useAdminAuthStore.subscribe(
-    (state) => state.user,
-    (user) => console.log('Admin auth user changed:', user?.email || 'logged out')
-  );
+  // User change subscription removed - no longer needed
 }
 
 export default useAdminAuthStore;

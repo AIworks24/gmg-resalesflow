@@ -293,10 +293,7 @@ async function createPropertyOwnerForms(applicationId, metadata) {
           form_type: formType,
           status: 'not_started',
           access_token: generateAccessToken(),
-          expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(), // 30 days
-          notes: application.application_type.startsWith('settlement') 
-            ? 'Settlement agent request - requires accounting review'
-            : null
+          expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() // 30 days
         });
 
       console.log(`Created ${formType} for application ${applicationId}`);
@@ -550,10 +547,7 @@ async function createPropertyOwnerFormsForGroups(applicationId, groups) {
             form_type: formType,
             status: 'not_started',
             access_token: generateAccessToken(),
-            expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
-            notes: `Multi-community form for ${group.property_name} - ${application.application_type.startsWith('settlement') 
-              ? 'Settlement agent request - requires accounting review'
-              : 'Standard processing'}`
+            expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
           });
       }
       console.log(`Created ${requiredForms.length} forms for group: ${group.property_name}`);

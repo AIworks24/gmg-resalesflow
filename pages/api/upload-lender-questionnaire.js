@@ -167,6 +167,15 @@ export default async function handler(req, res) {
     // Clean up temporary file
     fs.unlinkSync(file.filepath);
 
+    // Create notifications for property owner (in-app and email)
+    try {
+      const { createNotifications } = await import('./notifications/create');
+      await createNotifications(applicationId, supabaseAdmin);
+    } catch (notificationError) {
+      console.error('[Lender Questionnaire] Error creating notifications:', notificationError);
+      // Don't fail the request if notification creation fails
+    }
+
     // Send confirmation email
     try {
       // Get application details for email (use authenticated client)

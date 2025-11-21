@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
+import { formatDate } from '../../lib/timeUtils';
 import {
   Upload,
   FileText,
@@ -39,12 +40,13 @@ const DOCUMENT_TYPES = [
   { key: 'public_offering_statement', name: 'Public Offering Statement', required: false }
 ];
 
-const PropertyFileManagement = ({ propertyId, propertyName }) => {
+const PropertyFileManagement = ({ propertyId, propertyName, initialDocumentKey }) => {
   // State: documents grouped by document_key
   const [documentsByKey, setDocumentsByKey] = useState({});
   const [loading, setLoading] = useState(true);
   const [expandedSections, setExpandedSections] = useState({});
   const [pendingDates, setPendingDates] = useState({}); // Track pending date values per document
+  const hasExpandedInitialSection = useRef(false); // Track if we've already expanded the initial section
   
   // Modal state
   const [showModal, setShowModal] = useState(false);
@@ -67,6 +69,28 @@ const PropertyFileManagement = ({ propertyId, propertyName }) => {
       loadPropertyDocuments();
     }
   }, [propertyId]);
+
+  // Auto-expand the section for the initial document key after documents are loaded
+  useEffect(() => {
+    if (initialDocumentKey && !loading && !hasExpandedInitialSection.current && Object.keys(documentsByKey).length > 0) {
+      // Check if the document key exists in the loaded documents
+      if (documentsByKey[initialDocumentKey] && documentsByKey[initialDocumentKey].length > 0) {
+        setExpandedSections(prev => ({
+          ...prev,
+          [initialDocumentKey]: true
+        }));
+        hasExpandedInitialSection.current = true;
+        
+        // Scroll to the section after a brief delay to ensure it's rendered
+        setTimeout(() => {
+          const sectionElement = document.querySelector(`[data-document-key="${initialDocumentKey}"]`);
+          if (sectionElement) {
+            sectionElement.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          }
+        }, 300);
+      }
+    }
+  }, [initialDocumentKey, loading, documentsByKey]);
 
   // Set up real-time subscription for property_documents table
   useEffect(() => {
@@ -476,6 +500,7 @@ const PropertyFileManagement = ({ propertyId, propertyName }) => {
               return (
                 <div
                   key={docType.key}
+                  data-document-key={docType.key}
                   className="bg-white border border-gray-200 rounded-xl overflow-hidden transition-all duration-200 hover:shadow-lg hover:border-green-200"
                 >
                   {/* Section Header */}
@@ -567,12 +592,12 @@ const PropertyFileManagement = ({ propertyId, propertyName }) => {
                                   <div className="flex flex-wrap items-center gap-4 text-sm text-gray-500 mb-3">
                                     <span className="flex items-center gap-1">
                                       <Calendar className="h-3.5 w-3.5" />
-                                      Uploaded: {new Date(doc.created_at).toLocaleDateString()}
+                                      Uploaded: {formatDate(doc.created_at)}
                                     </span>
                                     {doc.updated_at !== doc.created_at && (
                                       <span className="flex items-center gap-1">
                                         <FileCheck className="h-3.5 w-3.5" />
-                                        Updated: {new Date(doc.updated_at).toLocaleDateString()}
+                                        Updated: {formatDate(doc.updated_at)}
                                       </span>
                                     )}
                                   </div>

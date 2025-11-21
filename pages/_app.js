@@ -4,6 +4,7 @@ import { AppProvider } from '../lib/AppContext'
 import QueryProvider from '../providers/QueryProvider'
 import { AdminAuthProvider } from '../providers/AdminAuthProvider'
 import { ApplicantAuthProvider } from '../providers/ApplicantAuthProvider'
+import ConnectionStatusIndicator from '../components/ConnectionStatusIndicator'
 
 function AppWithAuth({ Component, pageProps }) {
   const router = useRouter()
@@ -38,6 +39,9 @@ export default function App({ Component, pageProps }) {
             </div>
           </div>
         )}
+        
+        {/* Connection Status Indicator */}
+        <ConnectionStatusIndicator />
         
         {/* Add top margin when development banner is shown */}
         <div className={process.env.NODE_ENV === 'development' ? 'mt-12' : ''}>

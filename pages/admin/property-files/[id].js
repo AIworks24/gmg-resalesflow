@@ -7,7 +7,7 @@ import { ArrowLeft, Building, AlertTriangle, RefreshCw } from 'lucide-react';
 
 const PropertyFilesPage = () => {
   const router = useRouter();
-  const { id } = router.query;
+  const { id, docKey } = router.query;
   
   // Fetch property using the new hook - only when id is available
   const shouldFetch = id && router.isReady;
@@ -137,6 +137,7 @@ const PropertyFilesPage = () => {
               key={`property-${property.id || propertyId}`}
               propertyId={property.id || propertyId} 
               propertyName={property.name || 'Unknown Property'}
+              initialDocumentKey={docKey}
             />
           </>
         ) : property ? (

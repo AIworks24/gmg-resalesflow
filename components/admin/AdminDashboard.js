@@ -327,7 +327,6 @@ const AdminDashboard = ({ userRole }) => {
       return;
     }
 
-    console.log('Setting up real-time application subscription for dashboard');
 
     // Debounce function to batch rapid updates (silent background refresh)
     let debounceTimer = null;
@@ -433,19 +432,14 @@ const AdminDashboard = ({ userRole }) => {
         }
       )
       .subscribe((status) => {
-        if (status === 'SUBSCRIBED') {
-          console.log('✅ Real-time subscription active for applications in dashboard');
-        } else if (status === 'CHANNEL_ERROR') {
+        if (status === 'CHANNEL_ERROR') {
           console.error('❌ Real-time subscription error in dashboard');
-        } else {
-          console.log('Dashboard subscription status:', status);
         }
       });
 
     // Cleanup subscription on unmount
     return () => {
       if (debounceTimer) clearTimeout(debounceTimer);
-      console.log('Cleaning up real-time subscription in dashboard');
       supabase.removeChannel(channel);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -973,19 +967,8 @@ const AdminDashboard = ({ userRole }) => {
           email_completed_at: new Date().toISOString(),
           status: 'approved',
           updated_at: new Date().toISOString(),
-          // Add notification record to indicate email was sent
-          notifications: [
-            ...(prev.notifications || []),
-            {
-              id: Date.now(), // Temporary ID
-              application_id: applicationId,
-              notification_type: 'application_approved',
-              status: 'sent',
-              sent_at: new Date().toISOString(),
-              subject: `Resale Certificate Ready - ${prev.property_address}`,
-              message: `Your Resale Certificate for ${prev.property_address} is now ready.`
-            }
-          ]
+          // Notification creation removed - no longer needed
+          notifications: prev.notifications || []
         }));
       }
       

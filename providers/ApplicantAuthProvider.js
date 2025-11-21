@@ -26,11 +26,14 @@ export function ApplicantAuthProvider({ children }) {
     if (!isInitialized || isLoading) return;
 
     const currentPath = router.pathname;
-    const isPublicRoute = ['/', '/login', '/signup', '/about', '/contact', '/reset-password'].includes(currentPath);
+    const isPublicRoute = ['/', '/login', '/signup', '/about', '/contact', '/reset-password', '/auth/callback'].includes(currentPath);
     const isAdminRoute = currentPath.startsWith('/admin');
     
     // Don't handle auth for admin routes (handled by AdminAuthProvider)
     if (isAdminRoute) return;
+
+    // Don't redirect from auth callback - it handles its own flow
+    if (currentPath === '/auth/callback') return;
 
     // For protected applicant routes, redirect to login if not authenticated
     if (!isPublicRoute && !isAuthenticated()) {

@@ -18,6 +18,7 @@ import {
   isPaymentRequired 
 } from '../lib/applicationTypes';
 import { getPricing } from '../lib/pricingConfig';
+import { formatDate, formatDateTime } from '../lib/timeUtils';
 import Image from 'next/image';
 import companyLogo from '../assets/company_logo.png';
 import {
@@ -38,6 +39,11 @@ import {
   InfoIcon,
   Trash2,
   Briefcase,
+  ChevronDown,
+  ChevronUp,
+  Filter,
+  Calendar,
+  Plus,
 } from 'lucide-react';
 
 // Initialize Stripe with error handling
@@ -51,6 +57,9 @@ const stripePromise = (() => {
     return Promise.reject(error);
   }
 })();
+
+// Check if ACH payment option is enabled (defaults to false)
+const ACH_OPTION_ENABLED = process.env.NEXT_PUBLIC_ACH_OPTION === 'true' || process.env.NEXT_PUBLIC_ACH_OPTION === 'TRUE';
 
 // Helper function to get forced price for a property (synchronous check)
 const getForcedPriceSync = (property) => {
@@ -107,14 +116,7 @@ const calculateTotal = (formData, stripePrices, hoaProperties) => {
     // Note: Actual pricing comes from database via calculateTotalDatabase()
     const selectedProperty = hoaProperties?.find(prop => prop.name === formData.hoaProperty);
     
-    // Debug logging
-    if (selectedProperty) {
-      console.log('Selected property for settlement pricing:', {
-        name: selectedProperty.name,
-        location: selectedProperty.location,
-        formData: formData
-      });
-    }
+    // Debug logging removed
     
     if (selectedProperty && selectedProperty.location) {
       const location = selectedProperty.location.toUpperCase();
@@ -559,9 +561,7 @@ const SubmitterInfoStep = React.memo(({ formData, handleInputChange, hoaProperti
   // Debug logging
   React.useEffect(() => {
     if (formData.hoaProperty) {
-      console.log('Selected property:', selectedProperty);
-      console.log('Allow public offering:', selectedProperty?.allow_public_offering);
-      console.log('Can show public offering:', canShowPublicOffering);
+      // Debug logging removed
     }
   }, [formData.hoaProperty, selectedProperty, canShowPublicOffering]);
 
@@ -852,6 +852,13 @@ const PackagePaymentStep = ({
   // Check if this is a pending payment application
   const [isPendingPayment, setIsPendingPayment] = React.useState(false);
   
+  // Ensure payment method defaults to credit_card when ACH is disabled
+  React.useEffect(() => {
+    if (!ACH_OPTION_ENABLED && formData.paymentMethod === 'ach') {
+      handleInputChange('paymentMethod', 'credit_card');
+    }
+  }, [ACH_OPTION_ENABLED, formData.paymentMethod, handleInputChange]);
+  
   React.useEffect(() => {
     const checkApplicationStatus = async () => {
       if (applicationId) {
@@ -921,6 +928,13 @@ const PackagePaymentStep = ({
   const handlePayment = async () => {
     if (!formData.packageType || !formData.paymentMethod) {
       setPaymentError('Please select a package and payment method');
+      return;
+    }
+
+    // Prevent ACH payment if option is disabled
+    if (formData.paymentMethod === 'ach' && !ACH_OPTION_ENABLED) {
+      setPaymentError('ACH payment option is currently disabled. Please use credit card payment.');
+      handleInputChange('paymentMethod', 'credit_card');
       return;
     }
 
@@ -1044,7 +1058,7 @@ const PackagePaymentStep = ({
         // This happens for both free and paid applications when they are submitted
         if (createdApplicationId) {
           try {
-            console.log(`[Submission] Attempting to auto-assign application ${createdApplicationId} at submission time`);
+            // Auto-assigning application at submission time
             const assignResponse = await fetch('/api/auto-assign-application', {
               method: 'POST',
               headers: {
@@ -1055,7 +1069,7 @@ const PackagePaymentStep = ({
             
             const assignResult = await assignResponse.json();
             if (assignResult.success) {
-              console.log(`[Submission] Successfully auto-assigned application ${createdApplicationId} to ${assignResult.assignedTo}`);
+              // Application auto-assigned successfully
             } else {
               console.warn(`[Submission] Failed to auto-assign application ${createdApplicationId}:`, assignResult.error);
             }
@@ -1067,7 +1081,7 @@ const PackagePaymentStep = ({
           // ALWAYS create notifications, even if auto-assign failed
           // (auto-assign creates notifications, but we want to ensure they're created)
           try {
-            console.log(`[Submission] Creating notifications for application ${createdApplicationId}`);
+            // Creating notifications for application
             const notificationResponse = await fetch('/api/notifications/create', {
               method: 'POST',
               headers: {
@@ -1078,7 +1092,7 @@ const PackagePaymentStep = ({
 
             if (notificationResponse.ok) {
               const notificationResult = await notificationResponse.json();
-              console.log(`[Submission] Notifications created:`, notificationResult);
+              // Notifications created successfully
             } else {
               const errorText = await notificationResponse.text();
               console.warn(`[Submission] Failed to create notifications:`, errorText);
@@ -1113,6 +1127,7 @@ const PackagePaymentStep = ({
               totalAmount: totalAmount,
               hoaName: hoaProperty?.name || 'Unknown HOA',
               submitterType: formData.submitterType,
+              applicationType: applicationType,
             }),
           });
 
@@ -1215,7 +1230,7 @@ const PackagePaymentStep = ({
           
           // Auto-assign application at submission time (before payment)
           try {
-            console.log(`[Payment] Attempting to auto-assign application ${createdApplicationId} at submission (credit card - update)`);
+            // Auto-assigning application at payment (credit card - update)
             const assignResponse = await fetch('/api/auto-assign-application', {
               method: 'POST',
               headers: {
@@ -1226,7 +1241,7 @@ const PackagePaymentStep = ({
             
             const assignResult = await assignResponse.json();
             if (assignResult.success) {
-              console.log(`[Payment] Successfully auto-assigned application ${createdApplicationId} to ${assignResult.assignedTo}`);
+              // Application auto-assigned successfully
             } else {
               console.warn(`[Payment] Failed to auto-assign application ${createdApplicationId}:`, assignResult.error);
             }
@@ -1237,7 +1252,7 @@ const PackagePaymentStep = ({
 
           // ALWAYS create notifications, even if auto-assign failed
           try {
-            console.log(`[Payment] Creating notifications for application ${createdApplicationId}`);
+            // Creating notifications for application
             const notificationResponse = await fetch('/api/notifications/create', {
               method: 'POST',
               headers: {
@@ -1248,7 +1263,7 @@ const PackagePaymentStep = ({
 
             if (notificationResponse.ok) {
               const notificationResult = await notificationResponse.json();
-              console.log(`[Payment] Notifications created:`, notificationResult);
+              // Notifications created successfully
             } else {
               const errorText = await notificationResponse.text();
               console.warn(`[Payment] Failed to create notifications:`, errorText);
@@ -1305,7 +1320,7 @@ const PackagePaymentStep = ({
           
           // Auto-assign application at submission time (before payment)
           try {
-            console.log(`[Payment] Attempting to auto-assign application ${createdApplicationId} at submission (credit card)`);
+            // Auto-assigning application at payment (credit card)
             const assignResponse = await fetch('/api/auto-assign-application', {
               method: 'POST',
               headers: {
@@ -1316,7 +1331,7 @@ const PackagePaymentStep = ({
             
             const assignResult = await assignResponse.json();
             if (assignResult.success) {
-              console.log(`[Payment] Successfully auto-assigned application ${createdApplicationId} to ${assignResult.assignedTo}`);
+              // Application auto-assigned successfully
             } else {
               console.warn(`[Payment] Failed to auto-assign application ${createdApplicationId}:`, assignResult.error);
             }
@@ -1327,7 +1342,7 @@ const PackagePaymentStep = ({
 
           // ALWAYS create notifications, even if auto-assign failed
           try {
-            console.log(`[Payment] Creating notifications for application ${createdApplicationId}`);
+            // Creating notifications for application
             const notificationResponse = await fetch('/api/notifications/create', {
               method: 'POST',
               headers: {
@@ -1338,7 +1353,7 @@ const PackagePaymentStep = ({
 
             if (notificationResponse.ok) {
               const notificationResult = await notificationResponse.json();
-              console.log(`[Payment] Notifications created:`, notificationResult);
+              // Notifications created successfully
             } else {
               const errorText = await notificationResponse.text();
               console.warn(`[Payment] Failed to create notifications:`, errorText);
@@ -1397,6 +1412,11 @@ const PackagePaymentStep = ({
           throw new Error(redirectError.message);
         }
       } else {
+        // Handle ACH payment (only if enabled)
+        if (!ACH_OPTION_ENABLED) {
+          setPaymentError('ACH payment option is currently disabled. Please use credit card payment.');
+          return;
+        }
         // Handle ACH payment (redirect to external processor or show instructions)
         alert('ACH payment processing will be implemented separately. Please contact support for bank transfer instructions.');
       }
@@ -1752,27 +1772,29 @@ const PackagePaymentStep = ({
 
           </div>
 
-          <label className='flex items-center p-4 border rounded-lg cursor-pointer hover:bg-gray-50'>
-            <input
-              type='radio'
-              name='paymentMethod'
-              value='ach'
-              checked={formData.paymentMethod === 'ach'}
-              onChange={(e) => handleInputChange('paymentMethod', e.target.value)}
-              className='h-4 w-4 text-green-600 focus:ring-green-500 border-gray-300'
-            />
-            <div className='ml-3 flex-1'>
-              <div className='flex items-center justify-between'>
-                <span className='text-sm font-medium text-gray-700'>
-                  Bank Transfer (ACH)
-                </span>
-                <span className='text-sm text-green-600'>No convenience fee</span>
+          {ACH_OPTION_ENABLED && (
+            <label className='flex items-center p-4 border rounded-lg cursor-pointer hover:bg-gray-50'>
+              <input
+                type='radio'
+                name='paymentMethod'
+                value='ach'
+                checked={formData.paymentMethod === 'ach'}
+                onChange={(e) => handleInputChange('paymentMethod', e.target.value)}
+                className='h-4 w-4 text-green-600 focus:ring-green-500 border-gray-300'
+              />
+              <div className='ml-3 flex-1'>
+                <div className='flex items-center justify-between'>
+                  <span className='text-sm font-medium text-gray-700'>
+                    Bank Transfer (ACH)
+                  </span>
+                  <span className='text-sm text-green-600'>No convenience fee</span>
+                </div>
+                <p className='text-xs text-gray-500'>
+                  Direct bank account transfer
+                </p>
               </div>
-              <p className='text-xs text-gray-500'>
-                Direct bank account transfer
-              </p>
-            </div>
-          </label>
+            </label>
+          )}
         </div>
 
         <div className='bg-green-50 p-4 rounded-lg border border-green-200'>
@@ -2977,12 +2999,12 @@ export default function GMGResaleFlow() {
               // Valid test code - enable test mode and store in session cookie
               setIsTestMode(true);
               setTestModeCookie(true);
-              console.log('[Stripe] Test mode enabled via URL parameter');
+              // Test mode enabled via URL parameter
             } else {
               // Invalid test code - use LIVE mode and clear any test mode cookie
               setIsTestMode(false);
               setTestModeCookie(false);
-              console.log('[Stripe] Invalid test code, using LIVE mode');
+              // Invalid test code, using LIVE mode
             }
           })
           .catch(error => {
@@ -2997,9 +3019,9 @@ export default function GMGResaleFlow() {
         setIsTestMode(cookieTestMode);
         
         if (cookieTestMode) {
-          console.log('[Stripe] Test mode persisted from session cookie');
+          // Test mode persisted from session cookie
         } else {
-          console.log('[Stripe] Using LIVE mode (default)');
+          // Using LIVE mode (default)
         }
       }
     }
@@ -3105,10 +3127,10 @@ export default function GMGResaleFlow() {
     }
 
     try {
-      console.log('Loading applications for user:', user.id);
+      // Loading applications for user
       let query = supabase
         .from('applications')
-        .select('*, hoa_properties(name)')
+        .select('*, hoa_properties(name), application_property_groups(*)')
         .is('deleted_at', null) // Only get non-deleted applications
         .order('created_at', { ascending: false });
 
@@ -3127,7 +3149,7 @@ export default function GMGResaleFlow() {
         return;
       }
 
-      console.log('Loaded applications:', data?.length || 0, 'applications');
+      // Applications loaded
       setApplications(data || []);
     } catch (error) {
       console.error('Error in loadApplications:', error);
@@ -3143,7 +3165,7 @@ export default function GMGResaleFlow() {
     try {
       const { data, error } = await supabase
         .from('applications')
-        .select('*, hoa_properties(name)')
+        .select('*, hoa_properties(name), application_property_groups(*)')
         .eq('id', appId)
         .single();
 
@@ -3240,11 +3262,7 @@ export default function GMGResaleFlow() {
           return;
         }
         
-        console.log('Payment success - Application data:', {
-          id: applicationData.id,
-          application_type: applicationData.application_type,
-          submitter_type: applicationData.submitter_type,
-        });
+        // Payment success - processing application
         
         // Check if this is a lender questionnaire application
         // Check both application_type from database and submitter_type as fallback
@@ -3252,13 +3270,9 @@ export default function GMGResaleFlow() {
           applicationData.application_type === 'lender_questionnaire' ||
           applicationData.submitter_type === 'lender_questionnaire';
         
-        console.log('Is lender questionnaire?', isLenderQuestionnaire);
-        
         if (isLenderQuestionnaire) {
-          console.log('Redirecting to lender questionnaire upload step (step 6)');
           setCurrentStep(6); // Go to lender questionnaire upload step
         } else {
-          console.log('Redirecting to review step (step 5)');
           setCurrentStep(5); // Go to review step
         }
       }).catch((error) => {
@@ -3459,7 +3473,7 @@ export default function GMGResaleFlow() {
         setShowConfirmModal(false);
         
         try {
-          console.log('Attempting to delete application:', appId, 'with status:', status);
+          // Attempting to delete application
 
           // First, delete any related property owner forms
           const { error: formsError } = await supabase
@@ -3483,15 +3497,15 @@ export default function GMGResaleFlow() {
             throw error;
           }
 
-          console.log('Application deleted successfully, reloading list...');
+          // Application deleted successfully, reloading list
           
           // Reload applications to refresh the list
           await loadApplications();
-          console.log('Applications reloaded successfully');
+          // Applications reloaded successfully
           
           // Force a small delay to ensure UI updates
           setTimeout(() => {
-            console.log('UI should be updated now');
+            // UI should be updated now
           }, 100);
           
           // Show success snackbar
@@ -3563,14 +3577,14 @@ export default function GMGResaleFlow() {
   // Load applications when user or role changes
   useEffect(() => {
     if (user) {
-      console.log('📋 Loading applications for user:', user.id, 'role:', userRole);
+      // Loading applications for user
       loadApplications();
     }
   }, [user, userRole, loadApplications]);
   
   // Debug: log applications count
   useEffect(() => {
-    console.log('📊 Applications state:', applications.length, 'items');
+    // Applications state updated
   }, [applications]);
 
   // Add this function to your application submission process
@@ -3578,10 +3592,7 @@ export default function GMGResaleFlow() {
 
   const createPropertyOwnerForms = async (applicationId, applicationData) => {
     try {
-      console.log(
-        '🔧 Creating property owner forms for application:',
-        applicationId
-      );
+      // Creating property owner forms for application
 
       // Get application type to determine required forms
         const applicationTypeToUse = applicationData.application_type || applicationType || 'single_property';
@@ -3593,7 +3604,7 @@ export default function GMGResaleFlow() {
       const appTypeData = await getApplicationTypeData(applicationTypeToUse);
       const requiredForms = appTypeData.required_forms || [];
 
-      console.log(`Creating forms for application type: ${applicationTypeToUse}, Required forms: ${JSON.stringify(requiredForms)}`);
+      // Creating forms for application type
 
       // Determine recipient email (property owner email, or fallback to submitter)
       const recipientEmail =
@@ -3611,14 +3622,11 @@ export default function GMGResaleFlow() {
         expires_at: new Date(
           Date.now() + 30 * 24 * 60 * 60 * 1000
         ).toISOString(), // 30 days from now
-        created_at: new Date().toISOString(),
-        notes: applicationTypeToUse.startsWith('settlement_agent') 
-          ? 'Settlement agent request - requires accounting review'
-          : null
+        created_at: new Date().toISOString()
       }));
 
       if (formsToCreate.length === 0) {
-        console.log('No forms required for this application type');
+        // No forms required for this application type
         return [];
       }
 
@@ -3632,7 +3640,7 @@ export default function GMGResaleFlow() {
         throw error;
       }
 
-      console.log(`✅ Successfully created ${data.length} forms for application: ${applicationId}`);
+      // Successfully created forms for application
       return data;
     } catch (error) {
       console.error('❌ Failed to create property owner forms:', error);
@@ -3788,6 +3796,7 @@ export default function GMGResaleFlow() {
               totalAmount: data.total_amount,
               hoaName: hoaProperty?.name || 'Unknown HOA',
               submitterType: data.submitter_type,
+              applicationType: data.application_type,
             }),
           });
 
@@ -3801,7 +3810,7 @@ export default function GMGResaleFlow() {
 
         // Create notifications for property owner and staff/admin
         try {
-          console.log(`[Submit] Creating notifications for application ${data.id}`);
+          // Creating notifications for application
           const notificationResponse = await fetch('/api/notifications/create', {
             method: 'POST',
             headers: {
@@ -3812,7 +3821,7 @@ export default function GMGResaleFlow() {
 
           if (notificationResponse.ok) {
             const notificationResult = await notificationResponse.json();
-            console.log(`[Submit] Notifications created:`, notificationResult);
+            // Notifications created successfully
           } else {
             const errorText = await notificationResponse.text();
             console.warn(`[Submit] Failed to create notifications:`, errorText);
@@ -3844,6 +3853,7 @@ export default function GMGResaleFlow() {
           property_address: formData.propertyAddress,
           unit_number: formData.unitNumber,
           submitter_type: formData.submitterType,
+          application_type: applicationType,
           submitter_name: formData.submitterName,
           submitter_email: formData.submitterEmail,
           submitter_phone: formData.submitterPhone,
@@ -3890,7 +3900,7 @@ export default function GMGResaleFlow() {
 
         // Create notifications for property owner and staff/admin
         try {
-          console.log(`[Submit] Creating notifications for new application ${data[0].id}`);
+          // Creating notifications for new application
           const notificationResponse = await fetch('/api/notifications/create', {
             method: 'POST',
             headers: {
@@ -3901,7 +3911,7 @@ export default function GMGResaleFlow() {
 
           if (notificationResponse.ok) {
             const notificationResult = await notificationResponse.json();
-            console.log(`[Submit] Notifications created:`, notificationResult);
+            // Notifications created successfully
           } else {
             const errorText = await notificationResponse.text();
             console.warn(`[Submit] Failed to create notifications:`, errorText);
@@ -3932,6 +3942,7 @@ export default function GMGResaleFlow() {
               totalAmount: data[0].total_amount,
               hoaName: hoaProperty?.name || 'Unknown HOA',
               submitterType: data[0].submitter_type,
+              applicationType: data[0].application_type,
             }),
           });
 
@@ -4029,7 +4040,17 @@ export default function GMGResaleFlow() {
         icon: AlertCircle,
         label: 'Compliance Pending',
       },
+      compliance_completed: {
+        color: 'bg-blue-100 text-blue-800',
+        icon: Clock,
+        label: 'Under Review',
+      },
       approved: {
+        color: 'bg-green-100 text-green-800',
+        icon: CheckCircle,
+        label: 'Completed',
+      },
+      completed: {
         color: 'bg-green-100 text-green-800',
         icon: CheckCircle,
         label: 'Completed',
@@ -4043,6 +4064,171 @@ export default function GMGResaleFlow() {
 
     // For regular users, show a cleaner welcome screen
     if (userRole !== 'admin') {
+      const [filterStatus, setFilterStatus] = useState('all');
+      const [filterType, setFilterType] = useState('all');
+      const [expandedAppId, setExpandedAppId] = useState(null);
+      const [openTypeDropdown, setOpenTypeDropdown] = useState(false);
+      const [openStatusDropdown, setOpenStatusDropdown] = useState(false);
+      
+      // Custom Dropdown Component
+      const CustomDropdown = ({ value, onChange, options, placeholder, icon: Icon, width = 'w-48', isOpen, setIsOpen }) => {
+        const dropdownRef = React.useRef(null);
+        
+        React.useEffect(() => {
+          const handleClickOutside = (event) => {
+            if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
+              setIsOpen(false);
+            }
+          };
+          
+          if (isOpen) {
+            document.addEventListener('mousedown', handleClickOutside);
+            return () => document.removeEventListener('mousedown', handleClickOutside);
+          }
+        }, [isOpen, setIsOpen]);
+        
+        const selectedLabel = options.find(opt => opt.value === value)?.label || placeholder;
+        
+        return (
+          <div className={`relative ${width}`} ref={dropdownRef}>
+            <button
+              type="button"
+              onClick={() => setIsOpen(!isOpen)}
+              className='relative w-full pl-10 pr-10 py-2.5 text-sm font-normal text-left border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 shadow-sm bg-white hover:border-gray-400 transition-all cursor-pointer min-h-[40px] flex items-center'
+            >
+              <div className='absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none z-10'>
+                <Icon className='h-4 w-4 text-gray-400' />
+              </div>
+              <span className='block truncate'>{selectedLabel}</span>
+              <div className='absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none z-10'>
+                <ChevronDown className={`h-4 w-4 text-gray-400 transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`} />
+              </div>
+            </button>
+            
+            {isOpen && (
+              <div className='absolute z-[9999] w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-xl max-h-60 overflow-auto'>
+                {options.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => {
+                      onChange(option.value);
+                      setIsOpen(false);
+                    }}
+                    className={`w-full text-left px-4 py-2.5 text-sm font-normal leading-normal transition-colors first:rounded-t-lg last:rounded-b-lg ${
+                      value === option.value
+                        ? 'bg-blue-50 text-blue-700'
+                        : 'text-gray-900 hover:bg-gray-50'
+                    }`}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      };
+
+      // Filter applications: Show all active apps, but hide completed ones older than 10 days
+      const visibleApplications = applications.filter(app => {
+        // 1. Filter by Status
+        if (filterStatus !== 'all') {
+          // Handle special "active" status or map UI status to DB status if needed
+          if (filterStatus === 'active' && (app.status === 'completed' || app.status === 'approved' || app.status === 'rejected')) return false;
+          if (filterStatus === 'completed' && app.status !== 'completed' && app.status !== 'approved') return false;
+          if (filterStatus !== 'active' && filterStatus !== 'completed' && app.status !== filterStatus) return false;
+        }
+
+        // 2. Filter by Application Type
+        if (filterType !== 'all') {
+          // Map friendly names if needed, or use raw values
+          if (app.application_type !== filterType && app.submitter_type !== filterType) return false;
+        }
+
+        // 3. Auto-cleanup for completed apps (10 days) - Only applies if showing "All" or "Completed"
+        if (app.status === 'approved' || app.status === 'completed') {
+           const tenDaysAgo = new Date();
+           tenDaysAgo.setDate(tenDaysAgo.getDate() - 10);
+           const actionDate = app.updated_at ? new Date(app.updated_at) : new Date(app.submitted_at || app.created_at);
+           // If specifically filtering for completed, maybe show them all? The requirement said "remove themselves", so let's keep it.
+           if (actionDate < tenDaysAgo) return false;
+        }
+        
+        return true;
+      });
+
+      // Get unique application types for filter dropdown
+      const applicationTypes = [...new Set(applications.map(app => app.application_type || app.submitter_type))].filter(Boolean);
+      
+      // Helper function to format application type names
+      const formatApplicationType = (type) => {
+        if (!type) return '';
+        
+        const typeLower = type.toLowerCase();
+        
+        // Handle settlement types
+        if (typeLower.includes('settlement')) {
+          if (typeLower.includes('nc') || typeLower.includes('north_carolina') || typeLower.includes('north carolina')) {
+            return 'Settlement - North Carolina';
+          }
+          // Default to Virginia for settlement types
+          return 'Settlement - Virginia';
+        }
+        
+        // Handle other types - normalize first
+        const formatted = type
+          .replace(/_/g, ' ')
+          .replace(/\b\w/g, l => l.toUpperCase())
+          .trim();
+        
+        const formattedLower = formatted.toLowerCase();
+        
+        // Filter out "standard"
+        if (formattedLower === 'standard') {
+          return null;
+        }
+        
+        // Map specific types to exact format
+        if (formattedLower === 'single property' || formattedLower === 'single_property') {
+          return 'Single Property';
+        }
+        if (formattedLower === 'multi community' || formattedLower === 'multi_community') {
+          return 'Multi Community';
+        }
+        if (formattedLower === 'lender questionnaire' || formattedLower === 'lender_questionnaire') {
+          return 'Lender Questionnaire';
+        }
+        if (formattedLower === 'public offering' || formattedLower === 'public_offering') {
+          return 'Public Offering';
+        }
+        
+        return formatted;
+      };
+      
+      // Filter and format application types
+      const formattedApplicationTypes = applicationTypes
+        .map(type => ({ value: type, label: formatApplicationType(type) }))
+        .filter(item => item.label !== null && item.label !== '')
+        .sort((a, b) => {
+          // Define sort order
+          const order = [
+            'Single Property',
+            'Multi Community',
+            'Settlement - Virginia',
+            'Settlement - North Carolina',
+            'Lender Questionnaire',
+            'Public Offering'
+          ];
+          const indexA = order.indexOf(a.label);
+          const indexB = order.indexOf(b.label);
+          // If both are in the order, sort by order; otherwise keep original order
+          if (indexA !== -1 && indexB !== -1) return indexA - indexB;
+          if (indexA !== -1) return -1;
+          if (indexB !== -1) return 1;
+          return a.label.localeCompare(b.label);
+        });
+
       return (
         <div className='space-y-8'>
           {/* Welcome Section */}
@@ -4095,90 +4281,298 @@ export default function GMGResaleFlow() {
 
           {/* Recent Applications - Only show if user has any */}
           {applications.length > 0 ? (
-            <div className='bg-white rounded-lg shadow-sm border border-gray-200'>
-              <div className='px-6 py-4 border-b border-gray-200'>
-                <h3 className='text-lg font-medium text-gray-900'>
-                  Your Recent Applications
-                </h3>
+            <div className='bg-gradient-to-br from-white to-gray-50 rounded-xl shadow-lg border border-gray-100 transition-all duration-200 overflow-visible'>
+              <div className='p-6 border-b border-gray-200 bg-white/50 backdrop-blur-sm relative z-10 overflow-visible rounded-t-xl'>
+                <div className='flex flex-col md:flex-row md:items-center justify-between gap-4'>
+                  <div className='flex items-center gap-3'>
+                    <div className='p-2.5 bg-gradient-to-br from-green-500 to-green-600 rounded-lg shadow-md'>
+                      <FileText className='h-6 w-6 text-white' />
+                    </div>
+                    <div>
+                      <h3 className='text-xl font-bold text-gray-900'>
+                        Recent Applications
+                      </h3>
+                      <p className='text-sm text-gray-500 mt-0.5 hidden md:block'>
+                        Track and manage your resale certificates
+                      </p>
+                    </div>
+                  </div>
+                  
+                  {/* Filters */}
+                  <div className='flex flex-col sm:flex-row gap-3 w-full md:w-auto items-center'>
+                    <CustomDropdown
+                      value={filterType}
+                      onChange={setFilterType}
+                      options={[
+                        { value: 'all', label: 'All Types' },
+                        ...formattedApplicationTypes
+                      ]}
+                      placeholder='All Types'
+                      icon={FileText}
+                      width='w-full sm:w-48'
+                      isOpen={openTypeDropdown}
+                      setIsOpen={setOpenTypeDropdown}
+                    />
+                    
+                    <CustomDropdown
+                      value={filterStatus}
+                      onChange={setFilterStatus}
+                      options={[
+                        { value: 'all', label: 'All Statuses' },
+                        { value: 'active', label: 'Active' },
+                        { value: 'completed', label: 'Completed' },
+                        { value: 'draft', label: 'Drafts' }
+                      ]}
+                      placeholder='All Statuses'
+                      icon={Filter}
+                      width='w-full sm:w-40'
+                      isOpen={openStatusDropdown}
+                      setIsOpen={setOpenStatusDropdown}
+                    />
+                  </div>
+                </div>
               </div>
-              <div className='divide-y divide-gray-200'>
-                {applications.slice(0, 3).map((app) => {
-                  const StatusIcon = statusConfig[app.status]?.icon || Clock;
-                  const statusStyle =
-                    statusConfig[app.status]?.color ||
-                    'bg-gray-100 text-gray-800';
-                  const statusLabel =
-                    statusConfig[app.status]?.label || app.status;
+              
+              <div className='p-6 bg-gray-50/50 overflow-hidden rounded-b-xl'>
+                <div className='space-y-4 max-h-[600px] overflow-y-auto pr-2 custom-scrollbar'>
+                {visibleApplications.length > 0 ? (
+                  visibleApplications.map((app) => {
+                  // Fix for premature "Completed" status when PDF is not generated
+                  let displayStatus = app.status;
+                  const isMultiCommunity = app.application_type === 'multi_community' || (app.application_property_groups && app.application_property_groups.length > 0);
+                  const propertyGroups = app.application_property_groups || [];
+                  
+                  // For multi-community applications, check if all properties are completed
+                  if (isMultiCommunity && propertyGroups.length > 0) {
+                    const allPropertiesCompleted = propertyGroups.every(prop => prop.pdf_url);
+                    if (allPropertiesCompleted) {
+                      displayStatus = 'completed';
+                    } else {
+                      // If not all are completed, show as under_review (or keep current status if it's already in progress)
+                      if (displayStatus !== 'draft' && displayStatus !== 'pending_payment' && displayStatus !== 'submitted') {
+                        displayStatus = 'under_review';
+                      }
+                    }
+                  } else if (app.status === 'completed' || app.status === 'approved' || app.status === 'compliance_completed') {
+                    // For single property applications, check if PDF exists
+                    const isSettlement = app.submitter_type === 'settlement' || app.application_type?.startsWith('settlement');
+                    const hasPdf = isSettlement ? (app.settlement_pdf_url || app.pdf_url) : app.pdf_url;
+                    
+                    if (!hasPdf) {
+                      displayStatus = 'under_review';
+                    }
+                  }
+
+                  const StatusIcon = statusConfig[displayStatus]?.icon || Clock;
+                  const statusConfigItem = statusConfig[displayStatus];
+                  // Extract colors for custom styling if needed, or use classes
+                  // Use a cleaner pill design
+                  let statusClasses = 'bg-gray-100 text-gray-700 border-gray-200';
+                  
+                  if (displayStatus === 'approved' || displayStatus === 'completed') {
+                    statusClasses = 'bg-green-50 text-green-700 border-green-200';
+                  } else if (displayStatus === 'under_review') {
+                    statusClasses = 'bg-blue-50 text-blue-700 border-blue-200';
+                  } else if (displayStatus === 'draft') {
+                    statusClasses = 'bg-gray-50 text-gray-600 border-gray-200';
+                  } else if (displayStatus === 'pending_payment') {
+                    statusClasses = 'bg-amber-50 text-amber-700 border-amber-200';
+                  }
 
                   // Check if application can be deleted (draft or pending_payment)
                   const canDelete = app.status === 'draft' || app.status === 'pending_payment';
+                  const isCompleted = displayStatus === 'completed' || displayStatus === 'approved';
+                  const isExpanded = expandedAppId === app.id;
 
                   return (
-                    <div key={app.id} className='p-6 hover:bg-gray-50'>
-                      <div className='flex items-center justify-between'>
-                        <div className='flex-1'>
-                          <h4 className='text-sm font-medium text-gray-900'>
-                            {app.hoa_properties?.name} - {app.property_address}
-                          </h4>
-                          <p className='text-sm text-gray-500'>
-                            Submitted:{' '}
-                            {app.submitted_at
-                              ? new Date(app.submitted_at).toLocaleDateString()
-                              : 'Draft'}
-                          </p>
-                          {app.total_amount && (
-                            <p className='text-sm text-gray-500'>
-                              Amount: ${app.total_amount}
-                            </p>
-                          )}
-                        </div>
-                        <div className='flex items-center space-x-3'>
-                          <span
-                            className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${statusStyle}`}
-                          >
-                            <StatusIcon className='h-3 w-3 mr-1' />
-                            {statusLabel}
-                          </span>
-                          <div className='flex space-x-2'>
-                            {(app.status === 'draft' || app.status === 'pending_payment') && (
-                              <button
-                                onClick={() => {
-                                  loadDraftApplication(app.id).then(() => {
-                                    // If pending payment, go to payment step; if draft, go to first step
-                                    setCurrentStep(app.status === 'pending_payment' ? 4 : 1);
-                                  });
-                                }}
-                                className='text-green-600 hover:text-green-900 text-sm flex items-center'
-                                title='Resume Application'
-                              >
-                                <FileText className='h-4 w-4 mr-1' />
-                                Resume
-                              </button>
-                            )}
-                            {canDelete && (
-                              <button
-                                onClick={() => deleteUnpaidApplication(app.id, app.status)}
-                                className='text-red-600 hover:text-red-900 text-sm flex items-center'
-                                title={`Delete ${app.status === 'draft' ? 'Draft' : 'Application'}`}
-                              >
-                                <Trash2 className='h-4 w-4 mr-1' />
-                                Delete
-                              </button>
-                            )}
-                            {!canDelete && app.status !== 'draft' && app.status !== 'pending_payment' && (
-                              <span className='text-gray-400 text-sm'>—</span>
-                            )}
+                    <div 
+                      key={app.id} 
+                      className={`group bg-white rounded-xl border border-gray-200 shadow-sm hover:shadow-md hover:border-green-200 transition-all duration-200 relative overflow-hidden ${isExpanded ? 'ring-2 ring-green-500 ring-opacity-50' : ''}`}
+                    >
+                      {/* Status bar accent on left */}
+                      <div className={`absolute left-0 top-0 bottom-0 w-1 ${
+                        displayStatus === 'approved' || displayStatus === 'completed' ? 'bg-green-500' :
+                        displayStatus === 'pending_payment' ? 'bg-amber-500' :
+                        displayStatus === 'draft' ? 'bg-gray-300' :
+                        'bg-blue-500'
+                      }`} />
+
+                      <div className='p-5 pl-7'>
+                        <div className='flex flex-col md:flex-row md:items-center justify-between gap-4'>
+                          <div className='flex-1 min-w-0'>
+                            <div className='flex items-center gap-2 mb-1'>
+                              <h4 className='text-base font-bold text-gray-900 truncate'>
+                                {app.hoa_properties?.name}
+                              </h4>
+                              <span className='text-gray-300'>|</span>
+                              <p className='text-sm text-gray-600 truncate'>
+                                {app.property_address}
+                              </p>
+                            </div>
+                            
+                            <div className='flex flex-wrap items-center gap-x-4 gap-y-2 mt-2 text-sm text-gray-500'>
+                              <div className='flex items-center gap-1.5'>
+                                <Calendar className='h-4 w-4 text-gray-400' />
+                                <span>
+                                  {app.submitted_at
+                                    ? `Submitted: ${new Date(app.submitted_at).toLocaleDateString()}`
+                                    : `Created: ${new Date(app.created_at).toLocaleDateString()}`}
+                                </span>
+                              </div>
+                              
+                              {isCompleted && (
+                                <div className='flex items-center gap-1.5 text-green-600 font-medium bg-green-50 px-2 py-0.5 rounded-md'>
+                                  <CheckCircle className='h-3.5 w-3.5' />
+                                  <span>Completed: {new Date(app.updated_at).toLocaleDateString()}</span>
+                                </div>
+                              )}
+                              
+                              {app.status === 'pending_payment' && app.total_amount > 0 && (
+                                <div className='flex items-center gap-1.5 font-medium text-gray-700 bg-gray-50 px-2 py-0.5 rounded-md'>
+                                  <DollarSign className='h-3.5 w-3.5 text-gray-400' />
+                                  <span>${app.total_amount}</span>
+                                </div>
+                              )}
+
+                              {isMultiCommunity && (
+                                <div className='flex items-center gap-1.5 font-medium text-blue-700 bg-blue-50 px-2 py-0.5 rounded-md'>
+                                  <Building2 className='h-3.5 w-3.5 text-blue-500' />
+                                  <span>{propertyGroups.length} Properties</span>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className='flex items-center justify-between md:justify-end gap-4 w-full md:w-auto border-t md:border-0 border-gray-100 pt-4 md:pt-0'>
+                            <span
+                              className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold border ${statusClasses} shadow-sm`}
+                            >
+                              <StatusIcon className='h-3.5 w-3.5 mr-1.5' />
+                              {statusConfig[displayStatus]?.label || displayStatus}
+                            </span>
+                            
+                            <div className='flex items-center gap-2'>
+                              {(app.status === 'draft' || app.status === 'pending_payment') && (
+                                <button
+                                  onClick={() => {
+                                    loadDraftApplication(app.id).then(() => {
+                                      setCurrentStep(app.status === 'pending_payment' ? 4 : 1);
+                                    });
+                                  }}
+                                  className='flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-white bg-green-600 hover:bg-green-700 rounded-lg transition-colors shadow-sm hover:shadow'
+                                  title='Resume Application'
+                                >
+                                  <FileText className='h-4 w-4' />
+                                  Resume
+                                </button>
+                              )}
+                              
+                              {canDelete && (
+                                <button
+                                  onClick={() => deleteUnpaidApplication(app.id, app.status)}
+                                  className='flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-red-600 bg-red-50 hover:bg-red-100 border border-red-100 rounded-lg transition-colors'
+                                  title={`Delete ${app.status === 'draft' ? 'Draft' : 'Application'}`}
+                                >
+                                  <Trash2 className='h-4 w-4' />
+                                  Delete
+                                </button>
+                              )}
+                              
+                              {/* Accordion Toggle - Only for Multi-Community */}
+                              {isMultiCommunity && (
+                                <button 
+                                  onClick={() => setExpandedAppId(isExpanded ? null : app.id)}
+                                  className={`p-1.5 rounded-lg transition-colors ${isExpanded ? 'bg-gray-100 text-gray-900' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-50'}`}
+                                >
+                                  {isExpanded ? <ChevronUp className='h-5 w-5' /> : <ChevronDown className='h-5 w-5' />}
+                                </button>
+                              )}
+                            </div>
                           </div>
                         </div>
                       </div>
+
+                      {/* Expanded Content for Multi-Community */}
+                      {isMultiCommunity && isExpanded && (
+                        <div className='border-t border-gray-200 bg-gray-50 p-5 animate-fadeIn'>
+                          <h5 className='text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2'>
+                            <Building2 className='h-4 w-4 text-gray-500' />
+                            Property Details
+                          </h5>
+                          <div className='space-y-3'>
+                            {[...propertyGroups]
+                              .sort((a, b) => (b.is_primary ? 1 : 0) - (a.is_primary ? 1 : 0))
+                              .map((prop, idx) => {
+                              // Determine status for individual property
+                              let propStatus = 'In Progress';
+                              let propStatusColor = 'bg-blue-100 text-blue-800';
+                              let PropIcon = Clock;
+
+                              if (prop.pdf_url) {
+                                propStatus = 'Completed';
+                                propStatusColor = 'bg-green-100 text-green-800';
+                                PropIcon = CheckCircle;
+                              } else if (prop.form_data) {
+                                propStatus = 'Under Review';
+                                PropIcon = FileText;
+                              }
+
+                              return (
+                                <div key={prop.id || idx} className='bg-white p-3 rounded-lg border border-gray-200 shadow-sm flex items-center justify-between'>
+                                  <div className='flex items-center gap-3'>
+                                    <div className='h-8 w-8 rounded-full bg-gray-100 flex items-center justify-center text-xs font-bold text-gray-600'>
+                                      {idx + 1}
+                                    </div>
+                                    <div>
+                                      <p className='text-sm font-medium text-gray-900'>{prop.property_name}</p>
+                                      <p className='text-xs text-gray-500'>{prop.property_location || 'Virginia'}</p>
+                                    </div>
+                                  </div>
+                                  <span className={`inline-flex items-center px-2 py-1 rounded text-xs font-medium ${propStatusColor}`}>
+                                    <PropIcon className='h-3 w-3 mr-1' />
+                                    {propStatus}
+                                  </span>
+                                </div>
+                              );
+                            })}
+                            {propertyGroups.length === 0 && (
+                              <p className='text-sm text-gray-500 italic'>No properties found for this group.</p>
+                            )}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   );
-                })}
+                })
+              ) : (
+                <div className='flex flex-col items-center justify-center py-12 px-4 text-center bg-white rounded-xl border border-dashed border-gray-300'>
+                  <div className='p-4 bg-gray-50 rounded-full mb-3'>
+                    <Filter className='h-8 w-8 text-gray-400' />
+                  </div>
+                  <h3 className='text-lg font-medium text-gray-900'>No applications found</h3>
+                  <p className='text-gray-500 mt-1 max-w-sm'>
+                    We couldn't find any applications matching your current filters. Try adjusting your search criteria.
+                  </p>
+                  <button 
+                    onClick={() => { setFilterStatus('all'); setFilterType('all'); }}
+                    className='mt-4 text-sm text-green-600 font-medium hover:text-green-700 hover:underline'
+                  >
+                    Clear all filters
+                  </button>
+                </div>
+              )}
+              </div>
               </div>
             </div>
           ) : (
-            <div className='bg-white rounded-lg shadow-sm border border-gray-200 p-6 text-center'>
-              <p className='text-gray-600'>No applications yet. Start a new application to get started!</p>
+            <div className='bg-gradient-to-br from-white to-gray-50 rounded-xl shadow-sm border border-gray-200 p-10 text-center'>
+              <div className='w-16 h-16 bg-green-50 rounded-full flex items-center justify-center mx-auto mb-4'>
+                <FileText className='h-8 w-8 text-green-600' />
+              </div>
+              <h3 className='text-lg font-bold text-gray-900 mb-2'>No applications yet</h3>
+              <p className='text-gray-600 max-w-md mx-auto'>
+                Start a new application above to request resale certificates. Your history will appear here.
+              </p>
             </div>
           )}
 
@@ -4439,7 +4833,7 @@ export default function GMGResaleFlow() {
                       </td>
                       <td className='px-6 py-4 whitespace-nowrap text-sm text-gray-500'>
                         {app.submitted_at
-                          ? new Date(app.submitted_at).toLocaleDateString()
+                          ? formatDate(app.submitted_at)
                           : 'Draft'}
                       </td>
                       <td className='px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900'>

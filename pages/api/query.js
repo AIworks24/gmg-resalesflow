@@ -29,23 +29,64 @@ export default async function handler(req, res) {
     // Create server-side Supabase client (handles auth properly)
     const supabase = createPagesServerClient({ req, res });
 
-    // Verify user is authenticated with timeout
+    // Verify user is authenticated with timeout and retry
     let user, authError;
-    try {
-      const result = await Promise.race([
-        supabase.auth.getUser(),
-        new Promise((_, reject) => 
-          setTimeout(() => reject(new Error('Auth timeout')), 5000)
-        )
-      ]);
-      user = result.data?.user;
-      authError = result.error;
-    } catch (err) {
-      console.error('Auth check timeout or error:', err);
-      return res.status(401).json({ error: 'Authentication timeout' });
+    let authAttempts = 0;
+    const maxAuthAttempts = 2;
+    
+    while (authAttempts < maxAuthAttempts) {
+      try {
+        const result = await Promise.race([
+          supabase.auth.getUser(),
+          new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('Auth timeout')), 5000)
+          )
+        ]);
+        user = result.data?.user;
+        authError = result.error;
+        
+        // If we got a user or a non-connection error, break
+        if (user || (authError && authError.status >= 400 && authError.status < 500)) {
+          break;
+        }
+        
+        // If it's a connection error, retry
+        authAttempts++;
+        if (authAttempts < maxAuthAttempts) {
+          console.warn(`[Query API] Auth check failed, retrying (${authAttempts}/${maxAuthAttempts})...`);
+          await new Promise(resolve => setTimeout(resolve, 1000 * authAttempts));
+        }
+      } catch (err) {
+        console.error('Auth check timeout or error:', err);
+        
+        // Check if it's a connection error
+        const isConnectionError = err.message?.includes('timeout') || 
+                                  err.message?.includes('network') ||
+                                  err.message?.includes('fetch');
+        
+        if (isConnectionError && authAttempts < maxAuthAttempts - 1) {
+          authAttempts++;
+          await new Promise(resolve => setTimeout(resolve, 1000 * authAttempts));
+          continue;
+        }
+        
+        return res.status(503).json({ 
+          error: 'Service temporarily unavailable',
+          message: 'Unable to connect to authentication service. Please try again in a moment.',
+          retryAfter: 30
+        });
+      }
     }
     
     if (authError || !user) {
+      // Distinguish between auth errors and connection errors
+      if (authError && (authError.status === 0 || authError.status >= 500)) {
+        return res.status(503).json({ 
+          error: 'Service temporarily unavailable',
+          message: 'Authentication service is currently unavailable. Please try again in a moment.',
+          retryAfter: 30
+        });
+      }
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
@@ -169,11 +210,45 @@ export default async function handler(req, res) {
       query = query.maybeSingle();
     }
 
-    // Execute query
-    const { data, error: queryError, count } = await query;
+    // Execute query with timeout
+    let data, queryError, count;
+    try {
+      const queryResult = await Promise.race([
+        query,
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Query timeout')), 15000)
+        )
+      ]);
+      data = queryResult.data;
+      queryError = queryResult.error;
+      count = queryResult.count;
+    } catch (timeoutError) {
+      console.error('Database query timeout:', timeoutError);
+      return res.status(504).json({ 
+        error: 'Request timeout',
+        message: 'The database query took too long to complete. Please try again.',
+        retryAfter: 30
+      });
+    }
 
     if (queryError) {
       console.error('Database query error:', queryError);
+      
+      // Check if it's a connection error
+      const isConnectionError = queryError.message?.includes('network') ||
+                                queryError.message?.includes('timeout') ||
+                                queryError.message?.includes('connection') ||
+                                queryError.code === 'PGRST301' || // Connection error code
+                                queryError.code === 'PGRST302';   // Timeout error code
+      
+      if (isConnectionError) {
+        return res.status(503).json({ 
+          error: 'Service temporarily unavailable',
+          message: 'Unable to connect to the database. Please try again in a moment.',
+          retryAfter: 30
+        });
+      }
+      
       return res.status(500).json({ 
         error: 'Database query failed',
         details: queryError.message 

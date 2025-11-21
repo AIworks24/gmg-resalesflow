@@ -73,38 +73,7 @@ export default async function handler(req, res) {
 
     const publicUrl = pdfToUse;
 
-    // Create notification record with public URL (for internal use)
-    const notificationSubject = isPropertySpecific 
-      ? `Resale Certificate Ready - ${propertyName}`
-      : `Resale Certificate Ready - ${application.property_address}`;
-    
-    const notificationMessage = isPropertySpecific
-      ? `Your document(s) for ${propertyName} in ${application.hoa_properties.name} are now ready for download.`
-      : `Your document(s) for ${application.property_address} in ${application.hoa_properties.name} are now ready for download.`;
-
-    const { error: notifError } = await supabase.from('notifications').insert([
-      {
-        application_id: applicationId,
-        recipient_email: application.submitter_email,
-        recipient_name: application.submitter_name,
-        notification_type: 'application_approved',
-        subject: notificationSubject,
-        message: notificationMessage,
-        status: 'sent',
-        sent_at: new Date().toISOString(),
-        metadata: {
-          pdf_url: publicUrl,
-          property_address: isPropertySpecific ? propertyName : application.property_address,
-          hoa_name: application.hoa_properties.name,
-          property_specific: isPropertySpecific,
-          property_group_id: propertyGroupId
-        },
-      },
-    ]);
-
-    if (notifError) {
-      throw notifError;
-    }
+    // Notification creation removed - no longer needed
 
     // Prepare download links (PDF + property files)
     const EXPIRY_30_DAYS = 30 * 24 * 60 * 60; // 30 days in seconds
@@ -345,7 +314,8 @@ export default async function handler(req, res) {
         hoaName: application.hoa_properties.name,
         pdfUrl: publicUrl,
         applicationId: applicationId,
-        downloadLinks: downloadLinks
+        downloadLinks: downloadLinks,
+        comments: application.comments || null
       });
     } catch (emailError) {
       console.error('Email sending failed:', emailError);

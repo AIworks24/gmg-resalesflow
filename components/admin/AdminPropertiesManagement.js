@@ -40,6 +40,7 @@ import useAdminAuthStore from '../../stores/adminAuthStore';
 const AdminPropertiesManagement = () => {
   const { role: userRole } = useAdminAuthStore();
   const [searchTerm, setSearchTerm] = useState('');
+  const [debouncedSearchTerm, setDebouncedSearchTerm] = useState('');
   const [showModal, setShowModal] = useState(false);
   const [modalMode, setModalMode] = useState('add'); // 'add' or 'edit'
   const [selectedProperty, setSelectedProperty] = useState(null);
@@ -100,9 +101,25 @@ const AdminPropertiesManagement = () => {
     return res.json();
   };
 
+  // Debounce search term to prevent too many API calls and input focus issues
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearchTerm(searchTerm);
+    }, 300); // 300ms debounce delay
+
+    return () => clearTimeout(timer);
+  }, [searchTerm]);
+
+  // Reset to page 1 when debounced search term changes
+  useEffect(() => {
+    if (debouncedSearchTerm !== '') {
+      setCurrentPage(1);
+    }
+  }, [debouncedSearchTerm]);
+
   // Build API URL with query parameters
   // Always bypass cache to ensure fresh data for properties
-  const apiUrl = `/api/admin/hoa-properties?page=${currentPage}&pageSize=${pageSize}&search=${encodeURIComponent(searchTerm)}&bypassCache=true`;
+  const apiUrl = `/api/admin/hoa-properties?page=${currentPage}&pageSize=${pageSize}&search=${encodeURIComponent(debouncedSearchTerm)}&bypassCache=true`;
 
   // Fetch properties using SWR
   const { data: swrData, error: swrError, isLoading, mutate } = useSWR(
@@ -118,13 +135,6 @@ const AdminPropertiesManagement = () => {
   // Extract data from SWR response
   const properties = swrData?.properties || [];
   const totalCount = swrData?.totalCount || 0;
-
-  // Reset to page 1 when search term changes
-  useEffect(() => {
-    if (searchTerm !== '') {
-      setCurrentPage(1);
-    }
-  }, [searchTerm]);
 
   // Handle auto-opening edit modal from query parameter
   useEffect(() => {
@@ -278,7 +288,7 @@ const AdminPropertiesManagement = () => {
       
       // Force SWR to revalidate by fetching with bypassCache parameter
       // This bypasses both SWR cache and Redis cache
-      const refreshUrl = `/api/admin/hoa-properties?page=${currentPage}&pageSize=${pageSize}&search=${encodeURIComponent(searchTerm)}&bypassCache=true&_t=${Date.now()}`;
+      const refreshUrl = `/api/admin/hoa-properties?page=${currentPage}&pageSize=${pageSize}&search=${encodeURIComponent(debouncedSearchTerm)}&bypassCache=true&_t=${Date.now()}`;
       try {
         const freshResponse = await fetch(refreshUrl);
         const freshData = await freshResponse.json();
@@ -466,9 +476,7 @@ const AdminPropertiesManagement = () => {
 
   const handleSearch = (value) => {
     setSearchTerm(value);
-    setCurrentPage(1); // Reset to first page when searching
-    // Remove the setTimeout and let the useEffect handle the loading
-    // This prevents race conditions with pagination
+    // Page reset is handled by useEffect when debouncedSearchTerm changes
   };
 
   // Multi-community functions
@@ -561,7 +569,7 @@ const AdminPropertiesManagement = () => {
       
       // Force SWR to revalidate by fetching with bypassCache parameter
       // This ensures we have the latest data from the database
-      const refreshUrl = `/api/admin/hoa-properties?page=${currentPage}&pageSize=${pageSize}&search=${encodeURIComponent(searchTerm)}&bypassCache=true&_t=${Date.now()}`;
+      const refreshUrl = `/api/admin/hoa-properties?page=${currentPage}&pageSize=${pageSize}&search=${encodeURIComponent(debouncedSearchTerm)}&bypassCache=true&_t=${Date.now()}`;
       try {
         const freshResponse = await fetch(refreshUrl);
         if (!freshResponse.ok) throw new Error('Failed to refresh');
@@ -693,7 +701,7 @@ const AdminPropertiesManagement = () => {
       
       // Force SWR to revalidate by fetching with bypassCache parameter
       // This ensures we have the latest data from the database
-      const refreshUrl = `/api/admin/hoa-properties?page=${currentPage}&pageSize=${pageSize}&search=${encodeURIComponent(searchTerm)}&bypassCache=true&_t=${Date.now()}`;
+      const refreshUrl = `/api/admin/hoa-properties?page=${currentPage}&pageSize=${pageSize}&search=${encodeURIComponent(debouncedSearchTerm)}&bypassCache=true&_t=${Date.now()}`;
       try {
         const freshResponse = await fetch(refreshUrl);
         if (!freshResponse.ok) throw new Error('Failed to refresh');
@@ -740,8 +748,11 @@ const AdminPropertiesManagement = () => {
     );
   }
 
-  // Show skeleton loading state
-  if (isLoading && properties.length === 0) {
+  // Show skeleton loading state ONLY on initial load (no search term and no data)
+  // During search, we'll show the normal UI with a loading indicator in the table
+  const isInitialLoad = isLoading && properties.length === 0 && !debouncedSearchTerm;
+  
+  if (isInitialLoad) {
     return (
       <AdminLayout>
         <div className="max-w-7xl mx-auto p-6">
@@ -852,6 +863,7 @@ const AdminPropertiesManagement = () => {
               onClick={() => {
                 setCurrentPage(1);
                 setSearchTerm('');
+                setDebouncedSearchTerm('');
                 mutate();
               }}
               disabled={isLoading}
@@ -874,6 +886,7 @@ const AdminPropertiesManagement = () => {
                 value={searchTerm}
                 onChange={(e) => handleSearch(e.target.value)}
                 className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                autoComplete="off"
               />
             </div>
           </div>
@@ -910,37 +923,20 @@ const AdminPropertiesManagement = () => {
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
-              {isLoading && properties.length > 0 ? (
-                // Skeleton rows while refreshing with existing data
-                [1, 2, 3].map((i) => (
-                  <tr key={`skeleton-${i}`} className="animate-pulse">
-                    <td className="px-6 py-4">
-                      <div className="h-4 bg-gray-200 rounded w-40 mb-1"></div>
-                      <div className="h-3 bg-gray-200 rounded w-24"></div>
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="h-4 bg-gray-200 rounded w-32"></div>
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="h-4 bg-gray-200 rounded w-36 mb-1"></div>
-                      <div className="h-3 bg-gray-200 rounded w-40"></div>
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="h-5 bg-gray-200 rounded-full w-12"></div>
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="flex gap-2">
-                        <div className="h-8 w-8 bg-gray-200 rounded"></div>
-                        <div className="h-8 w-8 bg-gray-200 rounded"></div>
-                        <div className="h-8 w-8 bg-gray-200 rounded"></div>
-                      </div>
-                    </td>
-                  </tr>
-                ))
+              {isLoading && debouncedSearchTerm ? (
+                // Show loading indicator in table during search (not full skeleton)
+                <tr>
+                  <td colSpan="5" className="px-6 py-12 text-center">
+                    <div className="flex flex-col items-center gap-3">
+                      <RefreshCw className="w-6 h-6 text-blue-600 animate-spin" />
+                      <p className="text-gray-600">Searching properties...</p>
+                    </div>
+                  </td>
+                </tr>
               ) : properties.length === 0 ? (
                 <tr>
                   <td colSpan="5" className="px-6 py-12 text-center text-gray-500">
-                    No properties found
+                    {debouncedSearchTerm ? `No properties found matching "${debouncedSearchTerm}"` : 'No properties found'}
                   </td>
                 </tr>
               ) : (

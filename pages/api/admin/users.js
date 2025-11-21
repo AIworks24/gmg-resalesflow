@@ -29,12 +29,13 @@ export default async function handler(req, res) {
     }
 
     // Parse query parameters
-    const { page = 1, limit = 10 } = req.query;
+    const { page = 1, limit = 10, search = '' } = req.query;
     const pageNum = parseInt(page);
     const limitNum = parseInt(limit);
+    const searchTerm = (search || '').trim();
 
-    // Generate cache key - includes user ID to prevent collisions between concurrent users
-    const cacheKey = `admin:users:list:${user.id}:${pageNum}:${limitNum}`;
+    // Generate cache key - includes user ID, pagination, and search to prevent collisions
+    const cacheKey = `admin:users:list:${user.id}:${pageNum}:${limitNum}:search:${searchTerm}`;
     
     // TEMPORARILY DISABLED: Try to get from cache first
     // const cachedData = await getCache(cacheKey);
@@ -54,12 +55,36 @@ export default async function handler(req, res) {
     const from = (pageNum - 1) * limitNum;
     const to = from + limitNum - 1;
 
-    // Fetch users from database (sorted by newest first)
-    const { data, error: queryError, count } = await supabase
+    // Build query - exclude soft-deleted users
+    // Professional approach: Check both active flag and deleted_at for efficiency
+    // The active boolean is faster for filtering, deleted_at provides audit trail
+    let query = supabase
       .from('profiles')
       .select('*', { count: 'exact' })
-      .order('created_at', { ascending: false })
-      .range(from, to);
+      .eq('active', true) // Only get active users (faster than checking deleted_at)
+      .is('deleted_at', null); // Double-check: also ensure deleted_at is null
+
+    // Apply search filter if provided
+    if (searchTerm) {
+      // Check if search term looks like an email domain (starts with @)
+      if (searchTerm.startsWith('@')) {
+        // Search for email domain (e.g., @specificcompany.com)
+        const domain = searchTerm.substring(1); // Remove @
+        query = query.ilike('email', `%@${domain}%`);
+      } else {
+        // Search in email, first_name, last_name, and also check for partial email matches
+        // This allows searching for any part of the email, not just exact matches
+        query = query.or(
+          `email.ilike.%${searchTerm}%,first_name.ilike.%${searchTerm}%,last_name.ilike.%${searchTerm}%`
+        );
+      }
+    }
+
+    // Apply ordering and pagination
+    query = query.order('created_at', { ascending: false }).range(from, to);
+
+    // Fetch users from database
+    const { data, error: queryError, count } = await query;
 
     if (queryError) {
       console.error('Database query error:', queryError);

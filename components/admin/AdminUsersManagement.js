@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState } from 'react';
 import { useRouter } from 'next/router';
 import {
   Users,
@@ -34,11 +34,14 @@ import AdminLayout from './AdminLayout';
 const AdminUsersManagement = () => {
   // UI State
   const [searchTerm, setSearchTerm] = useState('');
+  const [debouncedSearchTerm, setDebouncedSearchTerm] = useState('');
   const [showModal, setShowModal] = useState(false);
   const [modalMode, setModalMode] = useState('add'); // 'add' or 'edit'
   const [selectedUser, setSelectedUser] = useState(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [userToDelete, setUserToDelete] = useState(null);
+  const [userApplicationCount, setUserApplicationCount] = useState(0);
+  const [isCheckingApplications, setIsCheckingApplications] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [formError, setFormError] = useState('');
   
@@ -83,7 +86,23 @@ const AdminUsersManagement = () => {
     }
   }, [role, router]);
 
-  // React Query hooks
+  // Debounce search term to prevent too many API calls
+  React.useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearchTerm(searchTerm);
+    }, 300); // 300ms debounce delay
+
+    return () => clearTimeout(timer);
+  }, [searchTerm]);
+
+  // Reset to page 1 when debounced search term changes
+  React.useEffect(() => {
+    if (debouncedSearchTerm !== '') {
+      setCurrentPage(1);
+    }
+  }, [debouncedSearchTerm]);
+
+  // React Query hooks - now with server-side search
   const {
     data: usersResponse,
     isLoading,
@@ -91,21 +110,11 @@ const AdminUsersManagement = () => {
     error,
     refetch,
     isFetching,
-  } = useUsers(currentPage, pageSize);
+  } = useUsers(currentPage, pageSize, debouncedSearchTerm);
 
   const users = usersResponse?.data || [];
   const totalUsers = usersResponse?.total || 0;
   const totalPages = usersResponse?.totalPages || 0;
-
-  // Debug logging
-  console.log('User Management Debug:', {
-    usersResponse,
-    users: users.length,
-    totalUsers,
-    totalPages,
-    currentPage,
-    pageSize
-  });
 
   const { data: userStats } = useUserStats();
 
@@ -113,17 +122,8 @@ const AdminUsersManagement = () => {
   const updateUserMutation = useUpdateUser();
   const deleteUserMutation = useDeleteUser();
 
-  // Filter users based on search term (client-side for now)
-  const filteredUsers = useMemo(() => {
-    if (!searchTerm.trim()) return users;
-    
-    const term = searchTerm.toLowerCase();
-    return users.filter(user =>
-      user.email?.toLowerCase().includes(term) ||
-      user.first_name?.toLowerCase().includes(term) ||
-      user.last_name?.toLowerCase().includes(term)
-    );
-  }, [users, searchTerm]);
+  // No need for client-side filtering anymore - server handles it
+  const filteredUsers = users;
 
   const resetForm = () => {
     setFormData({
@@ -224,6 +224,43 @@ const AdminUsersManagement = () => {
     }
   };
 
+  const checkUserApplications = async (userId) => {
+    try {
+      setIsCheckingApplications(true);
+      const response = await fetch(`/api/admin/check-user-applications?userId=${userId}`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      const result = await response.json();
+
+      if (response.ok) {
+        setUserApplicationCount(result.applicationCount || 0);
+      } else {
+        console.error('Error checking applications:', result.error);
+        setUserApplicationCount(0);
+      }
+    } catch (error) {
+      console.error('Error checking applications:', error);
+      setUserApplicationCount(0);
+    } finally {
+      setIsCheckingApplications(false);
+    }
+  };
+
+  const handleDeleteClick = async (userItem) => {
+    setUserToDelete(userItem);
+    setShowDeleteConfirm(true);
+    // Check for applications if user is external
+    if (userItem.role === 'external') {
+      await checkUserApplications(userItem.id);
+    } else {
+      setUserApplicationCount(0);
+    }
+  };
+
   const handleDeleteUser = async () => {
     if (!userToDelete) return;
 
@@ -231,9 +268,10 @@ const AdminUsersManagement = () => {
       await deleteUserMutation.mutateAsync(userToDelete.id);
       setShowDeleteConfirm(false);
       setUserToDelete(null);
+      setUserApplicationCount(0);
       setSnackbar({
         show: true,
-        message: `User deleted successfully! ${userToDelete.email} has been removed.`,
+        message: `User deleted successfully! ${userToDelete.email} has been removed.${userToDelete.role === 'external' && userApplicationCount > 0 ? ` ${userApplicationCount} application(s) were also deleted.` : ''}`,
         type: 'success'
       });
     } catch (error) {
@@ -257,6 +295,8 @@ const AdminUsersManagement = () => {
         return 'bg-purple-100 text-purple-800';
       case 'user':
         return 'bg-green-100 text-green-800';
+      case 'external':
+        return 'bg-green-100 text-green-800';
       default:
         return 'bg-gray-100 text-gray-800';
     }
@@ -267,15 +307,20 @@ const AdminUsersManagement = () => {
     return new Date(dateString).toLocaleDateString();
   };
 
-  // Loading state
-  if (isLoading) {
+  // Loading state - only show full loading on initial load (no search term)
+  // During search, show the normal UI with loading indicator in table
+  const isInitialLoad = isLoading && users.length === 0 && !debouncedSearchTerm;
+  
+  if (isInitialLoad) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="flex items-center gap-3 text-gray-600">
-          <RefreshCw className="w-5 h-5 animate-spin" />
-          <span>Loading users...</span>
+      <AdminLayout>
+        <div className="min-h-screen flex items-center justify-center">
+          <div className="flex items-center gap-3 text-gray-600">
+            <RefreshCw className="w-5 h-5 animate-spin" />
+            <span>Loading users...</span>
+          </div>
         </div>
-      </div>
+      </AdminLayout>
     );
   }
 
@@ -376,7 +421,7 @@ const AdminUsersManagement = () => {
                 <User className="w-8 h-8 text-green-600" />
                 <div>
                   <p className="text-sm text-gray-600">Regular Users</p>
-                  <p className="text-2xl font-bold text-gray-900">{userStats.user + userStats.null}</p>
+                  <p className="text-2xl font-bold text-gray-900">{userStats.user + (userStats.external || 0) + userStats.null}</p>
                 </div>
               </div>
             </div>
@@ -389,12 +434,17 @@ const AdminUsersManagement = () => {
             <Search className="w-4 h-4 text-gray-500" />
             <input
               type="text"
-              placeholder="Search users by name or email..."
+              placeholder="Search users by name, email, or domain (e.g., @company.com)..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
+          {debouncedSearchTerm && (
+            <p className="text-sm text-gray-500 mt-2">
+              Searching for: "{debouncedSearchTerm}" ({totalUsers} result{totalUsers !== 1 ? 's' : ''})
+            </p>
+          )}
         </div>
 
         {/* Users Table */}
@@ -418,78 +468,79 @@ const AdminUsersManagement = () => {
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
-                {filteredUsers.map((userItem) => (
-                  <tr 
-                    key={userItem.id} 
-                    className="hover:bg-gray-50"
-                    onMouseEnter={() => prefetchUser(userItem.id)}
-                  >
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="flex items-center">
-                        <div>
-                          <div className="text-sm font-medium text-gray-900">
-                            {userItem.first_name || userItem.last_name
-                              ? `${userItem.first_name || ''} ${userItem.last_name || ''}`.trim()
-                              : ''}
-                          </div>
-                          <div className="text-sm text-gray-500">{userItem.email}</div>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <span
-                        className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getRoleBadgeColor(
-                          userItem.role
-                        )}`}
-                      >
-                        {userItem.role || 'user'}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      {formatDate(userItem.created_at)}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                      <div className="flex space-x-2">
-                        <button
-                          onClick={() => handleEditUser(userItem)}
-                          className="px-3 py-1 text-sm bg-blue-100 text-blue-800 rounded-md hover:bg-blue-200 flex items-center space-x-1"
-                        >
-                          <Edit className="w-4 h-4" />
-                          <span>Edit</span>
-                        </button>
-                        {role === 'admin' && userItem.id !== user?.id && (
-                          <button
-                            onClick={() => {
-                              setUserToDelete(userItem);
-                              setShowDeleteConfirm(true);
-                            }}
-                            className="px-3 py-1 text-sm bg-red-100 text-red-800 rounded-md hover:bg-red-200 flex items-center space-x-1"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                            <span>Delete</span>
-                          </button>
-                        )}
+                {isLoading && debouncedSearchTerm ? (
+                  // Show loading indicator in table during search (not full skeleton)
+                  <tr>
+                    <td colSpan="4" className="px-6 py-12 text-center">
+                      <div className="flex flex-col items-center gap-3">
+                        <RefreshCw className="w-6 h-6 text-blue-600 animate-spin" />
+                        <p className="text-gray-600">Searching users...</p>
                       </div>
                     </td>
                   </tr>
-                ))}
+                ) : filteredUsers.length === 0 ? (
+                  <tr>
+                    <td colSpan="4" className="px-6 py-12 text-center text-gray-500">
+                      {debouncedSearchTerm ? `No users found matching "${debouncedSearchTerm}"` : 'No users yet'}
+                    </td>
+                  </tr>
+                ) : (
+                  filteredUsers.map((userItem) => (
+                    <tr 
+                      key={userItem.id} 
+                      className="hover:bg-gray-50"
+                      onMouseEnter={() => prefetchUser(userItem.id)}
+                    >
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div className="flex items-center">
+                          <div>
+                            <div className="text-sm font-medium text-gray-900">
+                              {userItem.first_name || userItem.last_name
+                                ? `${userItem.first_name || ''} ${userItem.last_name || ''}`.trim()
+                                : ''}
+                            </div>
+                            <div className="text-sm text-gray-500">{userItem.email}</div>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <span
+                          className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getRoleBadgeColor(
+                            userItem.role
+                          )}`}
+                        >
+                          {userItem.role || 'user'}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                        {formatDate(userItem.created_at)}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                        <div className="flex space-x-2">
+                          <button
+                            onClick={() => handleEditUser(userItem)}
+                            className="px-3 py-1 text-sm bg-blue-100 text-blue-800 rounded-md hover:bg-blue-200 flex items-center space-x-1"
+                          >
+                            <Edit className="w-4 h-4" />
+                            <span>Edit</span>
+                          </button>
+                          {role === 'admin' && userItem.id !== user?.id && (
+                            <button
+                              onClick={() => handleDeleteClick(userItem)}
+                              className="px-3 py-1 text-sm bg-red-100 text-red-800 rounded-md hover:bg-red-200 flex items-center space-x-1"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                              <span>Delete</span>
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>
-
-          {filteredUsers.length === 0 && (
-            <div className="text-center py-12">
-              <Users className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-              <h3 className="text-lg font-medium text-gray-900 mb-2">
-                {searchTerm ? 'No users found' : 'No users yet'}
-              </h3>
-              <p className="text-gray-500">
-                {searchTerm
-                  ? 'Try adjusting your search terms'
-                  : 'Get started by adding your first user'}
-              </p>
-            </div>
-          )}
         </div>
 
         {/* Pagination */}
@@ -591,7 +642,16 @@ const AdminUsersManagement = () => {
                     type="email"
                     required
                     value={formData.email}
-                    onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                    onChange={(e) => {
+                      const email = e.target.value;
+                      // Auto-assign "external" role if email ends with @resales.gmgva.com or @gmgva.com
+                      let newRole = formData.role;
+                      const emailLower = email.toLowerCase();
+                      if (emailLower.endsWith('@resales.gmgva.com') || emailLower.endsWith('@gmgva.com')) {
+                        newRole = 'external';
+                      }
+                      setFormData({ ...formData, email, role: newRole });
+                    }}
                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                   />
                 </div>
@@ -657,6 +717,7 @@ const AdminUsersManagement = () => {
                     <option value="staff">Staff</option>
                     <option value="admin">Admin</option>
                     <option value="accounting">Accounting</option>
+                    <option value="external">External</option>
                   </select>
                 </div>
 
@@ -702,19 +763,50 @@ const AdminUsersManagement = () => {
                 <AlertTriangle className="w-8 h-8 text-red-600" />
                 <h2 className="text-xl font-bold text-gray-900">Confirm Delete</h2>
               </div>
-              <p className="text-gray-600 mb-6">
-                Are you sure you want to delete the user "{userToDelete.email}"? This action cannot be undone.
-              </p>
+              
+              {isCheckingApplications ? (
+                <div className="flex items-center gap-2 text-gray-600 mb-6">
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                  <span>Checking for applications...</span>
+                </div>
+              ) : (
+                <>
+                  <p className="text-gray-600 mb-4">
+                    Are you sure you want to delete the user "{userToDelete.email}"? This action cannot be undone.
+                  </p>
+                  
+                  {userToDelete.role === 'external' && userApplicationCount > 0 && (
+                    <div className="bg-yellow-50 border border-yellow-200 rounded-md p-4 mb-6">
+                      <div className="flex items-start gap-2">
+                        <AlertTriangle className="w-5 h-5 text-yellow-600 mt-0.5 flex-shrink-0" />
+                        <div>
+                          <p className="text-sm font-medium text-yellow-800 mb-1">
+                            Warning: This user has {userApplicationCount} application{userApplicationCount !== 1 ? 's' : ''}
+                          </p>
+                          <p className="text-sm text-yellow-700">
+                            All applications associated with this external user will also be deleted (soft delete).
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+              
               <div className="flex justify-end space-x-3">
                 <button
-                  onClick={() => setShowDeleteConfirm(false)}
+                  onClick={() => {
+                    setShowDeleteConfirm(false);
+                    setUserToDelete(null);
+                    setUserApplicationCount(0);
+                  }}
                   className="px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50"
                 >
                   Cancel
                 </button>
                 <button
                   onClick={handleDeleteUser}
-                  disabled={deleteUserMutation.isPending}
+                  disabled={deleteUserMutation.isPending || isCheckingApplications}
                   className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 flex items-center space-x-2 disabled:opacity-50"
                 >
                   {deleteUserMutation.isPending && (

@@ -124,27 +124,11 @@ export default async function handler(req, res) {
       downloadLinks: downloadLinks,
       customSubject: `Lender Questionnaire Ready - ${application.property_address}`,
       customTitle: 'Lender Questionnaire Ready',
-      customMessage: `Your lender questionnaire for <strong>${application.property_address}</strong> has been completed and is ready for download.`
+      customMessage: `Your lender questionnaire for <strong>${application.property_address}</strong> has been completed and is ready for download.`,
+      comments: application.comments || null
     });
 
-    // Create notification record
-    const { error: notifError } = await supabase
-      .from('notifications')
-      .insert({
-        application_id: applicationId,
-        recipient_email: application.submitter_email,
-        recipient_name: application.submitter_name,
-        notification_type: 'application_approved',
-        subject: `Lender Questionnaire Ready - ${application.property_address}`,
-        message: `Your lender questionnaire for ${application.property_address} has been completed and is ready for download.`,
-        status: 'sent',
-        sent_at: new Date().toISOString(),
-      });
-
-    if (notifError) {
-      console.error('Failed to create notification:', notifError);
-      // Don't fail the request if notification creation fails
-    }
+    // Notification creation removed - no longer needed
 
     // Update application status
     const { error: updateError } = await supabase

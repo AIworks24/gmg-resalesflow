@@ -31,10 +31,24 @@ export function AdminAuthProvider({ children }) {
 
     if (isAdminRoute && !isLoginPage && !isAuthenticated()) {
       // Redirect to admin login if accessing admin routes without auth
-      router.push('/admin/login');
+      // Preserve applicationId if present in current URL
+      const applicationId = router.query.applicationId;
+      if (applicationId) {
+        router.push(`/admin/login?applicationId=${applicationId}`);
+      } else {
+        router.push('/admin/login');
+      }
     } else if (isLoginPage && isAuthenticated()) {
-      // Redirect to dashboard if already authenticated and on login page
-      router.push('/admin/dashboard');
+      // Redirect if already authenticated and on login page
+      // Check if there's an applicationId in query params for redirect
+      const applicationId = router.query.applicationId;
+      if (applicationId) {
+        // Redirect to applications page with applicationId to open modal
+        router.push(`/admin/applications?applicationId=${applicationId}`);
+      } else {
+        // Default redirect to dashboard
+        router.push('/admin/dashboard');
+      }
     }
   }, [router, isInitialized, isLoading, isAuthenticated]);
 

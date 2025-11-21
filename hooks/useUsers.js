@@ -12,11 +12,11 @@ export const userKeys = {
   search: (term) => [...userKeys.all, 'search', term],
 };
 
-// Get users with pagination
-export function useUsers(page = 1, limit = 10) {
+// Get users with pagination and optional search
+export function useUsers(page = 1, limit = 10, search = '') {
   return useQuery({
-    queryKey: userKeys.list({ page, limit }),
-    queryFn: ({ signal }) => usersApi.getUsers({ signal, page, limit }),
+    queryKey: userKeys.list({ page, limit, search }),
+    queryFn: ({ signal }) => usersApi.getUsers({ signal, page, limit, search }),
     staleTime: 2 * 60 * 1000, // 2 minutes
     gcTime: 10 * 60 * 1000, // 10 minutes
     retry: (failureCount, error) => {
