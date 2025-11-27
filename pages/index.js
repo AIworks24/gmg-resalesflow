@@ -634,6 +634,21 @@ const SubmitterInfoStep = React.memo(({ formData, handleInputChange, hoaProperti
             Public Offering Statement selected — transaction details will be skipped. You will proceed directly to payment.
           </div>
         )}
+        {formData.submitterType === 'lender_questionnaire' && (
+          <div className='mt-4 p-4 rounded-lg border bg-blue-50 border-blue-200'>
+            <div className='flex items-start'>
+              <InfoIcon className='h-5 w-5 mt-0.5 mr-2 text-blue-600' />
+              <div className='flex-1'>
+                <h4 className='font-medium text-blue-900'>
+                  Lender Questionnaire Selected
+                </h4>
+                <p className='text-sm mt-1 text-blue-700'>
+                  You will be able to upload your own questionnaire after payment.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
     <div className='grid grid-cols-1 md:grid-cols-3 gap-6'>

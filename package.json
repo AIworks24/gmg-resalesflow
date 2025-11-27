@@ -34,7 +34,6 @@
     "pdf-lib": "^1.17.1",
     "pdf-parse": "^1.1.4",
     "pdfjs-dist": "^5.3.31",
-    "puppeteer": "^24.29.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-dropzone": "^14.2.3",
@@ -42,6 +41,7 @@
     "react-joyride": "^2.7.2",
     "resend": "^4.6.0",
     "stripe": "^18.3.0",
+    "supabase": "^2.63.1",
     "swr": "^2.3.6",
     "zustand": "^5.0.6"
   },

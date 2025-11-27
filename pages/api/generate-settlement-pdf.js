@@ -298,13 +298,12 @@ export default async function handler(req, res) {
 </body>
 </html>`;
 
-    // Generate PDF from HTML using Puppeteer
+    // Generate PDF from HTML using react-pdf/renderer
     const filename = `${documentType.replace(/[^a-zA-Z0-9]/g, '_')}_${application.property_address.replace(/[^a-zA-Z0-9]/g, '_')}.pdf`;
     
-    const { htmlToPdf } = require('../../lib/puppeteerPdfService');
+    const { htmlToPdf } = await import('../../lib/reactPdfService.js');
     const pdfBuffer = await htmlToPdf(htmlContent, {
-      format: 'Letter',
-      printBackground: true
+      format: 'LETTER'
     });
     
     // Validate PDF buffer is not empty
