@@ -368,7 +368,9 @@ const AdminApplications = ({ userRole }) => {
 
   const isApplicationUrgent = (application) => {
     // Skip completed applications
-    if (application.notifications?.some(n => n.notification_type === 'application_approved')) {
+    const hasNotificationSent = application.notifications?.some(n => n.notification_type === 'application_approved');
+    const hasEmailCompletedAt = !!application.email_completed_at;
+    if (hasNotificationSent || hasEmailCompletedAt) {
       return false;
     }
 
@@ -641,15 +643,19 @@ const AdminApplications = ({ userRole }) => {
           ['under_review', 'compliance_pending', 'compliance_completed', 'documents_generated', 'awaiting_property_owner_response'].includes(app.status)
         );
       } else if (selectedStatus === 'pending') {
-        // Pending = applications without approval notifications
-        filtered = filtered.filter(app =>
-          !app.notifications?.some(n => n.notification_type === 'application_approved')
-        );
+        // Pending = applications without approval notifications or email completion
+        filtered = filtered.filter(app => {
+          const hasNotificationSent = app.notifications?.some(n => n.notification_type === 'application_approved');
+          const hasEmailCompletedAt = !!app.email_completed_at;
+          return !hasNotificationSent && !hasEmailCompletedAt;
+        });
       } else if (selectedStatus === 'completed') {
-        // Completed = applications with approval notifications
-        filtered = filtered.filter(app =>
-          app.notifications?.some(n => n.notification_type === 'application_approved')
-        );
+        // Completed = applications with approval notifications or email completion
+        filtered = filtered.filter(app => {
+          const hasNotificationSent = app.notifications?.some(n => n.notification_type === 'application_approved');
+          const hasEmailCompletedAt = !!app.email_completed_at;
+          return hasNotificationSent || hasEmailCompletedAt;
+        });
       } else {
         filtered = filtered.filter(app => app.status === selectedStatus);
       }
@@ -915,6 +921,8 @@ const AdminApplications = ({ userRole }) => {
     const resaleStatus = resaleForm?.status || 'not_started';
     const hasPDF = application.pdf_url;
     const hasNotificationSent = application.notifications?.some(n => n.notification_type === 'application_approved');
+    const hasEmailCompletedAt = !!application.email_completed_at;
+    const hasEmailSent = hasNotificationSent || hasEmailCompletedAt;
 
     if ((inspectionStatus === 'not_created' || inspectionStatus === 'not_started') && 
         (resaleStatus === 'not_created' || resaleStatus === 'not_started')) {
@@ -929,7 +937,7 @@ const AdminApplications = ({ userRole }) => {
       return { step: 3, text: 'Generate PDF', color: 'bg-orange-100 text-orange-800' };
     }
     
-    if (!hasNotificationSent) {
+    if (!hasEmailSent) {
       return { step: 4, text: 'Send Email', color: 'bg-purple-100 text-purple-800' };
     }
     

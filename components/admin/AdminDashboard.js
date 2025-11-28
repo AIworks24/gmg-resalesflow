@@ -581,11 +581,13 @@ const AdminDashboard = ({ userRole }) => {
       }
       
       const hasNotificationSent = application.notifications?.some(n => n.notification_type === 'application_approved');
+      const hasEmailCompletedAt = !!application.email_completed_at;
+      const hasEmailSent = hasNotificationSent || hasEmailCompletedAt;
 
       return {
         settlement: settlementFormStatus,
         pdf: pdfStatus,
-        email: hasNotificationSent ? 'completed' : 'not_started'
+        email: hasEmailSent ? 'completed' : 'not_started'
       };
     } else {
       // Standard application - inspection and resale forms
@@ -611,12 +613,14 @@ const AdminDashboard = ({ userRole }) => {
       }
       
       const hasNotificationSent = application.notifications?.some(n => n.notification_type === 'application_approved');
+      const hasEmailCompletedAt = !!application.email_completed_at;
+      const hasEmailSent = hasNotificationSent || hasEmailCompletedAt;
 
       return {
         inspection: inspectionFormStatus,
         resale: resaleFormStatus,
         pdf: pdfStatus,
-        email: hasNotificationSent ? 'completed' : 'not_started'
+        email: hasEmailSent ? 'completed' : 'not_started'
       };
     }
   };

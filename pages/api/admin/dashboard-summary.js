@@ -81,8 +81,9 @@ export default async function handler(req, res) {
     const completed = applications.filter(app => {
       // Check both notification and application status
       const hasApprovalEmail = app.notifications?.some(n => n.notification_type === 'application_approved');
+      const hasEmailCompletedAt = !!app.email_completed_at;
       const isCompletedStatus = app.status === 'completed';
-      return hasApprovalEmail || isCompletedStatus;
+      return hasApprovalEmail || hasEmailCompletedAt || isCompletedStatus;
     }).length;
     const pending = total - completed;
 
@@ -102,8 +103,9 @@ export default async function handler(req, res) {
     applications.forEach(app => {
       // Skip completed applications
       const hasApprovalEmail = app.notifications?.some(n => n.notification_type === 'application_approved');
+      const hasEmailCompletedAt = !!app.email_completed_at;
       const isCompletedStatus = app.status === 'completed';
-      if (hasApprovalEmail || isCompletedStatus) {
+      if (hasApprovalEmail || hasEmailCompletedAt || isCompletedStatus) {
         return;
       }
 
@@ -132,15 +134,18 @@ export default async function handler(req, res) {
     // Emails sent
     const emailsSent = applications.filter(app => {
       const hasApprovalEmail = app.notifications?.some(n => n.notification_type === 'application_approved');
+      const hasEmailCompletedAt = !!app.email_completed_at;
       const isCompletedStatus = app.status === 'completed';
-      return hasApprovalEmail || isCompletedStatus;
+      return hasApprovalEmail || hasEmailCompletedAt || isCompletedStatus;
     }).length;
 
     // Helper function to determine workflow step
     const getWorkflowStep = (application) => {
       const forms = application.property_owner_forms || [];
       const hasPDF = application.pdf_url;
-      const hasEmail = application.notifications?.some(n => n.notification_type === 'application_approved');
+      const hasNotificationSent = application.notifications?.some(n => n.notification_type === 'application_approved');
+      const hasEmailCompletedAt = !!application.email_completed_at;
+      const hasEmail = hasNotificationSent || hasEmailCompletedAt;
 
       if (forms.length === 0) {
         return { step: 1, text: 'Forms Required' };
@@ -192,8 +197,9 @@ export default async function handler(req, res) {
         name: 'Send Email', 
         count: applications.filter(app => {
           const hasApprovalEmail = app.notifications?.some(n => n.notification_type === 'application_approved');
+          const hasEmailCompletedAt = !!app.email_completed_at;
           const isCompletedStatus = app.status === 'completed';
-          return app.pdf_url && !hasApprovalEmail && !isCompletedStatus;
+          return app.pdf_url && !hasApprovalEmail && !hasEmailCompletedAt && !isCompletedStatus;
         }).length,
         color: 'bg-purple-500'
       },
