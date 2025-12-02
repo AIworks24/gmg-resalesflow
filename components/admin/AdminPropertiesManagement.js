@@ -37,6 +37,23 @@ import {
 import AdminLayout from './AdminLayout';
 import useAdminAuthStore from '../../stores/adminAuthStore';
 
+// Helper function to normalize location value for dropdown
+const normalizeLocation = (location) => {
+  if (!location) return '';
+  const locationUpper = location.toUpperCase();
+  if (locationUpper.includes('VA') || locationUpper.includes('VIRGINIA')) {
+    return 'Virginia';
+  }
+  if (locationUpper.includes('NC') || locationUpper.includes('NORTH CAROLINA')) {
+    return 'North Carolina';
+  }
+  // If it's already one of our valid values, return it
+  if (location === 'Virginia' || location === 'North Carolina') {
+    return location;
+  }
+  return '';
+};
+
 const AdminPropertiesManagement = () => {
   const { role: userRole } = useAdminAuthStore();
   const [searchTerm, setSearchTerm] = useState('');
@@ -189,7 +206,7 @@ const AdminPropertiesManagement = () => {
     
     setFormData({
       name: property.name || '',
-      location: property.location || '',
+      location: normalizeLocation(property.location),
       property_owner_name: property.property_owner_name || '',
       property_owner_email: property.property_owner_email || '',
       property_owner_phone: property.property_owner_phone || '',
@@ -271,8 +288,8 @@ const AdminPropertiesManagement = () => {
         propertyId = selectedProperty.id;
       }
 
-      // Fetch the updated property directly from database to bypass cache
-      // This ensures we have the latest data including allow_public_offering
+      // Fetch the updated/new property directly from database to bypass cache
+      // This ensures we have the latest data including all fields
       const { data: updatedProperty, error: fetchError } = await supabase
         .from('hoa_properties')
         .select('*')
@@ -286,28 +303,60 @@ const AdminPropertiesManagement = () => {
       // Close modal first
       setShowModal(false);
       
-      // Force SWR to revalidate by fetching with bypassCache parameter
-      // This bypasses both SWR cache and Redis cache
-      const refreshUrl = `/api/admin/hoa-properties?page=${currentPage}&pageSize=${pageSize}&search=${encodeURIComponent(debouncedSearchTerm)}&bypassCache=true&_t=${Date.now()}`;
-      try {
-        const freshResponse = await fetch(refreshUrl);
-        const freshData = await freshResponse.json();
-        
-        // Update SWR cache with fresh data
-        mutate(freshData, false);
-      } catch (refreshError) {
-        console.warn('Could not refresh properties cache:', refreshError);
-        // Fallback: just revalidate normally
-        mutate();
+      // For new properties, navigate to page 1 and clear search to ensure visibility
+      if (modalMode === 'add') {
+        setCurrentPage(1);
+        setSearchTerm('');
+        setDebouncedSearchTerm('');
       }
       
-      // Also optimistically update the cache with fresh property data if available
-      if (updatedProperty && swrData?.properties) {
+      // Invalidate Redis cache pattern for all property caches for this user
+      // This ensures no stale cache data is returned
+      try {
+        await deleteCachePattern(`admin:hoa_properties:*`);
+      } catch (cacheError) {
+        console.warn('Could not invalidate cache pattern:', cacheError);
+        // Continue even if cache invalidation fails
+      }
+      
+      // For new properties, optimistically add to list for immediate feedback
+      if (modalMode === 'add' && updatedProperty && swrData?.properties) {
+        // Add the new property to the beginning of the list
+        const newProperties = [updatedProperty, ...swrData.properties];
+        // Update total count
+        const newTotalCount = (swrData.totalCount || 0) + 1;
+        // Optimistically update the cache to show the new property immediately
+        mutate({ 
+          ...swrData, 
+          properties: newProperties,
+          totalCount: newTotalCount
+        }, false);
+      } else if (modalMode === 'edit' && updatedProperty && swrData?.properties) {
+        // For edits, replace the existing property in the list
         const updatedProperties = swrData.properties.map(p => 
           p.id === propertyId ? updatedProperty : p
         );
         // Update cache optimistically
         mutate({ ...swrData, properties: updatedProperties }, false);
+      }
+      
+      // Force SWR to revalidate by fetching with bypassCache parameter
+      // Use page 1 and empty search for new properties to ensure they're visible
+      const refreshPage = modalMode === 'add' ? 1 : currentPage;
+      const refreshSearch = modalMode === 'add' ? '' : debouncedSearchTerm;
+      const refreshUrl = `/api/admin/hoa-properties?page=${refreshPage}&pageSize=${pageSize}&search=${encodeURIComponent(refreshSearch)}&bypassCache=true&_t=${Date.now()}`;
+      
+      try {
+        const freshResponse = await fetch(refreshUrl);
+        if (!freshResponse.ok) throw new Error('Failed to refresh');
+        const freshData = await freshResponse.json();
+        
+        // Update SWR cache with fresh data (this will replace the optimistic update with correct sorted data)
+        mutate(freshData, false);
+      } catch (refreshError) {
+        console.warn('Could not refresh properties cache:', refreshError);
+        // Fallback: force revalidation which will trigger a fresh fetch
+        mutate();
       }
       
       // Show success message
@@ -1139,14 +1188,16 @@ const AdminPropertiesManagement = () => {
                     <label className="block text-sm font-medium text-gray-700 mb-1">
                       Location
                     </label>
-                    <input
-                      type="text"
+                    <select
                       required
                       value={formData.location}
                       onChange={(e) => setFormData({...formData, location: e.target.value})}
                       className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      placeholder="e.g., Richmond, VA 23233"
-                    />
+                    >
+                      <option value="">Select a state</option>
+                      <option value="Virginia">Virginia</option>
+                      <option value="North Carolina">North Carolina</option>
+                    </select>
                   </div>
                 </div>
 

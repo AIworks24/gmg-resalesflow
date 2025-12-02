@@ -32,6 +32,23 @@ import { useRouter } from 'next/router';
 import { mapFormDataToPDFFields } from '../../lib/pdfFieldMapper';
 import AdminLayout from './AdminLayout';
 
+// Helper function to normalize location value for dropdown
+const normalizeLocation = (location) => {
+  if (!location) return '';
+  const locationUpper = location.toUpperCase();
+  if (locationUpper.includes('VA') || locationUpper.includes('VIRGINIA')) {
+    return 'Virginia';
+  }
+  if (locationUpper.includes('NC') || locationUpper.includes('NORTH CAROLINA')) {
+    return 'North Carolina';
+  }
+  // If it's already one of our valid values, return it
+  if (location === 'Virginia' || location === 'North Carolina') {
+    return location;
+  }
+  return '';
+};
+
 const AdminDashboard = ({ userRole }) => {
   const [applications, setApplications] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -1491,7 +1508,7 @@ const AdminDashboard = ({ userRole }) => {
       setSelectedProperty(data);
       const formData = {
         name: data.name || '',
-        location: data.location || '',
+        location: normalizeLocation(data.location),
         property_owner_name: data.property_owner_name || '',
         property_owner_email: data.property_owner_email || '',
         property_owner_phone: data.property_owner_phone || '',
@@ -1888,14 +1905,16 @@ const AdminDashboard = ({ userRole }) => {
               <label className='block text-sm font-medium text-gray-700 mb-1'>
                 Location
               </label>
-              <input
-                type='text'
+              <select
                 required
                 value={propertyFormData.location}
                 onChange={(e) => setPropertyFormData({...propertyFormData, location: e.target.value})}
                 className='w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500'
-                placeholder='e.g., Richmond, VA 23233'
-              />
+              >
+                <option value="">Select a state</option>
+                <option value="Virginia">Virginia</option>
+                <option value="North Carolina">North Carolina</option>
+              </select>
             </div>
           </div>
 
