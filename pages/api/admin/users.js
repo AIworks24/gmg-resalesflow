@@ -21,7 +21,7 @@ export default async function handler(req, res) {
     const { data: profile } = await supabase
       .from('profiles')
       .select('role')
-      .eq('email', user.email)
+      .eq('id', user.id)
       .single();
 
     if (!profile || profile.role !== 'admin') {
