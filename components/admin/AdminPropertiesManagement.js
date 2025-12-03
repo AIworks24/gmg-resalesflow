@@ -34,6 +34,8 @@ import {
   linkProperties, 
   unlinkProperties 
 } from '../../lib/multiCommunityUtils';
+import { parseEmails, formatEmailsForStorage, validateEmails } from '../../lib/emailUtils';
+import MultiEmailInput from '../common/MultiEmailInput';
 import AdminLayout from './AdminLayout';
 import useAdminAuthStore from '../../stores/adminAuthStore';
 
@@ -91,7 +93,7 @@ const AdminPropertiesManagement = () => {
     name: '',
     location: '',
     property_owner_name: '',
-    property_owner_email: '',
+    property_owner_email: [], // Changed to array for multiple emails
     property_owner_phone: '',
     management_contact: '',
     phone: '',
@@ -174,7 +176,7 @@ const AdminPropertiesManagement = () => {
       name: '',
       location: '',
       property_owner_name: '',
-      property_owner_email: '',
+      property_owner_email: [], // Changed to array for multiple emails
       property_owner_phone: '',
       management_contact: '',
       phone: '',
@@ -208,7 +210,7 @@ const AdminPropertiesManagement = () => {
       name: property.name || '',
       location: normalizeLocation(property.location),
       property_owner_name: property.property_owner_name || '',
-      property_owner_email: property.property_owner_email || '',
+      property_owner_email: parseEmails(property.property_owner_email), // Parse emails into array
       property_owner_phone: property.property_owner_phone || '',
       management_contact: property.management_contact || '',
       phone: property.phone || '',
@@ -228,6 +230,16 @@ const AdminPropertiesManagement = () => {
     e.preventDefault();
     
     try {
+      // Validate emails before submission
+      const emailValidation = validateEmails(formData.property_owner_email);
+      if (!emailValidation.valid) {
+        showSnackbar(`Email validation error: ${emailValidation.errors.join(', ')}`, 'error');
+        return;
+      }
+      
+      // Format emails for storage (comma-separated string)
+      const emailsForStorage = formatEmailsForStorage(formData.property_owner_email);
+      
       let propertyId;
       
       if (modalMode === 'add') {
@@ -238,7 +250,7 @@ const AdminPropertiesManagement = () => {
             name: formData.name,
             location: formData.location,
             property_owner_name: formData.property_owner_name,
-            property_owner_email: formData.property_owner_email,
+            property_owner_email: emailsForStorage,
             property_owner_phone: formData.property_owner_phone,
             management_contact: formData.management_contact,
             phone: formData.phone,
@@ -267,7 +279,7 @@ const AdminPropertiesManagement = () => {
             name: formData.name,
             location: formData.location,
             property_owner_name: formData.property_owner_name,
-            property_owner_email: formData.property_owner_email,
+            property_owner_email: emailsForStorage,
             property_owner_phone: formData.property_owner_phone,
             management_contact: formData.management_contact,
             phone: formData.phone,
@@ -1222,12 +1234,10 @@ const AdminPropertiesManagement = () => {
                       <label className="block text-sm font-medium text-gray-700 mb-1">
                         Owner Email
                       </label>
-                      <input
-                        type="email"
-                        required
+                      <MultiEmailInput
                         value={formData.property_owner_email}
-                        onChange={(e) => setFormData({...formData, property_owner_email: e.target.value})}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        onChange={(emails) => setFormData({...formData, property_owner_email: emails})}
+                        required
                       />
                     </div>
 

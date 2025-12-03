@@ -30,6 +30,8 @@ import {
 } from 'lucide-react';
 import { useRouter } from 'next/router';
 import { mapFormDataToPDFFields } from '../../lib/pdfFieldMapper';
+import { parseEmails, formatEmailsForStorage, validateEmails } from '../../lib/emailUtils';
+import MultiEmailInput from '../common/MultiEmailInput';
 import AdminLayout from './AdminLayout';
 
 // Helper function to normalize location value for dropdown
@@ -76,7 +78,7 @@ const AdminDashboard = ({ userRole }) => {
     name: '',
     location: '',
     property_owner_name: '',
-    property_owner_email: '',
+    property_owner_email: [], // Changed to array for multiple emails
     property_owner_phone: '',
     management_contact: '',
     phone: '',
@@ -1510,7 +1512,7 @@ const AdminDashboard = ({ userRole }) => {
         name: data.name || '',
         location: normalizeLocation(data.location),
         property_owner_name: data.property_owner_name || '',
-        property_owner_email: data.property_owner_email || '',
+        property_owner_email: parseEmails(data.property_owner_email), // Parse emails into array
         property_owner_phone: data.property_owner_phone || '',
         management_contact: data.management_contact || '',
         phone: data.phone || '',
@@ -1602,6 +1604,16 @@ const AdminDashboard = ({ userRole }) => {
     e.preventDefault();
     
     try {
+      // Validate emails before submission
+      const emailValidation = validateEmails(propertyFormData.property_owner_email);
+      if (!emailValidation.valid) {
+        showSnackbar(`Email validation error: ${emailValidation.errors.join(', ')}`, 'error');
+        return;
+      }
+      
+      // Format emails for storage (comma-separated string)
+      const emailsForStorage = formatEmailsForStorage(propertyFormData.property_owner_email);
+      
       console.log('Saving property data:', propertyFormData);
       console.log('Property ID:', selectedProperty.id);
       
@@ -1610,6 +1622,7 @@ const AdminDashboard = ({ userRole }) => {
         .from('hoa_properties')
         .update({
           ...propertyFormData,
+          property_owner_email: emailsForStorage, // Use formatted emails
           updated_at: new Date().toISOString()
         })
         .eq('id', selectedProperty.id)
@@ -1939,12 +1952,10 @@ const AdminDashboard = ({ userRole }) => {
                 <label className='block text-sm font-medium text-gray-700 mb-1'>
                   Owner Email
                 </label>
-                <input
-                  type='email'
-                  required
+                <MultiEmailInput
                   value={propertyFormData.property_owner_email}
-                  onChange={(e) => setPropertyFormData({...propertyFormData, property_owner_email: e.target.value})}
-                  className='w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500'
+                  onChange={(emails) => setPropertyFormData({...propertyFormData, property_owner_email: emails})}
+                  required
                 />
               </div>
 
