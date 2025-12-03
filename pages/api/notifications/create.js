@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import { sendPropertyManagerNotificationEmail } from '../../../lib/emailService';
+import { parseEmails } from '../../../lib/emailUtils';
 
 /**
  * Format application type for display in notifications
@@ -159,81 +160,95 @@ export async function createNotifications(applicationId, supabaseClient) {
 
     const notifications = [];
 
-    // 1. Notify Property Owner (if they have an email - even if they don't have an account)
+    // 1. Notify Property Owner(s) - support multiple emails
     // NOTE: Property owners ARE staff/admin users, so they use admin accounts
     if (application.hoa_properties?.property_owner_email) {
-      const originalPropertyOwnerEmail = application.hoa_properties.property_owner_email;
-      let propertyOwnerEmail = originalPropertyOwnerEmail;
+      const originalPropertyOwnerEmails = application.hoa_properties.property_owner_email;
       
-      // Check if email starts with 'owner.' - these are staff/admin accounts, skip email sending
-      const hasOwnerPrefix = propertyOwnerEmail.startsWith('owner.');
+      // Parse emails (handles both single email string and comma-separated string)
+      const propertyOwnerEmails = parseEmails(originalPropertyOwnerEmails);
       
-      // Remove "owner." prefix for processing (but remember it for email skipping)
-      propertyOwnerEmail = propertyOwnerEmail.replace(/^owner\./, '');
-      
-      // Skip fake/placeholder emails - don't create notifications for them
-      if (isFakeEmail(propertyOwnerEmail)) {
-        console.log(`[Notifications] Skipping fake/placeholder email for property owner: ${propertyOwnerEmail}`);
+      if (propertyOwnerEmails.length === 0) {
+        console.log(`[Notifications] No valid property owner emails found for application ${applicationId}`);
       } else {
-        // Find user ID by email - try exact match first
-        let { data: ownerProfile } = await supabaseClient
-          .from('profiles')
-          .select('id, email, role')
-          .eq('email', propertyOwnerEmail)
-          .single();
-
-        // If not found, try case-insensitive search
-        if (!ownerProfile) {
-          const { data: profiles } = await supabaseClient
+        console.log(`[Notifications] Processing ${propertyOwnerEmails.length} property owner email(s) for application ${applicationId}`);
+        
+        // Process each email
+        for (const originalEmail of propertyOwnerEmails) {
+          let propertyOwnerEmail = originalEmail;
+          
+          // Check if email starts with 'owner.' - these are staff/admin accounts, skip email sending
+          const hasOwnerPrefix = propertyOwnerEmail.startsWith('owner.');
+          
+          // Remove "owner." prefix for processing (but remember it for email skipping)
+          propertyOwnerEmail = propertyOwnerEmail.replace(/^owner\./, '');
+          
+          // Skip fake/placeholder emails - don't create notifications for them
+          if (isFakeEmail(propertyOwnerEmail)) {
+            console.log(`[Notifications] Skipping fake/placeholder email for property owner: ${propertyOwnerEmail}`);
+            continue;
+          }
+          
+          // Find user ID by email - try exact match first
+          let { data: ownerProfile } = await supabaseClient
             .from('profiles')
             .select('id, email, role')
-            .ilike('email', propertyOwnerEmail);
-          
-          if (profiles && profiles.length > 0) {
-            ownerProfile = profiles[0];
+            .eq('email', propertyOwnerEmail)
+            .single();
+
+          // If not found, try case-insensitive search
+          if (!ownerProfile) {
+            const { data: profiles } = await supabaseClient
+              .from('profiles')
+              .select('id, email, role')
+              .ilike('email', propertyOwnerEmail);
+            
+            if (profiles && profiles.length > 0) {
+              ownerProfile = profiles[0];
+            }
           }
+
+          // If we found a profile, use the profile's current email instead of the stored property email
+          // This ensures we use the user's current email, not an old one stored in the property
+          if (ownerProfile && ownerProfile.email) {
+            console.log(`[Notifications] Found profile for property owner. Using current email: ${ownerProfile.email} instead of stored: ${propertyOwnerEmail}`);
+            propertyOwnerEmail = ownerProfile.email;
+          }
+
+          // Format application type for display
+          const appTypeDisplay = formatApplicationType(application.application_type);
+          const packageDisplay = application.package_type === 'rush' ? 'Rush' : 'Standard';
+          
+          // Set explicit timestamps to ensure accurate "time ago" display
+          const now = new Date().toISOString();
+          
+          const notification = {
+            application_id: applicationId,
+            recipient_email: propertyOwnerEmail, // Already cleaned (owner. prefix removed above)
+            recipient_name: application.hoa_properties.property_owner_name || 'Property Owner',
+            recipient_user_id: ownerProfile?.id || null,
+            notification_type: 'new_application',
+            subject: `${appTypeDisplay} Application - ${application.property_address} | ${application.hoa_properties?.name || 'Unknown Property'}`,
+            message: `New ${appTypeDisplay.toLowerCase()} application received for ${application.property_address} in ${application.hoa_properties?.name || 'Unknown Property'}. Package: ${packageDisplay}. Submitter: ${application.submitter_name || 'Unknown'}.`,
+            status: 'unread',
+            is_read: false,
+            sent_at: now, // Explicitly set sent_at to current time
+            created_at: now, // Explicitly set created_at to current time
+            metadata: {
+              property_address: application.property_address,
+              hoa_name: application.hoa_properties?.name,
+              submitter_name: application.submitter_name,
+              submitter_type: application.submitter_type,
+              application_type: application.application_type,
+              package_type: application.package_type,
+              skip_email: hasOwnerPrefix, // Flag to skip email if original had 'owner.' prefix
+              original_email: originalEmail, // Store original for reference
+            },
+          };
+
+          notifications.push(notification);
+          console.log(`[Notifications] Added notification for property owner: ${propertyOwnerEmail} (original: ${originalEmail}, hasOwnerPrefix: ${hasOwnerPrefix})`);
         }
-
-        // If we found a profile, use the profile's current email instead of the stored property email
-        // This ensures we use the user's current email, not an old one stored in the property
-        if (ownerProfile && ownerProfile.email) {
-          console.log(`[Notifications] Found profile for property owner. Using current email: ${ownerProfile.email} instead of stored: ${propertyOwnerEmail}`);
-          propertyOwnerEmail = ownerProfile.email;
-        }
-
-        // Format application type for display
-        const appTypeDisplay = formatApplicationType(application.application_type);
-        const packageDisplay = application.package_type === 'rush' ? 'Rush' : 'Standard';
-        
-        // Set explicit timestamps to ensure accurate "time ago" display
-        const now = new Date().toISOString();
-        
-        const notification = {
-          application_id: applicationId,
-          recipient_email: propertyOwnerEmail, // Already cleaned (owner. prefix removed above)
-          recipient_name: application.hoa_properties.property_owner_name || 'Property Owner',
-          recipient_user_id: ownerProfile?.id || null,
-          notification_type: 'new_application',
-          subject: `${appTypeDisplay} Application - ${application.property_address} | ${application.hoa_properties?.name || 'Unknown Property'}`,
-          message: `New ${appTypeDisplay.toLowerCase()} application received for ${application.property_address} in ${application.hoa_properties?.name || 'Unknown Property'}. Package: ${packageDisplay}. Submitter: ${application.submitter_name || 'Unknown'}.`,
-          status: 'unread',
-          is_read: false,
-          sent_at: now, // Explicitly set sent_at to current time
-          created_at: now, // Explicitly set created_at to current time
-          metadata: {
-            property_address: application.property_address,
-            hoa_name: application.hoa_properties?.name,
-            submitter_name: application.submitter_name,
-            submitter_type: application.submitter_type,
-            application_type: application.application_type,
-            package_type: application.package_type,
-            skip_email: hasOwnerPrefix, // Flag to skip email if original had 'owner.' prefix
-            original_email: originalPropertyOwnerEmail, // Store original for reference
-          },
-        };
-
-        notifications.push(notification);
-        console.log(`[Notifications] Added notification for property owner: ${propertyOwnerEmail} (original: ${originalPropertyOwnerEmail}, hasOwnerPrefix: ${hasOwnerPrefix})`);
       }
     } else {
       console.log(`[Notifications] No property owner email found for application ${applicationId}`);
@@ -300,10 +315,13 @@ export async function createNotifications(applicationId, supabaseClient) {
             
             // Determine if this is a property owner or staff/admin
             // Compare emails (handle owner. prefix and case sensitivity)
-            const propertyOwnerEmail = application.hoa_properties?.property_owner_email?.replace(/^owner\./, '') || '';
+            // Support multiple property owner emails
+            const propertyOwnerEmails = parseEmails(application.hoa_properties?.property_owner_email || '');
             const notificationEmail = notification.recipient_email?.replace(/^owner\./, '') || '';
-            const isPropertyOwner = propertyOwnerEmail && notificationEmail && 
-              propertyOwnerEmail.toLowerCase() === notificationEmail.toLowerCase();
+            const isPropertyOwner = propertyOwnerEmails.some(email => {
+              const cleanEmail = email.replace(/^owner\./, '');
+              return cleanEmail.toLowerCase() === notificationEmail.toLowerCase();
+            });
             
             console.log(`[Notifications] Checking email: ${notificationEmail}, isPropertyOwner: ${isPropertyOwner}`);
             

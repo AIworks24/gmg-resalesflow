@@ -61,12 +61,11 @@ const StaffProfilePage = () => {
       try {
         const supabase = createClientComponentClient();
         
-        // Query properties where property_owner_email matches user's email
-        // Handle both exact match and "owner." prefix cases
+        // Query properties where property_owner_email contains user's email
+        // Support multiple emails (comma-separated)
         const normalizedEmail = userEmail.toLowerCase().trim();
         
-        // Try to query with multiple conditions for efficiency
-        // Match: exact email, email with "owner." prefix, and case variations
+        // Query properties - use ilike to match any email in the comma-separated list
         const { data, error } = await supabase
           .from('hoa_properties')
           .select('*')
@@ -77,14 +76,20 @@ const StaffProfilePage = () => {
           console.error('Error fetching user properties:', error);
           setUserProperties([]);
         } else {
-          // Additional client-side filtering to ensure exact match after removing "owner." prefix
-          // This handles edge cases where ilike might match partial strings
+          // Additional client-side filtering to ensure exact match
+          // Parse emails and check if user's email is in the list
           const matchingProperties = (data || []).filter(property => {
             if (!property.property_owner_email) return false;
             
-            // Remove "owner." prefix if present and normalize
-            const propertyEmail = property.property_owner_email.replace(/^owner\./i, '').toLowerCase().trim();
-            return propertyEmail === normalizedEmail;
+            // Parse emails from property (handles comma-separated)
+            const propertyEmails = parseEmails(property.property_owner_email);
+            
+            // Check if user's email matches any of the property owner emails
+            // Handle both exact match and "owner." prefix cases
+            return propertyEmails.some(email => {
+              const cleanEmail = email.replace(/^owner\./i, '').toLowerCase().trim();
+              return cleanEmail === normalizedEmail;
+            });
           });
           
           setUserProperties(matchingProperties);
@@ -370,9 +375,15 @@ const StaffProfilePage = () => {
                   )}
 
                   {property.property_owner_email && (
-                    <div className="flex items-center gap-2 text-sm text-gray-600 mb-1">
-                      <Mail className="w-4 h-4 text-gray-400" />
-                      <span>{property.property_owner_email}</span>
+                    <div className="flex items-start gap-2 text-sm text-gray-600 mb-1">
+                      <Mail className="w-4 h-4 text-gray-400 mt-0.5" />
+                      <div className="flex flex-wrap gap-1">
+                        {parseEmails(property.property_owner_email).map((email, idx) => (
+                          <span key={idx} className="inline-block">
+                            {email}{idx < parseEmails(property.property_owner_email).length - 1 && ','}
+                          </span>
+                        ))}
+                      </div>
                     </div>
                   )}
 

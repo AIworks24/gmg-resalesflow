@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
+import { parseEmails } from '../../lib/emailUtils';
 
 /**
  * API endpoint to auto-assign an application to the property owner
@@ -88,14 +89,26 @@ async function autoAssignApplication(applicationId, supabase) {
       return { success: false, error: 'No property owner email found' };
     }
 
-    let ownerEmail = property.property_owner_email;
+    // Parse emails (handles both single email string and comma-separated string)
+    const ownerEmails = parseEmails(property.property_owner_email);
+    
+    if (ownerEmails.length === 0) {
+      console.log(`No valid property owner emails found for application ${applicationId}, skipping auto-assignment`);
+      return { success: false, error: 'No valid property owner emails found' };
+    }
+
+    // Use the first email for assignment (notifications will go to all)
+    let ownerEmail = ownerEmails[0];
+    
+    // Remove "owner." prefix if present
+    ownerEmail = ownerEmail.replace(/^owner\./, '');
 
     // For multi-community applications, use the primary property's owner email
     // (The primary property is the one in hoa_property_id, which is already what we have)
     if (property.is_multi_community) {
-      console.log(`Multi-community application detected, using primary property owner: ${ownerEmail}`);
+      console.log(`Multi-community application detected, using primary property owner: ${ownerEmail} (from ${ownerEmails.length} email(s))`);
     } else {
-      console.log(`Single property application, using property owner: ${ownerEmail}`);
+      console.log(`Single property application, using property owner: ${ownerEmail} (from ${ownerEmails.length} email(s))`);
     }
 
     // Check if a user exists with this email in the profiles table
