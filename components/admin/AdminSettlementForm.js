@@ -31,10 +31,11 @@ import {
   Send,
   AlertCircle,
   CheckCircle,
-  Download
+  Download,
+  X
 } from 'lucide-react';
 
-export default function AdminSettlementForm({ applicationId, onClose, isModal = false, showSnackbar }) {
+export default function AdminSettlementForm({ applicationId, onClose, isModal = false, showSnackbar, propertyGroupId = null }) {
   const [application, setApplication] = useState(null);
   const [hoaProperty, setHoaProperty] = useState(null);
   const [formData, setFormData] = useState({});
@@ -97,7 +98,7 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
         clearTimeout(timeoutId);
       }
     };
-  }, [applicationId]);
+    }, [applicationId, propertyGroupId]);
 
   // Update form data when user loads (but only if form is already initialized)
   useEffect(() => {
@@ -188,8 +189,8 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
       
       const supabase = createClientComponentClient();
 
-      // Optimize: Load application and form data in parallel
-      const [appResponse, formResponse] = await Promise.allSettled([
+      // Optimize: Load application, form data, and property group (if needed) in parallel
+      const loadPromises = [
         supabase
           .from('applications')
           .select(`
@@ -198,13 +199,41 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
           `)
           .eq('id', applicationId)
           .single(),
-        supabase
-          .from('property_owner_forms')
-          .select('id,form_data,status')
-          .eq('application_id', applicationId)
-          .eq('form_type', 'settlement_form')
-          .maybeSingle()
-      ]);
+        (() => {
+          let query = supabase
+            .from('property_owner_forms')
+            .select('id,form_data,status')
+            .eq('application_id', applicationId)
+            .eq('form_type', 'settlement_form');
+          
+          // For multi-community, filter by property_group_id
+          if (propertyGroupId) {
+            query = query.eq('property_group_id', propertyGroupId);
+          } else {
+            query = query.is('property_group_id', null);
+          }
+          
+          return query.maybeSingle();
+        })()
+      ];
+
+      // If propertyGroupId is provided, also load the property group and its property data
+      if (propertyGroupId) {
+        loadPromises.push(
+          supabase
+            .from('application_property_groups')
+            .select(`
+              *,
+              hoa_properties(id, name, location, property_owner_name, property_owner_email, property_owner_phone, management_contact, phone, email)
+            `)
+            .eq('id', propertyGroupId)
+            .eq('application_id', applicationId)
+            .single()
+        );
+      }
+
+      const responses = await Promise.allSettled(loadPromises);
+      const [appResponse, formResponse, groupResponse] = responses;
 
       // Handle application data
       if (appResponse.status === 'rejected') {
@@ -221,10 +250,60 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
         throw new Error('Application not found');
       }
 
+      // Get property data - prioritize property group's property for multi-community
+      let propertyData = null;
+      let propertyGroupData = null;
+      
+      // If propertyGroupId is provided, use the property group's property data
+      if (propertyGroupId && groupResponse?.status === 'fulfilled') {
+        const { data: groupData, error: groupError } = groupResponse.value;
+        if (!groupError && groupData) {
+          propertyGroupData = groupData;
+          // Use the property group's property data
+          propertyData = groupData.hoa_properties || null;
+          
+          // Override application's hoa_properties with the property group's property
+          if (propertyData) {
+            appData.hoa_properties = propertyData;
+            // Also override property_name and property_location from the group
+            if (groupData.property_name) {
+              appData.property_address = groupData.property_name;
+            }
+            if (groupData.property_location) {
+              propertyData.location = groupData.property_location;
+            }
+            // Override HOA name with the property group's property name
+            if (groupData.property_name) {
+              appData.hoa_properties.name = groupData.property_name;
+            }
+          } else if (groupData.property_name) {
+            // If no hoa_properties in group, create a minimal property object from group data
+            propertyData = {
+              name: groupData.property_name,
+              location: groupData.property_location || appData.hoa_properties?.location,
+              ...(appData.hoa_properties || {})
+            };
+            appData.hoa_properties = propertyData;
+            appData.property_address = groupData.property_name;
+          } else if (groupData.property_name) {
+            // If no hoa_properties in group, create a minimal property object from group data
+            propertyData = {
+              name: groupData.property_name,
+              location: groupData.property_location || appData.hoa_properties?.location,
+              ...appData.hoa_properties
+            };
+            appData.hoa_properties = propertyData;
+            appData.property_address = groupData.property_name;
+          }
+        }
+      }
+      
+      // Fallback to application's hoa_properties if property group data not available
+      if (!propertyData) {
+        propertyData = appData.hoa_properties || null;
+      }
+      
       setApplication(appData);
-
-      // Get property data from nested hoa_properties or from hoa_property_id
-      let propertyData = appData.hoa_properties || null;
       
       // Load HOA property data if not already included in nested object
       // Use a timeout for this query to prevent hanging
@@ -282,8 +361,20 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
         }
 
         if (existingForm && existingForm.form_data) {
-          setFormData(existingForm.form_data);
-          return; // Exit early if we have existing form data
+          // Check if existing form data has auto-fill fields populated
+          // If key auto-fill fields are missing or empty, re-initialize
+          const existingData = existingForm.form_data;
+          const hasPropertyAddress = existingData.propertyAddress && existingData.propertyAddress.trim() !== '';
+          const hasAssociationName = existingData.associationName && existingData.associationName.trim() !== '';
+          
+          // For NC forms, also check parcelId
+          const hasParcelId = state !== 'NC' || (existingData.parcelId !== undefined);
+          
+          if (hasPropertyAddress && hasAssociationName && hasParcelId) {
+            setFormData(existingData);
+            return; // Exit early if we have complete existing form data
+          }
+          // Otherwise continue to re-initialize below
         }
       }
 
@@ -337,7 +428,8 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
       // Property Information
       propertyAddress: fullPropertyAddress.trim(),
       associationName: hoaName,
-      parcelId: effectiveState === 'NC' ? (propertyManager.parcel_id || '') : undefined,
+      // Only include parcelId for NC forms (don't set to undefined, just omit for VA)
+      ...(effectiveState === 'NC' && { parcelId: propertyManager.parcel_id || '' }),
       
       // Seller Information
       sellerName: appData.seller_name || appData.sellerName || '',
@@ -349,7 +441,8 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
             ? appData.closing_date.split('T')[0] 
             : appData.closing_date)
         : (appData.estimatedClosingDate || ''),
-      currentOwner: effectiveState === 'NC' ? (appData.seller_name || appData.sellerName || '') : undefined,
+      // Only include currentOwner for NC forms (don't set to undefined, just omit for VA)
+      ...(effectiveState === 'NC' && { currentOwner: appData.seller_name || appData.sellerName || '' }),
       
       // Requestor Information (from submitter)
       requestorName: appData.submitter_name || appData.submitterName || '',
@@ -393,18 +486,6 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
     initialData.preparerSignature = userToUse?.name || managerFromProperty || '';
     initialData.preparerName = userToUse?.name || managerFromProperty || '';
 
-    // Debug logging to verify auto-population
-    console.log('🔍 Initializing settlement form with data:', {
-      propertyState: effectiveState,
-      propertyAddress: initialData.propertyAddress,
-      associationName: initialData.associationName,
-      sellerName: initialData.sellerName,
-      buyerName: initialData.buyerName,
-      managerName: initialData.managerName,
-      managerEmail: initialData.managerEmail,
-      hasApplicationData: !!applicationData.propertyAddress,
-      hasUserData: !!userData.managerName
-    });
 
     setFormData(initialData);
   };
@@ -432,8 +513,8 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
     const commonProps = {
       value: value,
       onChange: (e) => handleInputChange(field.key, e.target.value),
-      className: `w-full px-3 py-2 border rounded-md ${
-        hasError ? 'border-red-300' : 'border-gray-300'
+      className: `w-full px-3 py-2.5 bg-gray-50 border rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-gray-400 disabled:opacity-60 disabled:cursor-not-allowed ${
+        hasError ? 'border-red-300 focus:border-red-500 focus:ring-red-200' : 'border-gray-200'
       }`,
       disabled: isCompleted,
     };
@@ -458,6 +539,16 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
         return <input type="tel" {...commonProps} />;
       
       case 'email':
+        // For managerEmail, use text input to allow multiple comma-separated emails
+        if (field.key === 'managerEmail') {
+          return (
+            <input 
+              type="text" 
+              {...commonProps}
+              placeholder={field.placeholder || 'Enter email addresses separated by commas'}
+            />
+          );
+        }
         return <input type="email" {...commonProps} />;
       
       case 'date':
@@ -485,18 +576,54 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
       
       const supabase = createClientComponentClient();
 
-      const { data, error } = await supabase
+      // Check if form already exists
+      let query = supabase
         .from('property_owner_forms')
-        .upsert({
-          application_id: applicationId,
-          form_type: 'settlement_form',
-          form_data: formData,
-          status: 'in_progress',
-          updated_at: new Date().toISOString(),
-          recipient_email: application?.submitter_email || 'admin@gmgva.com'
-        }, { 
-          onConflict: 'application_id,form_type' 
-        });
+        .select('id')
+        .eq('application_id', applicationId)
+        .eq('form_type', 'settlement_form');
+      
+      if (propertyGroupId) {
+        query = query.eq('property_group_id', propertyGroupId);
+      } else {
+        query = query.is('property_group_id', null);
+      }
+      
+      const { data: existingForm } = await query.maybeSingle();
+      
+      const formDataToUpsert = {
+        application_id: applicationId,
+        form_type: 'settlement_form',
+        form_data: formData,
+        status: 'in_progress',
+        updated_at: new Date().toISOString(),
+        recipient_email: application?.submitter_email || 'admin@gmgva.com'
+      };
+      
+      // For multi-community, include property_group_id
+      if (propertyGroupId) {
+        formDataToUpsert.property_group_id = propertyGroupId;
+      }
+      
+      let result;
+      if (existingForm) {
+        // Update existing form
+        const { data, error } = await supabase
+          .from('property_owner_forms')
+          .update(formDataToUpsert)
+          .eq('id', existingForm.id)
+          .select();
+        result = { data, error };
+      } else {
+        // Insert new form
+        const { data, error } = await supabase
+          .from('property_owner_forms')
+          .insert(formDataToUpsert)
+          .select();
+        result = { data, error };
+      }
+      
+      const { data, error } = result;
 
       if (error) throw error;
 
@@ -528,12 +655,20 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
       const supabase = createClientComponentClient();
 
       // Update form as completed - check if form already exists first
-      const { data: existingForm } = await supabase
+      // For multi-community, check by property_group_id
+      let query = supabase
         .from('property_owner_forms')
         .select('id')
         .eq('application_id', applicationId)
-        .eq('form_type', 'settlement_form')
-        .single();
+        .eq('form_type', 'settlement_form');
+      
+      if (propertyGroupId) {
+        query = query.eq('property_group_id', propertyGroupId);
+      } else {
+        query = query.is('property_group_id', null);
+      }
+      
+      const { data: existingForm } = await query.maybeSingle();
 
       let formError;
       if (existingForm) {
@@ -551,17 +686,24 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
         formError = error;
       } else {
         // Insert new form
+        const formDataToInsert = {
+          application_id: applicationId,
+          form_type: 'settlement_form',
+          form_data: formData,
+          response_data: formData,
+          status: 'completed',
+          completed_at: new Date().toISOString(),
+          recipient_email: application?.submitter_email || 'admin@gmgva.com'
+        };
+        
+        // For multi-community, include property_group_id
+        if (propertyGroupId) {
+          formDataToInsert.property_group_id = propertyGroupId;
+        }
+        
         const { error } = await supabase
           .from('property_owner_forms')
-          .insert({
-            application_id: applicationId,
-            form_type: 'settlement_form',
-            form_data: formData,
-            response_data: formData,
-            status: 'completed',
-            completed_at: new Date().toISOString(),
-            recipient_email: application?.submitter_email || 'admin@gmgva.com'
-          });
+          .insert(formDataToInsert);
         formError = error;
       }
 
@@ -665,117 +807,149 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
   // If modal, render with modal wrapper
   if (isModal) {
     return (
-      <div className={`${isModal ? 'p-6 pb-20' : 'max-w-4xl mx-auto p-6'} bg-white ${isModal ? '' : 'min-h-screen'}`}>
-        {/* Modal Header */}
-        <div className="bg-blue-50 p-6 rounded-lg mb-8 border border-blue-200">
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-3">
-              <FileText className="w-8 h-8 text-blue-600" />
-              <div>
-                <h1 className="text-2xl font-bold text-gray-900">Admin: Settlement Form</h1>
-                <p className="text-gray-600">Complete for Application #{applicationId}</p>
-              </div>
+      <div className={`${isModal ? 'p-0 h-full flex flex-col' : 'max-w-4xl mx-auto p-6'} bg-gray-50/50 ${isModal ? '' : 'min-h-screen'}`}>
+        {/* Modal Header - Fixed at top */}
+        <div className="bg-white px-6 py-4 border-b border-gray-200 flex items-center justify-between z-10 sticky top-0 border-t-4 border-t-emerald-500">
+          <div className="flex items-center gap-3">
+            <div className="h-10 w-10 rounded-full bg-emerald-50 flex items-center justify-center">
+              <DollarSign className="w-5 h-5 text-emerald-600" />
             </div>
-            <button
-              onClick={onClose}
-              className="text-gray-400 hover:text-gray-600"
-            >
-              ✕
-            </button>
+            <div>
+              <h1 className="text-lg font-bold text-gray-900">Admin: Settlement Form</h1>
+              <p className="text-xs text-gray-500">Application #{applicationId} • {propertyState === 'VA' ? 'Dues Request - Escrow Instructions' : 'Statement of Unpaid Assessments'}</p>
+            </div>
           </div>
+          <button
+            onClick={onClose}
+            className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Scrollable Content */}
+        <div className="flex-1 overflow-y-auto custom-scrollbar p-6 space-y-6">
           
-          <div className="bg-white p-4 rounded-lg border">
-            <h2 className="text-lg font-semibold text-gray-800 mb-3 flex items-center gap-2">
-              <Building2 className="w-5 h-5 text-blue-600" />
-              Application Details
-            </h2>
-            <div className="grid md:grid-cols-2 gap-4 text-sm">
-              <div>
-                <strong>Property:</strong> {application?.property_address || 'N/A'}
-                <br />
-                <strong>HOA:</strong> {hoaProperty?.name || application?.hoa_property || 'N/A'}
-                <br />
-                <strong>Submitter:</strong> {application?.submitter_name || 'N/A'}
-              </div>
-              <div>
-                <strong>Buyer:</strong> {application?.buyer_name || 'N/A'}
-                <br />
-                <strong>Seller:</strong> {application?.seller_name || 'N/A'}
-                <br />
-                <strong>Sale Price:</strong> ${application?.sale_price?.toLocaleString() || 'N/A'}
-              </div>
+          {/* Application Details Card */}
+          <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+            <div className="px-5 py-3 bg-emerald-50/50 border-b border-emerald-100 flex items-center gap-2">
+              <Building2 className="w-4 h-4 text-emerald-600" />
+              <h2 className="text-sm font-semibold text-gray-700 uppercase tracking-wider">
+                Application Details
+              </h2>
             </div>
-          </div>
-        </div>
-
-        {/* Error Messages */}
-        {errors.general && (
-          <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-6">
-            <p className="text-red-800">{errors.general}</p>
-          </div>
-        )}
-
-        {/* Settlement Document Header */}
-        <div className="bg-gray-50 p-6 rounded-lg mb-8 border">
-          <div className="bg-blue-50 p-4 rounded-lg border-l-4 border-blue-400">
-            <h2 className="text-xl font-semibold text-gray-800 mb-2">
-              Settlement Form
-            </h2>
-          </div>
-        </div>
-
-        {/* Form Fields - Dynamically rendered from JSON */}
-        <div className="space-y-6 mb-8">
-          {sections && sections.length > 0 ? (
-            sections.map((section, sectionIndex) => (
-              <div key={sectionIndex} className="bg-gray-50 p-6 rounded-lg">
-                <h3 className="text-lg font-semibold text-gray-900 mb-4">
-                  {section.section}
-                </h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {section.fields.map((field) => (
-                    <div key={field.key} className={field.type === 'textarea' ? 'md:col-span-2' : ''}>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">
-                        {field.label}
-                        {field.required && <span className="text-red-500 ml-1">*</span>}
-                      </label>
-                      {renderField(field)}
-                      {errors[field.key] && (
-                        <p className="text-red-500 text-sm mt-1">{errors[field.key]}</p>
+            <div className="p-5">
+              <div className="grid md:grid-cols-2 gap-y-4 gap-x-8 text-sm">
+                <div>
+                  <div className="mb-3">
+                    <span className="block text-xs font-medium text-gray-500 mb-1">Property Address</span>
+                    <span className="font-medium text-gray-900">{application?.property_address || 'N/A'}</span>
+                  </div>
+                  <div className="mb-3">
+                    <span className="block text-xs font-medium text-gray-500 mb-1">HOA</span>
+                    <span className="font-medium text-gray-900">{hoaProperty?.name || application?.hoa_property || 'N/A'}</span>
+                  </div>
+                  <div>
+                    <span className="block text-xs font-medium text-gray-500 mb-1">Submitter</span>
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium text-gray-900">{application?.submitter_name || 'N/A'}</span>
+                      {application?.submitter_email && (
+                        <span className="text-xs text-gray-500">({application.submitter_email})</span>
                       )}
                     </div>
-                  ))}
+                  </div>
+                </div>
+                <div>
+                  <div className="mb-3">
+                    <span className="block text-xs font-medium text-gray-500 mb-1">Buyer</span>
+                    <span className="font-medium text-gray-900">{application?.buyer_name || 'N/A'}</span>
+                  </div>
+                  <div className="mb-3">
+                    <span className="block text-xs font-medium text-gray-500 mb-1">Seller</span>
+                    <span className="font-medium text-gray-900">{application?.seller_name || 'N/A'}</span>
+                  </div>
+                  <div>
+                    <span className="block text-xs font-medium text-gray-500 mb-1">Sale Price</span>
+                    <span className="font-medium text-gray-900">${application?.sale_price?.toLocaleString() || 'N/A'}</span>
+                  </div>
                 </div>
               </div>
-            ))
-          ) : (
-            <div className="bg-yellow-50 p-4 rounded-lg">
-              <p className="text-yellow-800">No form fields found. Loading...</p>
+            </div>
+          </div>
+
+          {/* Error Messages */}
+          {errors.general && (
+            <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-start gap-3">
+              <AlertCircle className="w-5 h-5 text-red-600 mt-0.5" />
+              <p className="text-sm text-red-800 font-medium">{errors.general}</p>
             </div>
           )}
+
+          {/* Form Fields - Dynamically rendered from JSON */}
+          <div className="space-y-6">
+            {sections && sections.length > 0 ? (
+              sections.map((section, sectionIndex) => (
+                <div key={sectionIndex} className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+                  <div className="px-5 py-3 bg-emerald-50/50 border-b border-emerald-100">
+                    <h3 className="text-sm font-bold text-gray-800 uppercase tracking-wider">
+                      {section.section}
+                    </h3>
+                  </div>
+                  <div className="p-5">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                      {section.fields.map((field) => (
+                        <div key={field.key} className={field.type === 'textarea' ? 'md:col-span-2' : ''}>
+                          <label className="block text-xs font-medium text-gray-700 uppercase tracking-wider mb-1.5">
+                            {field.label}
+                            {field.required && <span className="text-red-500 ml-1">*</span>}
+                          </label>
+                          {renderField({
+                            ...field,
+                            className: `w-full px-3 py-2.5 bg-gray-50 border ${
+                              errors[field.key] ? 'border-red-300 focus:border-red-500 focus:ring-red-200' : 'border-gray-200 focus:border-blue-500 focus:ring-blue-500/20'
+                            } rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-4 transition-all placeholder:text-gray-400 disabled:opacity-60 disabled:cursor-not-allowed`
+                          })}
+                          {errors[field.key] && (
+                            <p className="text-red-600 text-xs mt-1.5 flex items-center gap-1">
+                              <AlertCircle className="w-3 h-3" />
+                              {errors[field.key]}
+                            </p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ))
+            ) : (
+              <div className="bg-yellow-50 p-6 rounded-xl border border-yellow-200 text-center">
+                <p className="text-yellow-800 font-medium">No form fields found. Loading...</p>
+              </div>
+            )}
+          </div>
         </div>
         
-        {/* Action Buttons */}
+        {/* Action Buttons - Fixed at bottom */}
         {!isCompleted && (
-          <div className="flex items-center justify-between pt-6 border-t border-gray-200">
+          <div className="bg-white border-t border-gray-200 px-6 py-4 flex items-center justify-between z-10 sticky bottom-0">
             <button
               onClick={onClose}
-              className="px-6 py-2 text-gray-600 hover:text-gray-800"
+              className="px-6 py-2.5 text-gray-600 font-medium hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
               disabled={saving || generating}
             >
               Cancel
             </button>
             
-            <div className="flex space-x-4">
+            <div className="flex items-center gap-3">
               <button
                 onClick={saveForm}
                 disabled={saving || generating}
-                className="px-6 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 flex items-center"
+                className="flex items-center gap-2 px-5 py-2.5 bg-white border border-gray-300 text-gray-700 font-medium rounded-lg hover:bg-gray-50 focus:ring-4 focus:ring-gray-100 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
               >
                 {saving ? (
-                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                  <div className="animate-spin rounded-full h-4 w-4 border-2 border-gray-500 border-t-transparent"></div>
                 ) : (
-                  <Save className="h-4 w-4 mr-2" />
+                  <Save className="h-4 w-4" />
                 )}
                 Save Draft
               </button>
@@ -783,14 +957,14 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
               <button
                 onClick={completeAndSubmitForm}
                 disabled={saving || generating}
-                className="px-6 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 flex items-center"
+                className="flex items-center gap-2 px-6 py-2.5 bg-green-600 text-white font-medium rounded-lg hover:bg-green-700 focus:ring-4 focus:ring-green-600/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
               >
                 {generating ? (
-                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                  <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent"></div>
                 ) : (
-                  <Send className="h-4 w-4 mr-2" />
+                  <Send className="h-4 w-4" />
                 )}
-                Complete
+                Complete Form
               </button>
             </div>
           </div>

@@ -44,6 +44,7 @@ import {
   Filter,
   Calendar,
   Plus,
+  ArrowRight,
 } from 'lucide-react';
 
 // Initialize Stripe with error handling
@@ -78,7 +79,17 @@ const shouldApplyForcedPrice = (submitterType, publicOffering = false) => {
 // Helper function to calculate total amount
 // Synchronous calculateTotal function for display purposes (approximation only)
 const calculateTotal = (formData, stripePrices, hoaProperties) => {
-  // Check for multi-community pricing first
+  // Lender Questionnaire pricing - check FIRST (even for multi-community, treat as single application)
+  if (formData.submitterType === 'lender_questionnaire') {
+    const pricing = getPricing('lender_questionnaire', formData.packageType === 'rush');
+    let total = pricing.total / 100; // Convert cents to dollars
+    if (formData.paymentMethod === 'credit_card' && total > 0) {
+      total += 9.95; // Credit card convenience fee
+    }
+    return Math.round(total * 100) / 100; // Round to 2 decimal places
+  }
+
+  // Check for multi-community pricing (skip for lender_questionnaire)
   if (formData.hoaProperty && hoaProperties) {
     const selectedProperty = hoaProperties.find(prop => prop.name === formData.hoaProperty);
     if (selectedProperty && selectedProperty.is_multi_community) {
@@ -92,16 +103,6 @@ const calculateTotal = (formData, stripePrices, hoaProperties) => {
       const total = (basePricePerProperty + rushFeePerProperty) * propertyCount + convenienceFee;
       return Math.round(total * 100) / 100;
     }
-  }
-
-  // Lender Questionnaire pricing
-  if (formData.submitterType === 'lender_questionnaire') {
-    const pricing = getPricing('lender_questionnaire', formData.packageType === 'rush');
-    let total = pricing.total / 100; // Convert cents to dollars
-    if (formData.paymentMethod === 'credit_card' && total > 0) {
-      total += 9.95; // Credit card convenience fee
-    }
-    return Math.round(total * 100) / 100; // Round to 2 decimal places
   }
 
   // Public Offering Statement pricing
@@ -189,7 +190,18 @@ const calculateTotal = (formData, stripePrices, hoaProperties) => {
 // Async calculateTotalDatabase function using database-driven pricing for payment logic
 const calculateTotalDatabase = async (formData, hoaProperties, applicationType) => {
   try {
-    // Check for multi-community pricing first
+    // Lender Questionnaire pricing - check FIRST (even for multi-community, treat as single application)
+    if (applicationType === 'lender_questionnaire') {
+      const { getPricing } = await import('../lib/pricingConfig');
+      const pricing = getPricing('lender_questionnaire', formData.packageType === 'rush');
+      let total = pricing.total / 100; // Convert cents to dollars
+      if (formData.paymentMethod === 'credit_card' && total > 0) {
+        total += 9.95; // Credit card convenience fee
+      }
+      return total;
+    }
+
+    // Check for multi-community pricing (skip for lender_questionnaire)
     if (formData.hoaProperty && hoaProperties) {
       const selectedProperty = hoaProperties.find(prop => prop.name === formData.hoaProperty);
       if (selectedProperty && selectedProperty.is_multi_community) {
@@ -558,6 +570,13 @@ const SubmitterInfoStep = React.memo(({ formData, handleInputChange, hoaProperti
   
   const canShowPublicOffering = selectedProperty?.allow_public_offering === true;
 
+  // Check if the selected property is in North Carolina
+  const isNorthCarolina = React.useMemo(() => {
+    if (!selectedProperty?.location) return false;
+    const locationUpper = selectedProperty.location.toUpperCase();
+    return locationUpper.includes('NC') || locationUpper.includes('NORTH CAROLINA');
+  }, [selectedProperty]);
+
   // Debug logging
   React.useEffect(() => {
     if (formData.hoaProperty) {
@@ -571,6 +590,16 @@ const SubmitterInfoStep = React.memo(({ formData, handleInputChange, hoaProperti
       handleInputChange('publicOffering', false);
     }
   }, [canShowPublicOffering, formData.publicOffering, handleInputChange]);
+
+  // Clear submitterType if it's not allowed for North Carolina properties
+  React.useEffect(() => {
+    if (isNorthCarolina && formData.submitterType) {
+      const allowedTypes = ['settlement', 'lender_questionnaire'];
+      if (!allowedTypes.includes(formData.submitterType)) {
+        handleInputChange('submitterType', '');
+      }
+    }
+  }, [isNorthCarolina, formData.submitterType, handleInputChange]);
 
   return (
     <div className='space-y-6'>
@@ -588,14 +617,24 @@ const SubmitterInfoStep = React.memo(({ formData, handleInputChange, hoaProperti
           I am Requesting: *
         </label>
         <div className='grid grid-cols-2 md:grid-cols-5 gap-4'>
-          {[
-            { value: 'seller', label: 'Property Owner/Seller', icon: User },
-            { value: 'realtor', label: 'Licensed Realtor', icon: FileText },
-            { value: 'builder', label: 'Builder/Developer', icon: Building2 },
-            { value: 'admin', label: 'GMG Staff', icon: CheckCircle },
-            { value: 'settlement', label: 'Settlement Agent / Closing Attorney', icon: Briefcase },
-            { value: 'lender_questionnaire', label: 'Lender Questionnaire', icon: FileText },
-          ].map((type) => {
+          {(() => {
+            // All available submitter types
+            const allTypes = [
+              { value: 'seller', label: 'Property Owner/Seller', icon: User },
+              { value: 'realtor', label: 'Licensed Realtor', icon: FileText },
+              { value: 'builder', label: 'Builder/Developer', icon: Building2 },
+              { value: 'admin', label: 'GMG Staff', icon: CheckCircle },
+              { value: 'settlement', label: 'Settlement Agent / Closing Attorney', icon: Briefcase },
+              { value: 'lender_questionnaire', label: 'Lender Questionnaire', icon: FileText },
+            ];
+
+            // Filter types based on North Carolina selection
+            // For NC properties, only show 'settlement' and 'lender_questionnaire'
+            const availableTypes = isNorthCarolina
+              ? allTypes.filter(type => type.value === 'settlement' || type.value === 'lender_questionnaire')
+              : allTypes;
+
+            return availableTypes.map((type) => {
             const Icon = type.icon;
             return (
               <button
@@ -611,7 +650,8 @@ const SubmitterInfoStep = React.memo(({ formData, handleInputChange, hoaProperti
                 <div className='text-sm font-medium'>{type.label}</div>
               </button>
             );
-          })}
+            });
+          })()}
         </div>
         {formData.submitterType === 'builder' && canShowPublicOffering && (
           <div className='mt-6 p-4 border border-amber-300 rounded-md bg-amber-50'>
@@ -901,7 +941,8 @@ const PackagePaymentStep = ({
     const loadMultiCommunityPricing = async () => {
       if (formData.hoaProperty && hoaProperties) {
         const selectedProperty = hoaProperties.find(prop => prop.name === formData.hoaProperty);
-        if (selectedProperty && selectedProperty.is_multi_community) {
+        // Skip multi-community pricing for lender_questionnaire - treat as single application
+        if (selectedProperty && selectedProperty.is_multi_community && applicationType !== 'lender_questionnaire') {
           try {
             const { getLinkedProperties, calculateMultiCommunityPricing } = await import('../lib/multiCommunityUtils');
             
@@ -909,9 +950,10 @@ const PackagePaymentStep = ({
             setLinkedProperties(linked);
             
             // Calculate both standard and rush pricing
+            // Use the actual applicationType instead of hardcoding 'standard'
             const [standardPricing, rushPricing] = await Promise.all([
-              calculateMultiCommunityPricing(selectedProperty.id, 'standard', 'standard', null, formData.submitterType, formData.publicOffering),
-              calculateMultiCommunityPricing(selectedProperty.id, 'rush', 'standard', null, formData.submitterType, formData.publicOffering)
+              calculateMultiCommunityPricing(selectedProperty.id, 'standard', applicationType, null, formData.submitterType, formData.publicOffering),
+              calculateMultiCommunityPricing(selectedProperty.id, 'rush', applicationType, null, formData.submitterType, formData.publicOffering)
             ]);
             
             setStandardMultiCommunityPricing(standardPricing);
@@ -937,7 +979,7 @@ const PackagePaymentStep = ({
     };
     
     loadMultiCommunityPricing();
-  }, [formData.hoaProperty, formData.packageType, hoaProperties]);
+  }, [formData.hoaProperty, formData.packageType, hoaProperties, applicationType]);
 
 
   const handlePayment = async () => {
@@ -1482,7 +1524,7 @@ const PackagePaymentStep = ({
       </div>
 
       {/* Multi-Community Notification */}
-      {multiCommunityPricing && multiCommunityPricing.associations && multiCommunityPricing.associations.length > 0 && (
+      {multiCommunityPricing && multiCommunityPricing.associations && multiCommunityPricing.associations.length > 0 && applicationType !== 'lender_questionnaire' && (
         <div className='bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6'>
           <div className='flex items-start'>
             <AlertCircle className='h-5 w-5 text-blue-600 mt-0.5 mr-3' />
@@ -1546,13 +1588,15 @@ const PackagePaymentStep = ({
             <div className='text-right'>
               <div className='text-2xl font-bold text-green-600'>
                 ${(() => {
-                  if (standardMultiCommunityPricing && standardMultiCommunityPricing.total) {
+                  // Use multi-community pricing if available (even if total is 0, like VA settlement standard)
+                  if (standardMultiCommunityPricing && standardMultiCommunityPricing.total !== undefined && standardMultiCommunityPricing.total !== null) {
                     const baseTotal = standardMultiCommunityPricing.total;
-                    const convenienceFeeTotal = formData.paymentMethod === 'credit_card' ? 
+                    // Only add convenience fee if base total > 0 (for free transactions like VA settlement standard)
+                    const convenienceFeeTotal = (formData.paymentMethod === 'credit_card' && baseTotal > 0) ? 
                       standardMultiCommunityPricing.totalConvenienceFee : 0;
                     return (baseTotal + convenienceFeeTotal).toFixed(2);
                   }
-                  // Always compute using STANDARD package for display
+                  // Fallback: compute using STANDARD package for display
                   const selectedProperty = hoaProperties?.find(p => p.name === formData.hoaProperty);
                   const isVASettlement = formData.submitterType === 'settlement' && 
                     selectedProperty?.location?.toUpperCase()?.includes('VA');
@@ -1575,8 +1619,48 @@ const PackagePaymentStep = ({
                     {association.name} {association.isPrimary && '(Primary)'} - ${association.basePrice.toFixed(2)}
                   </li>
                 ))}
-                <li>Digital & Print Delivery</li>
-                <li>10-15 business days processing</li>
+                {formData.submitterType === 'settlement' ? (
+                  <>
+                    <li>Standard Processing</li>
+                    {(() => {
+                      const selectedProperty = hoaProperties?.find(prop => prop.name === formData.hoaProperty);
+                      const location = selectedProperty?.location?.toUpperCase() || '';
+                      if (location.includes('VA') || location.includes('VIRGINIA')) {
+                        return (
+                          <>
+                            <li>Current HOA dues verification</li>
+                            <li>Settlement statement preparation</li>
+                            <li>Direct submission to accounting</li>
+                          </>
+                        );
+                      } else if (location.includes('NC') || location.includes('NORTH CAROLINA')) {
+                        return (
+                          <>
+                            <li>Statement of Unpaid Assessments</li>
+                            <li>Current assessment verification</li>
+                            <li>Settlement documentation</li>
+                            <li>Direct submission to accounting</li>
+                            <li>Includes a copy of all property documents</li>
+                          </>
+                        );
+                      } else {
+                        return (
+                          <>
+                            <li>Settlement documentation</li>
+                            <li>HOA dues verification</li>
+                            <li>Escrow instructions</li>
+                            <li>Direct submission to accounting</li>
+                          </>
+                        );
+                      }
+                    })()}
+                  </>
+                ) : (
+                  <>
+                    <li>Digital & Print Delivery</li>
+                    <li>10-15 business days processing</li>
+                  </>
+                )}
               </>
             ) : formData.submitterType === 'settlement' ? (
               <>
@@ -1599,6 +1683,7 @@ const PackagePaymentStep = ({
                         <li>Current assessment verification</li>
                         <li>Settlement documentation</li>
                         <li>Direct submission to accounting</li>
+                        <li>Includes a copy of all property documents</li>
                       </>
                     );
                   } else {
@@ -1694,7 +1779,24 @@ const PackagePaymentStep = ({
               </div>
               {formData.submitterType !== 'lender_questionnaire' && (
                 <div className='text-sm text-gray-500'>
-                  + ${stripePrices ? stripePrices.rush.rushFeeDisplay.toFixed(2) : '70.66'}
+                  + ${(() => {
+                    // Use settlement rush fee if applicable
+                    if (formData.submitterType === 'settlement') {
+                      const selectedProperty = hoaProperties?.find(prop => prop.name === formData.hoaProperty);
+                      if (selectedProperty?.location) {
+                        const location = selectedProperty.location.toUpperCase();
+                        if (location.includes('VA') || location.includes('VIRGINIA')) {
+                          const pricing = getPricing('settlement_va', true);
+                          return (pricing.rushFee / 100).toFixed(2); // $70.66
+                        } else if (location.includes('NC') || location.includes('NORTH CAROLINA')) {
+                          const pricing = getPricing('settlement_nc', true);
+                          return (pricing.rushFee / 100).toFixed(2); // $100.00
+                        }
+                      }
+                    }
+                    // Default rush fee for regular pricing
+                    return stripePrices ? stripePrices.rush.rushFeeDisplay.toFixed(2) : '70.66';
+                  })()}
                 </div>
               )}
               {formData.submitterType === 'lender_questionnaire' && (
@@ -1707,10 +1809,12 @@ const PackagePaymentStep = ({
               )}
               <div className='text-2xl font-bold text-orange-600'>
                 ${(() => {
-                  if (rushMultiCommunityPricing && rushMultiCommunityPricing.associations && rushMultiCommunityPricing.associations.length > 0) {
+                  // Use multi-community pricing if available (even if total is 0)
+                  if (rushMultiCommunityPricing && rushMultiCommunityPricing.total !== undefined && rushMultiCommunityPricing.total !== null) {
                     // Calculate rush pricing for multi-community
                     const baseTotal = rushMultiCommunityPricing.total;
-                    const convenienceFeeTotal = formData.paymentMethod === 'credit_card' ? 
+                    // Only add convenience fee if base total > 0 (for free transactions)
+                    const convenienceFeeTotal = (formData.paymentMethod === 'credit_card' && baseTotal > 0) ? 
                       rushMultiCommunityPricing.totalConvenienceFee : 0;
                     return (baseTotal + convenienceFeeTotal).toFixed(2);
                   }
@@ -1730,9 +1834,28 @@ const PackagePaymentStep = ({
                     {association.name} {association.isPrimary && '(Primary)'} - ${association.basePrice.toFixed(2)} + ${association.rushFee.toFixed(2)} rush
                   </li>
                 ))}
-                <li>Priority queue processing</li>
-                <li>Expedited compliance inspection</li>
-                <li>5-day completion guarantee</li>
+                {formData.submitterType === 'settlement' ? (
+                  <>
+                    <li>Rush Processing</li>
+                    <li>Priority queue processing</li>
+                    <li>Expedited accounting review</li>
+                    <li>3-day completion guarantee</li>
+                    {(() => {
+                      const selectedProperty = hoaProperties?.find(prop => prop.name === formData.hoaProperty);
+                      const location = selectedProperty?.location?.toUpperCase() || '';
+                      if (location.includes('NC') || location.includes('NORTH CAROLINA')) {
+                        return <li>Includes a copy of all property documents</li>;
+                      }
+                      return null;
+                    })()}
+                  </>
+                ) : (
+                  <>
+                    <li>Priority queue processing</li>
+                    <li>Expedited compliance inspection</li>
+                    <li>5-day completion guarantee</li>
+                  </>
+                )}
               </>
             ) : formData.submitterType === 'settlement' ? (
               <>
@@ -1740,6 +1863,14 @@ const PackagePaymentStep = ({
                 <li>Priority queue processing</li>
                 <li>Expedited accounting review</li>
                 <li>3-day completion guarantee</li>
+                {(() => {
+                  const selectedProperty = hoaProperties?.find(prop => prop.name === formData.hoaProperty);
+                  const location = selectedProperty?.location?.toUpperCase() || '';
+                  if (location.includes('NC') || location.includes('NORTH CAROLINA')) {
+                    return <li>Includes a copy of all property documents</li>;
+                  }
+                  return null;
+                })()}
               </>
             ) : (
               <>
@@ -1833,7 +1964,7 @@ const PackagePaymentStep = ({
                         <span>+${association.rushFee.toFixed(2)}</span>
                       </div>
                     )}
-                    {formData.paymentMethod === 'credit_card' && (
+                    {formData.paymentMethod === 'credit_card' && (association.basePrice + association.rushFee) > 0 && (
                       <div className='flex justify-between ml-4'>
                         <span>Convenience Fee:</span>
                         <span>+${association.convenienceFee.toFixed(2)}</span>
@@ -1842,9 +1973,9 @@ const PackagePaymentStep = ({
                     <div className='flex justify-between ml-4 font-medium text-green-800'>
                       <span>Subtotal:</span>
                       <span>${(() => {
-                        // Subtotal should include basePrice + rushFee + convenienceFee (if credit card)
+                        // Subtotal should include basePrice + rushFee + convenienceFee (if credit card and total > 0)
                         let subtotal = association.basePrice + association.rushFee;
-                        if (formData.paymentMethod === 'credit_card') {
+                        if (formData.paymentMethod === 'credit_card' && subtotal > 0) {
                           subtotal += association.convenienceFee;
                         }
                         return subtotal.toFixed(2);
@@ -1856,7 +1987,8 @@ const PackagePaymentStep = ({
                   <span>Total:</span>
                   <span>${(() => {
                     const baseTotal = multiCommunityPricing.total;
-                    const convenienceFeeTotal = formData.paymentMethod === 'credit_card' ? 
+                    // Only add convenience fee if base total > 0 (for free transactions like VA settlement standard)
+                    const convenienceFeeTotal = (formData.paymentMethod === 'credit_card' && baseTotal > 0) ? 
                       multiCommunityPricing.totalConvenienceFee : 0;
                     return (baseTotal + convenienceFeeTotal).toFixed(2);
                   })()}</span>
@@ -2780,6 +2912,8 @@ const ReviewSubmitStep = ({ formData, stripePrices, applicationId, hoaProperties
   // Check if user just returned from payment
   const [showPaymentSuccess, setShowPaymentSuccess] = React.useState(false);
   const [multiCommunityInfo, setMultiCommunityInfo] = React.useState(null);
+  const [multiCommunityPricing, setMultiCommunityPricing] = React.useState(null);
+  const [applicationType, setApplicationType] = React.useState(null);
   
   React.useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -2791,19 +2925,55 @@ const ReviewSubmitStep = ({ formData, stripePrices, applicationId, hoaProperties
     }
   }, []);
 
-  // Load multi-community information
+  // Determine application type
+  React.useEffect(() => {
+    const determineAppType = async () => {
+      if (formData.hoaProperty && hoaProperties) {
+        const selectedProperty = hoaProperties.find(prop => prop.name === formData.hoaProperty);
+        if (selectedProperty) {
+          try {
+            const { determineApplicationType } = await import('../lib/applicationTypes');
+            const appType = determineApplicationType(
+              formData.submitterType,
+              selectedProperty,
+              formData.publicOffering
+            );
+            setApplicationType(appType);
+          } catch (error) {
+            console.error('Error determining application type:', error);
+          }
+        }
+      }
+    };
+    determineAppType();
+  }, [formData.hoaProperty, formData.submitterType, formData.publicOffering, hoaProperties]);
+
+  // Load multi-community information and pricing
   React.useEffect(() => {
     const loadMultiCommunityInfo = async () => {
       if (formData.hoaProperty && hoaProperties) {
         const selectedProperty = hoaProperties.find(prop => prop.name === formData.hoaProperty);
         if (selectedProperty && selectedProperty.is_multi_community) {
           try {
-            const { getLinkedProperties } = await import('../lib/multiCommunityUtils');
+            const { getLinkedProperties, calculateMultiCommunityPricing } = await import('../lib/multiCommunityUtils');
             const linkedProperties = await getLinkedProperties(selectedProperty.id);
             setMultiCommunityInfo({
               primaryProperty: selectedProperty,
               linkedProperties: linkedProperties
             });
+            
+            // Calculate pricing for the selected package type
+            if (applicationType) {
+              const pricing = await calculateMultiCommunityPricing(
+                selectedProperty.id,
+                formData.packageType || 'standard',
+                applicationType,
+                null,
+                formData.submitterType,
+                formData.publicOffering
+              );
+              setMultiCommunityPricing(pricing);
+            }
           } catch (error) {
             console.error('Error loading multi-community info:', error);
           }
@@ -2812,7 +2982,7 @@ const ReviewSubmitStep = ({ formData, stripePrices, applicationId, hoaProperties
     };
     
     loadMultiCommunityInfo();
-  }, [formData.hoaProperty, hoaProperties]);
+  }, [formData.hoaProperty, formData.packageType, formData.submitterType, formData.publicOffering, hoaProperties, applicationType]);
 
   return (
     <div className='space-y-6'>
@@ -2965,7 +3135,18 @@ const ReviewSubmitStep = ({ formData, stripePrices, applicationId, hoaProperties
               : 'Bank Transfer'}
           </div>
           <div>
-            <span className='font-medium'>Total:</span> ${calculateTotal(formData, stripePrices, hoaProperties).toFixed(2)}
+            <span className='font-medium'>Total:</span> ${(() => {
+              // Use multi-community pricing if available (for accurate settlement pricing)
+              if (multiCommunityPricing && multiCommunityPricing.total !== undefined && multiCommunityPricing.total !== null) {
+                const baseTotal = multiCommunityPricing.total;
+                // Only add convenience fee if base total > 0 (for free transactions like VA settlement standard)
+                const convenienceFeeTotal = (formData.paymentMethod === 'credit_card' && baseTotal > 0) ? 
+                  multiCommunityPricing.totalConvenienceFee : 0;
+                return (baseTotal + convenienceFeeTotal).toFixed(2);
+              }
+              // Fallback to calculateTotal for non-multi-community or when pricing not loaded yet
+              return calculateTotal(formData, stripePrices, hoaProperties).toFixed(2);
+            })()}
           </div>
         </div>
       </div>
@@ -3423,10 +3604,8 @@ export default function GMGResaleFlow() {
       // Save draft before moving to next step
       await saveDraftApplication();
       
-      // Skip Transaction Details step for settlement agents
-      if (currentStep === 2 && formData.submitterType === 'settlement') {
-        setCurrentStep(4); // Jump to Package & Payment
-      } else if (currentStep === 2 && formData.submitterType === 'builder' && formData.publicOffering) {
+      // Skip Transaction Details only for Public Offering Statement flow
+      if (currentStep === 2 && formData.submitterType === 'builder' && formData.publicOffering) {
         // Skip Transaction Details for Public Offering Statement flow
         setCurrentStep(4);
       } else {
@@ -3437,10 +3616,8 @@ export default function GMGResaleFlow() {
 
   const prevStep = React.useCallback(() => {
     if (currentStep > 1) {
-      // Skip Transaction Details step when going back for settlement agents
-      if (currentStep === 4 && formData.submitterType === 'settlement') {
-        setCurrentStep(2); // Jump back to Submitter Info
-      } else if (currentStep === 4 && formData.submitterType === 'builder' && formData.publicOffering) {
+      // Skip Transaction Details only when going back for Public Offering Statement flow
+      if (currentStep === 4 && formData.submitterType === 'builder' && formData.publicOffering) {
         setCurrentStep(2);
       } else {
         setCurrentStep(currentStep - 1);
@@ -4245,449 +4422,612 @@ export default function GMGResaleFlow() {
         });
 
       return (
-        <div className='space-y-8'>
-          {/* Welcome Section */}
-          <div className='text-center py-6'>
-            <div className='w-32 h-32 mx-auto mb-1'>
-              <Image src={companyLogo} alt='GMG Logo' width={128} height={128} className='object-contain' />
+        <div className='space-y-0 bg-white'>
+          {/* Hero Section - First Fold */}
+          <div className='relative bg-white overflow-hidden min-h-[90vh] flex flex-col justify-center items-center'>
+            <div className='absolute inset-0'>
+              <div className='absolute inset-y-0 right-0 w-1/2 bg-gradient-to-l from-green-50/50 to-transparent opacity-60'></div>
+              <div className='absolute bottom-0 left-0 w-full h-32 bg-gradient-to-t from-white to-transparent'></div>
             </div>
-            <h2 className='text-3xl font-bold text-gray-900 mb-4'>
-              Welcome to GMG ResaleFlow
-            </h2>
-            <p className='text-lg text-gray-600 mb-8 max-w-2xl mx-auto'>
-              Your streamlined solution for Virginia HOA resale certificates.
-              Get your documents processed quickly and efficiently.
-            </p>
-            {isAuthenticated ? (
-              <button
-                onClick={startNewApplication}
-                className='bg-green-700 text-white px-8 py-4 rounded-lg hover:bg-green-800 transition-colors flex items-center gap-3 mx-auto text-lg font-semibold'
-              >
-                <FileText className='h-6 w-6' />
-                Start New Application
-              </button>
-            ) : (
-              <div className='space-y-4'>
-                <button
-                  onClick={() => {
-                    setAuthMode('signup');
-                    setShowAuthModal(true);
-                  }}
-                  className='bg-green-700 text-white px-8 py-4 rounded-lg hover:bg-green-800 transition-colors flex items-center gap-3 mx-auto text-lg font-semibold'
-                >
-                  <UserPlus className='h-6 w-6' />
-                  Sign Up to Start Application
-                </button>
-                <p className='text-sm text-gray-500'>
-                  Already have an account?{' '}
-                  <button
-                    onClick={() => {
-                      setAuthMode('signin');
-                      setShowAuthModal(true);
-                    }}
-                    className='text-green-600 hover:text-green-700 font-medium'
-                  >
-                    Sign in here
-                  </button>
-                </p>
+
+            <div className='relative w-full max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 text-center z-10 flex flex-col justify-center flex-grow'>
+              <div className='flex justify-center mb-12 animate-fadeIn'>
+                <div className='p-10 bg-white rounded-[2.5rem] shadow-xl border border-gray-100 hover:shadow-2xl transition-all duration-300 transform hover:-translate-y-1'>
+                  <Image src={companyLogo} alt='GMG Logo' width={220} height={220} className='object-contain' />
+                </div>
               </div>
-            )}
+              <h1 className='text-5xl md:text-7xl font-extrabold text-gray-900 tracking-tight mb-8 leading-tight animate-slideUp'>
+                Welcome to <br/>
+                <span className='text-transparent bg-clip-text bg-gradient-to-r from-green-600 to-teal-600 drop-shadow-sm'>GMG ResaleFlow</span>
+              </h1>
+              <p className='mt-6 max-w-3xl mx-auto text-xl md:text-2xl text-gray-600 leading-relaxed animate-slideUp delay-100 font-light'>
+                The professional solution for Virginia HOA resale certificates.
+                <span className='block mt-2 font-normal text-gray-800'>Fast, compliant, and efficient document processing.</span>
+              </p>
+              
+              <div className='mt-16 flex justify-center gap-6 animate-slideUp delay-200 pb-16'>
+                {isAuthenticated ? (
+                  <button
+                    onClick={startNewApplication}
+                    className='group relative inline-flex items-center justify-center px-10 py-5 text-xl font-bold text-white transition-all duration-300 bg-green-600 font-pj rounded-2xl focus:outline-none focus:ring-4 focus:ring-offset-2 focus:ring-green-600 hover:bg-green-700 shadow-xl hover:shadow-2xl hover:-translate-y-1'
+                  >
+                    <div className='absolute -inset-3 rounded-2xl bg-green-400 opacity-20 group-hover:opacity-40 blur transition duration-200'></div>
+                    <FileText className='w-7 h-7 mr-3' />
+                    Start New Application
+                  </button>
+                ) : (
+                  <div className='flex flex-col sm:flex-row gap-5'>
+                    <button
+                      onClick={() => {
+                        setAuthMode('signup');
+                        setShowAuthModal(true);
+                      }}
+                      className='inline-flex items-center px-10 py-5 text-xl font-bold text-white transition-all duration-300 bg-green-600 rounded-2xl hover:bg-green-700 shadow-xl hover:shadow-2xl hover:-translate-y-1'
+                    >
+                      <UserPlus className='w-7 h-7 mr-3' />
+                      Create Account
+                    </button>
+                    <button
+                      onClick={() => {
+                        setAuthMode('signin');
+                        setShowAuthModal(true);
+                      }}
+                      className='inline-flex items-center px-10 py-5 text-xl font-bold text-green-700 transition-all duration-300 bg-green-50 border-2 border-green-100 rounded-2xl hover:bg-green-100 hover:border-green-300'
+                    >
+                      Sign In
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+            
+            {/* Scroll Indicator */}
+            <div className='absolute bottom-8 w-full flex justify-center animate-bounce z-10'>
+              <div className='flex flex-col items-center text-gray-400'>
+                <span className='text-sm font-medium mb-2'>Scroll to learn more</span>
+                <ChevronDown className='h-6 w-6' />
+              </div>
+            </div>
           </div>
 
           {/* Recent Applications - Only show if user has any */}
-          {applications.length > 0 ? (
-            <div className='bg-gradient-to-br from-white to-gray-50 rounded-xl shadow-lg border border-gray-100 transition-all duration-200 overflow-visible'>
-              <div className='p-6 border-b border-gray-200 bg-white/50 backdrop-blur-sm relative z-10 overflow-visible rounded-t-xl'>
-                <div className='flex flex-col md:flex-row md:items-center justify-between gap-4'>
-                  <div className='flex items-center gap-3'>
-                    <div className='p-2.5 bg-gradient-to-br from-green-500 to-green-600 rounded-lg shadow-md'>
-                      <FileText className='h-6 w-6 text-white' />
-                    </div>
-                    <div>
-                      <h3 className='text-xl font-bold text-gray-900'>
-                        Recent Applications
-                      </h3>
-                      <p className='text-sm text-gray-500 mt-0.5 hidden md:block'>
-                        Track and manage your resale certificates
-                      </p>
-                    </div>
-                  </div>
-                  
-                  {/* Filters */}
-                  <div className='flex flex-col sm:flex-row gap-3 w-full md:w-auto items-center'>
-                    <CustomDropdown
-                      value={filterType}
-                      onChange={setFilterType}
-                      options={[
-                        { value: 'all', label: 'All Types' },
-                        ...formattedApplicationTypes
-                      ]}
-                      placeholder='All Types'
-                      icon={FileText}
-                      width='w-full sm:w-48'
-                      isOpen={openTypeDropdown}
-                      setIsOpen={setOpenTypeDropdown}
-                    />
-                    
-                    <CustomDropdown
-                      value={filterStatus}
-                      onChange={setFilterStatus}
-                      options={[
-                        { value: 'all', label: 'All Statuses' },
-                        { value: 'active', label: 'Active' },
-                        { value: 'completed', label: 'Completed' },
-                        { value: 'draft', label: 'Drafts' }
-                      ]}
-                      placeholder='All Statuses'
-                      icon={Filter}
-                      width='w-full sm:w-40'
-                      isOpen={openStatusDropdown}
-                      setIsOpen={setOpenStatusDropdown}
-                    />
-                  </div>
-                </div>
-              </div>
-              
-              <div className='p-6 bg-gray-50/50 overflow-hidden rounded-b-xl'>
-                <div className='space-y-4 max-h-[600px] overflow-y-auto pr-2 custom-scrollbar'>
-                {visibleApplications.length > 0 ? (
-                  visibleApplications.map((app) => {
-                  // Fix for premature "Completed" status when PDF is not generated
-                  let displayStatus = app.status;
-                  const isMultiCommunity = app.application_type === 'multi_community' || (app.application_property_groups && app.application_property_groups.length > 0);
-                  const propertyGroups = app.application_property_groups || [];
-                  
-                  // For multi-community applications, check if all properties are completed
-                  if (isMultiCommunity && propertyGroups.length > 0) {
-                    const allPropertiesCompleted = propertyGroups.every(prop => prop.pdf_url);
-                    if (allPropertiesCompleted) {
-                      displayStatus = 'completed';
-                    } else {
-                      // If not all are completed, show as under_review (or keep current status if it's already in progress)
-                      if (displayStatus !== 'draft' && displayStatus !== 'pending_payment' && displayStatus !== 'submitted') {
-                        displayStatus = 'under_review';
-                      }
-                    }
-                  } else if (app.status === 'completed' || app.status === 'approved' || app.status === 'compliance_completed') {
-                    // For single property applications, check if PDF exists
-                    const isSettlement = app.submitter_type === 'settlement' || app.application_type?.startsWith('settlement');
-                    const hasPdf = isSettlement ? (app.settlement_pdf_url || app.pdf_url) : app.pdf_url;
-                    
-                    if (!hasPdf) {
-                      displayStatus = 'under_review';
-                    }
-                  }
-
-                  const StatusIcon = statusConfig[displayStatus]?.icon || Clock;
-                  const statusConfigItem = statusConfig[displayStatus];
-                  // Extract colors for custom styling if needed, or use classes
-                  // Use a cleaner pill design
-                  let statusClasses = 'bg-gray-100 text-gray-700 border-gray-200';
-                  
-                  if (displayStatus === 'approved' || displayStatus === 'completed') {
-                    statusClasses = 'bg-green-50 text-green-700 border-green-200';
-                  } else if (displayStatus === 'under_review') {
-                    statusClasses = 'bg-blue-50 text-blue-700 border-blue-200';
-                  } else if (displayStatus === 'draft') {
-                    statusClasses = 'bg-gray-50 text-gray-600 border-gray-200';
-                  } else if (displayStatus === 'pending_payment') {
-                    statusClasses = 'bg-amber-50 text-amber-700 border-amber-200';
-                  }
-
-                  // Check if application can be deleted (draft or pending_payment)
-                  const canDelete = app.status === 'draft' || app.status === 'pending_payment';
-                  const isCompleted = displayStatus === 'completed' || displayStatus === 'approved';
-                  const isExpanded = expandedAppId === app.id;
-
-                  return (
-                    <div 
-                      key={app.id} 
-                      className={`group bg-white rounded-xl border border-gray-200 shadow-sm hover:shadow-md hover:border-green-200 transition-all duration-200 relative overflow-hidden ${isExpanded ? 'ring-2 ring-green-500 ring-opacity-50' : ''}`}
-                    >
-                      {/* Status bar accent on left */}
-                      <div className={`absolute left-0 top-0 bottom-0 w-1 ${
-                        displayStatus === 'approved' || displayStatus === 'completed' ? 'bg-green-500' :
-                        displayStatus === 'pending_payment' ? 'bg-amber-500' :
-                        displayStatus === 'draft' ? 'bg-gray-300' :
-                        'bg-blue-500'
-                      }`} />
-
-                      <div className='p-5 pl-7'>
-                        <div className='flex flex-col md:flex-row md:items-center justify-between gap-4'>
-                          <div className='flex-1 min-w-0'>
-                            <div className='flex items-center gap-2 mb-1'>
-                              <h4 className='text-base font-bold text-gray-900 truncate'>
-                                {app.hoa_properties?.name}
-                              </h4>
-                              <span className='text-gray-300'>|</span>
-                              <p className='text-sm text-gray-600 truncate'>
-                                {app.property_address}
-                              </p>
-                            </div>
-                            
-                            <div className='flex flex-wrap items-center gap-x-4 gap-y-2 mt-2 text-sm text-gray-500'>
-                              <div className='flex items-center gap-1.5'>
-                                <Calendar className='h-4 w-4 text-gray-400' />
-                                <span>
-                                  {app.submitted_at
-                                    ? `Submitted: ${new Date(app.submitted_at).toLocaleDateString()}`
-                                    : `Created: ${new Date(app.created_at).toLocaleDateString()}`}
-                                </span>
-                              </div>
-                              
-                              {isCompleted && (
-                                <div className='flex items-center gap-1.5 text-green-600 font-medium bg-green-50 px-2 py-0.5 rounded-md'>
-                                  <CheckCircle className='h-3.5 w-3.5' />
-                                  <span>Completed: {new Date(app.updated_at).toLocaleDateString()}</span>
-                                </div>
-                              )}
-                              
-                              {app.status === 'pending_payment' && app.total_amount > 0 && (
-                                <div className='flex items-center gap-1.5 font-medium text-gray-700 bg-gray-50 px-2 py-0.5 rounded-md'>
-                                  <DollarSign className='h-3.5 w-3.5 text-gray-400' />
-                                  <span>${app.total_amount}</span>
-                                </div>
-                              )}
-
-                              {isMultiCommunity && (
-                                <div className='flex items-center gap-1.5 font-medium text-blue-700 bg-blue-50 px-2 py-0.5 rounded-md'>
-                                  <Building2 className='h-3.5 w-3.5 text-blue-500' />
-                                  <span>{propertyGroups.length} Properties</span>
-                                </div>
-                              )}
-                            </div>
-                          </div>
-
-                          <div className='flex items-center justify-between md:justify-end gap-4 w-full md:w-auto border-t md:border-0 border-gray-100 pt-4 md:pt-0'>
-                            <span
-                              className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold border ${statusClasses} shadow-sm`}
-                            >
-                              <StatusIcon className='h-3.5 w-3.5 mr-1.5' />
-                              {statusConfig[displayStatus]?.label || displayStatus}
-                            </span>
-                            
-                            <div className='flex items-center gap-2'>
-                              {(app.status === 'draft' || app.status === 'pending_payment') && (
-                                <button
-                                  onClick={() => {
-                                    loadDraftApplication(app.id).then(() => {
-                                      setCurrentStep(app.status === 'pending_payment' ? 4 : 1);
-                                    });
-                                  }}
-                                  className='flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-white bg-green-600 hover:bg-green-700 rounded-lg transition-colors shadow-sm hover:shadow'
-                                  title='Resume Application'
-                                >
-                                  <FileText className='h-4 w-4' />
-                                  Resume
-                                </button>
-                              )}
-                              
-                              {canDelete && (
-                                <button
-                                  onClick={() => deleteUnpaidApplication(app.id, app.status)}
-                                  className='flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-red-600 bg-red-50 hover:bg-red-100 border border-red-100 rounded-lg transition-colors'
-                                  title={`Delete ${app.status === 'draft' ? 'Draft' : 'Application'}`}
-                                >
-                                  <Trash2 className='h-4 w-4' />
-                                  Delete
-                                </button>
-                              )}
-                              
-                              {/* Accordion Toggle - Only for Multi-Community */}
-                              {isMultiCommunity && (
-                                <button 
-                                  onClick={() => setExpandedAppId(isExpanded ? null : app.id)}
-                                  className={`p-1.5 rounded-lg transition-colors ${isExpanded ? 'bg-gray-100 text-gray-900' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-50'}`}
-                                >
-                                  {isExpanded ? <ChevronUp className='h-5 w-5' /> : <ChevronDown className='h-5 w-5' />}
-                                </button>
-                              )}
-                            </div>
-                          </div>
+          {isAuthenticated && applications.length > 0 && (
+             <div className='max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12'>
+                <div className='bg-gradient-to-br from-white to-gray-50 rounded-xl shadow-lg border border-gray-100 transition-all duration-200 overflow-visible'>
+                  {/* ... Recent Applications content ... */}
+                  {/* Keep existing Recent Applications logic here, wrapped in cleaner container */}
+                  <div className='p-6 border-b border-gray-200 bg-white/50 backdrop-blur-sm relative z-10 overflow-visible rounded-t-xl'>
+                    <div className='flex flex-col md:flex-row md:items-center justify-between gap-4'>
+                      <div className='flex items-center gap-3'>
+                        <div className='p-2.5 bg-gradient-to-br from-green-500 to-green-600 rounded-lg shadow-md'>
+                          <FileText className='h-6 w-6 text-white' />
+                        </div>
+                        <div>
+                          <h3 className='text-xl font-bold text-gray-900'>
+                            Recent Applications
+                          </h3>
+                          <p className='text-sm text-gray-500 mt-0.5 hidden md:block'>
+                            Track and manage your resale certificates
+                          </p>
                         </div>
                       </div>
-
-                      {/* Expanded Content for Multi-Community */}
-                      {isMultiCommunity && isExpanded && (
-                        <div className='border-t border-gray-200 bg-gray-50 p-5 animate-fadeIn'>
-                          <h5 className='text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2'>
-                            <Building2 className='h-4 w-4 text-gray-500' />
-                            Property Details
-                          </h5>
-                          <div className='space-y-3'>
-                            {[...propertyGroups]
-                              .sort((a, b) => (b.is_primary ? 1 : 0) - (a.is_primary ? 1 : 0))
-                              .map((prop, idx) => {
-                              // Determine status for individual property
-                              let propStatus = 'In Progress';
-                              let propStatusColor = 'bg-blue-100 text-blue-800';
-                              let PropIcon = Clock;
-
-                              if (prop.pdf_url) {
-                                propStatus = 'Completed';
-                                propStatusColor = 'bg-green-100 text-green-800';
-                                PropIcon = CheckCircle;
-                              } else if (prop.form_data) {
-                                propStatus = 'Under Review';
-                                PropIcon = FileText;
-                              }
-
-                              return (
-                                <div key={prop.id || idx} className='bg-white p-3 rounded-lg border border-gray-200 shadow-sm flex items-center justify-between'>
-                                  <div className='flex items-center gap-3'>
-                                    <div className='h-8 w-8 rounded-full bg-gray-100 flex items-center justify-center text-xs font-bold text-gray-600'>
-                                      {idx + 1}
-                                    </div>
-                                    <div>
-                                      <p className='text-sm font-medium text-gray-900'>{prop.property_name}</p>
-                                      <p className='text-xs text-gray-500'>{prop.property_location || 'Virginia'}</p>
-                                    </div>
-                                  </div>
-                                  <span className={`inline-flex items-center px-2 py-1 rounded text-xs font-medium ${propStatusColor}`}>
-                                    <PropIcon className='h-3 w-3 mr-1' />
-                                    {propStatus}
-                                  </span>
-                                </div>
-                              );
-                            })}
-                            {propertyGroups.length === 0 && (
-                              <p className='text-sm text-gray-500 italic'>No properties found for this group.</p>
-                            )}
-                          </div>
-                        </div>
-                      )}
+                      
+                      {/* Filters */}
+                      <div className='flex flex-col sm:flex-row gap-3 w-full md:w-auto items-center'>
+                        <CustomDropdown
+                          value={filterType}
+                          onChange={setFilterType}
+                          options={[
+                            { value: 'all', label: 'All Types' },
+                            ...formattedApplicationTypes
+                          ]}
+                          placeholder='All Types'
+                          icon={FileText}
+                          width='w-full sm:w-48'
+                          isOpen={openTypeDropdown}
+                          setIsOpen={setOpenTypeDropdown}
+                        />
+                        
+                        <CustomDropdown
+                          value={filterStatus}
+                          onChange={setFilterStatus}
+                          options={[
+                            { value: 'all', label: 'All Statuses' },
+                            { value: 'active', label: 'Active' },
+                            { value: 'completed', label: 'Completed' },
+                            { value: 'draft', label: 'Drafts' }
+                          ]}
+                          placeholder='All Statuses'
+                          icon={Filter}
+                          width='w-full sm:w-40'
+                          isOpen={openStatusDropdown}
+                          setIsOpen={setOpenStatusDropdown}
+                        />
+                      </div>
                     </div>
-                  );
-                })
-              ) : (
-                <div className='flex flex-col items-center justify-center py-12 px-4 text-center bg-white rounded-xl border border-dashed border-gray-300'>
-                  <div className='p-4 bg-gray-50 rounded-full mb-3'>
-                    <Filter className='h-8 w-8 text-gray-400' />
                   </div>
-                  <h3 className='text-lg font-medium text-gray-900'>No applications found</h3>
-                  <p className='text-gray-500 mt-1 max-w-sm'>
-                    We couldn't find any applications matching your current filters. Try adjusting your search criteria.
-                  </p>
-                  <button 
-                    onClick={() => { setFilterStatus('all'); setFilterType('all'); }}
-                    className='mt-4 text-sm text-green-600 font-medium hover:text-green-700 hover:underline'
-                  >
-                    Clear all filters
-                  </button>
+                  
+                  <div className='p-6 bg-gray-50/50 overflow-hidden rounded-b-xl'>
+                    <div className='space-y-4 max-h-[600px] overflow-y-auto pr-2 custom-scrollbar'>
+                    {visibleApplications.length > 0 ? (
+                      visibleApplications.map((app) => {
+                      // Fix for premature "Completed" status when PDF is not generated
+                      let displayStatus = app.status;
+                      const propertyGroups = app.application_property_groups || [];
+                      const isMultiCommunity = app.application_type === 'multi_community' || 
+                                                (app.application_type?.startsWith('settlement') && propertyGroups.length > 1) ||
+                                                propertyGroups.length > 1;
+                      const isSettlementApp = app.submitter_type === 'settlement' || 
+                                             app.application_type?.startsWith('settlement');
+                      
+                      // For multi-community applications, accurately check completion status
+                      if (isMultiCommunity && propertyGroups.length > 0) {
+                        let allPropertiesCompleted = true;
+                        
+                        // Check each property group for complete workflow
+                        for (const group of propertyGroups) {
+                          let propertyCompleted = false;
+                          
+                          if (isSettlementApp) {
+                            // Settlement multi-community: check settlement form, PDF, and email
+                            const settlementForm = app.property_owner_forms?.find(
+                              form => form.form_type === 'settlement_form' && form.property_group_id === group.id
+                            );
+                            const formCompleted = settlementForm?.status === 'completed';
+                            const pdfCompleted = group.pdf_status === 'completed' || !!group.pdf_url;
+                            const emailCompleted = group.email_status === 'completed' || !!group.email_completed_at;
+                            
+                            propertyCompleted = formCompleted && pdfCompleted && emailCompleted;
+                          } else {
+                            // Standard multi-community: check inspection form, resale form, PDF, and email
+                            const inspectionStatus = group.inspection_status ?? 'not_started';
+                            const resaleStatus = group.status === 'completed';
+                            const formsCompleted = inspectionStatus === 'completed' && resaleStatus;
+                            const pdfCompleted = group.pdf_status === 'completed' || !!group.pdf_url;
+                            const emailCompleted = group.email_status === 'completed' || !!group.email_completed_at;
+                            
+                            propertyCompleted = formsCompleted && pdfCompleted && emailCompleted;
+                          }
+                          
+                          if (!propertyCompleted) {
+                            allPropertiesCompleted = false;
+                            break;
+                          }
+                        }
+                        
+                        if (allPropertiesCompleted) {
+                          displayStatus = 'completed';
+                        } else {
+                          // If not all are completed, show as under_review (or keep current status if it's already in progress)
+                          if (displayStatus !== 'draft' && displayStatus !== 'pending_payment' && displayStatus !== 'submitted') {
+                            displayStatus = 'under_review';
+                          }
+                        }
+                      } else if (app.status === 'completed' || app.status === 'approved' || app.status === 'compliance_completed') {
+                        // For single property applications, check if PDF exists
+                        const isSettlement = app.submitter_type === 'settlement' || app.application_type?.startsWith('settlement');
+                        const hasPdf = isSettlement ? (app.settlement_pdf_url || app.pdf_url) : app.pdf_url;
+                        
+                        if (!hasPdf) {
+                          displayStatus = 'under_review';
+                        }
+                      }
+
+                      const StatusIcon = statusConfig[displayStatus]?.icon || Clock;
+                      const statusConfigItem = statusConfig[displayStatus];
+                      // Extract colors for custom styling if needed, or use classes
+                      // Use a cleaner pill design
+                      let statusClasses = 'bg-gray-100 text-gray-700 border-gray-200';
+                      
+                      if (displayStatus === 'approved' || displayStatus === 'completed') {
+                        statusClasses = 'bg-green-50 text-green-700 border-green-200';
+                      } else if (displayStatus === 'under_review') {
+                        statusClasses = 'bg-blue-50 text-blue-700 border-blue-200';
+                      } else if (displayStatus === 'draft') {
+                        statusClasses = 'bg-gray-50 text-gray-600 border-gray-200';
+                      } else if (displayStatus === 'pending_payment') {
+                        statusClasses = 'bg-amber-50 text-amber-700 border-amber-200';
+                      }
+
+                      // Check if application can be deleted (draft or pending_payment)
+                      const canDelete = app.status === 'draft' || app.status === 'pending_payment';
+                      const isCompleted = displayStatus === 'completed' || displayStatus === 'approved';
+                      const isExpanded = expandedAppId === app.id;
+
+                      return (
+                        <div 
+                          key={app.id} 
+                          className={`group bg-white rounded-xl border border-gray-200 shadow-sm hover:shadow-md hover:border-green-200 transition-all duration-200 relative overflow-hidden ${isExpanded ? 'ring-2 ring-green-500 ring-opacity-50' : ''}`}
+                        >
+                          {/* Status bar accent on left */}
+                          <div className={`absolute left-0 top-0 bottom-0 w-1 ${
+                            displayStatus === 'approved' || displayStatus === 'completed' ? 'bg-green-500' :
+                            displayStatus === 'pending_payment' ? 'bg-amber-500' :
+                            displayStatus === 'draft' ? 'bg-gray-300' :
+                            'bg-blue-500'
+                          }`} />
+
+                          <div className='p-5 pl-7'>
+                            <div className='flex flex-col md:flex-row md:items-center justify-between gap-4'>
+                              <div className='flex-1 min-w-0'>
+                                <div className='flex items-center gap-2 mb-1'>
+                                  <h4 className='text-base font-bold text-gray-900 truncate'>
+                                    {app.hoa_properties?.name}
+                                  </h4>
+                                  <span className='text-gray-300'>|</span>
+                                  <p className='text-sm text-gray-600 truncate'>
+                                    {app.property_address}
+                                  </p>
+                                </div>
+                                
+                                <div className='flex flex-wrap items-center gap-x-4 gap-y-2 mt-2 text-sm text-gray-500'>
+                                  <div className='flex items-center gap-1.5'>
+                                    <Calendar className='h-4 w-4 text-gray-400' />
+                                    <span>
+                                      {app.submitted_at
+                                        ? `Submitted: ${new Date(app.submitted_at).toLocaleDateString()}`
+                                        : `Created: ${new Date(app.created_at).toLocaleDateString()}`}
+                                    </span>
+                                  </div>
+                                  
+                                  {isCompleted && (
+                                    <div className='flex items-center gap-1.5 text-green-600 font-medium bg-green-50 px-2 py-0.5 rounded-md'>
+                                      <CheckCircle className='h-3.5 w-3.5' />
+                                      <span>Completed: {new Date(app.updated_at).toLocaleDateString()}</span>
+                                    </div>
+                                  )}
+                                  
+                                  {app.status === 'pending_payment' && app.total_amount > 0 && (
+                                    <div className='flex items-center gap-1.5 font-medium text-gray-700 bg-gray-50 px-2 py-0.5 rounded-md'>
+                                      <DollarSign className='h-3.5 w-3.5 text-gray-400' />
+                                      <span>${app.total_amount}</span>
+                                    </div>
+                                  )}
+
+                                  {isMultiCommunity && (
+                                    <div className='flex items-center gap-1.5 font-medium text-blue-700 bg-blue-50 px-2 py-0.5 rounded-md'>
+                                      <Building2 className='h-3.5 w-3.5 text-blue-500' />
+                                      <span>{propertyGroups.length} Properties</span>
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+
+                              <div className='flex items-center justify-between md:justify-end gap-4 w-full md:w-auto border-t md:border-0 border-gray-100 pt-4 md:pt-0'>
+                                <span
+                                  className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold border ${statusClasses} shadow-sm`}
+                                >
+                                  <StatusIcon className='h-3.5 w-3.5 mr-1.5' />
+                                  {statusConfig[displayStatus]?.label || displayStatus}
+                                </span>
+                                
+                                <div className='flex items-center gap-2'>
+                                  {(app.status === 'draft' || app.status === 'pending_payment') && (
+                                    <button
+                                      onClick={() => {
+                                        loadDraftApplication(app.id).then(() => {
+                                          setCurrentStep(app.status === 'pending_payment' ? 4 : 1);
+                                        });
+                                      }}
+                                      className='flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-white bg-green-600 hover:bg-green-700 rounded-lg transition-colors shadow-sm hover:shadow'
+                                      title='Resume Application'
+                                    >
+                                      <FileText className='h-4 w-4' />
+                                      Resume
+                                    </button>
+                                  )}
+                                  
+                                  {canDelete && (
+                                    <button
+                                      onClick={() => deleteUnpaidApplication(app.id, app.status)}
+                                      className='flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-red-600 bg-red-50 hover:bg-red-100 border border-red-100 rounded-lg transition-colors'
+                                      title={`Delete ${app.status === 'draft' ? 'Draft' : 'Application'}`}
+                                    >
+                                      <Trash2 className='h-4 w-4' />
+                                      Delete
+                                    </button>
+                                  )}
+                                  
+                                  {/* Accordion Toggle - Only for Multi-Community */}
+                                  {isMultiCommunity && (
+                                    <button 
+                                      onClick={() => setExpandedAppId(isExpanded ? null : app.id)}
+                                      className={`p-1.5 rounded-lg transition-colors ${isExpanded ? 'bg-gray-100 text-gray-900' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-50'}`}
+                                    >
+                                      {isExpanded ? <ChevronUp className='h-5 w-5' /> : <ChevronDown className='h-5 w-5' />}
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Expanded Content for Multi-Community */}
+                          {isMultiCommunity && isExpanded && (
+                            <div className='border-t border-gray-200 bg-gray-50 p-5 animate-fadeIn'>
+                              <h5 className='text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2'>
+                                <Building2 className='h-4 w-4 text-gray-500' />
+                                Property Details
+                              </h5>
+                              <div className='space-y-3'>
+                                {[...propertyGroups]
+                                  .sort((a, b) => (b.is_primary ? 1 : 0) - (a.is_primary ? 1 : 0))
+                                  .map((prop, idx) => {
+                                  // Determine status for individual property
+                                  let propStatus = 'In Progress';
+                                  let propStatusColor = 'bg-blue-100 text-blue-800';
+                                  let PropIcon = Clock;
+
+                                  if (prop.pdf_url) {
+                                    propStatus = 'Completed';
+                                    propStatusColor = 'bg-green-100 text-green-800';
+                                    PropIcon = CheckCircle;
+                                  } else if (prop.form_data) {
+                                    propStatus = 'Under Review';
+                                    PropIcon = FileText;
+                                  }
+
+                                  return (
+                                    <div key={prop.id || idx} className='bg-white p-3 rounded-lg border border-gray-200 shadow-sm flex items-center justify-between'>
+                                      <div className='flex items-center gap-3'>
+                                        <div className='h-8 w-8 rounded-full bg-gray-100 flex items-center justify-center text-xs font-bold text-gray-600'>
+                                          {idx + 1}
+                                        </div>
+                                        <div>
+                                          <p className='text-sm font-medium text-gray-900'>{prop.property_name}</p>
+                                          <p className='text-xs text-gray-500'>{prop.property_location || 'Virginia'}</p>
+                                        </div>
+                                      </div>
+                                      <span className={`inline-flex items-center px-2 py-1 rounded text-xs font-medium ${propStatusColor}`}>
+                                        <PropIcon className='h-3 w-3 mr-1' />
+                                        {propStatus}
+                                      </span>
+                                    </div>
+                                  );
+                                })}
+                                {propertyGroups.length === 0 && (
+                                  <p className='text-sm text-gray-500 italic'>No properties found for this group.</p>
+                                )}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })
+                  ) : (
+                    <div className='flex flex-col items-center justify-center py-12 px-4 text-center bg-white rounded-xl border border-dashed border-gray-300'>
+                      <div className='p-4 bg-gray-50 rounded-full mb-3'>
+                        <Filter className='h-8 w-8 text-gray-400' />
+                      </div>
+                      <h3 className='text-lg font-medium text-gray-900'>No applications found</h3>
+                      <p className='text-gray-500 mt-1 max-w-sm'>
+                        We couldn't find any applications matching your current filters. Try adjusting your search criteria.
+                      </p>
+                      <button 
+                        onClick={() => { setFilterStatus('all'); setFilterType('all'); }}
+                        className='mt-4 text-sm text-green-600 font-medium hover:text-green-700 hover:underline'
+                      >
+                        Clear all filters
+                      </button>
+                    </div>
+                  )}
+                  </div>
+                  </div>
                 </div>
-              )}
               </div>
-              </div>
-            </div>
-          ) : (
-            <div className='bg-gradient-to-br from-white to-gray-50 rounded-xl shadow-sm border border-gray-200 p-10 text-center'>
-              <div className='w-16 h-16 bg-green-50 rounded-full flex items-center justify-center mx-auto mb-4'>
-                <FileText className='h-8 w-8 text-green-600' />
-              </div>
-              <h3 className='text-lg font-bold text-gray-900 mb-2'>No applications yet</h3>
-              <p className='text-gray-600 max-w-md mx-auto'>
-                Start a new application above to request resale certificates. Your history will appear here.
-              </p>
-            </div>
+          )}
+          
+          {isAuthenticated && applications.length === 0 && (
+             <div className='max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-12'>
+                <div className='relative bg-white rounded-2xl shadow-sm border border-dashed border-gray-300 p-12 text-center overflow-hidden'>
+                  <div className='absolute inset-0 bg-grid-slate-50 [mask-image:linear-gradient(0deg,white,rgba(255,255,255,0.6))]'></div>
+                  <div className='relative z-10'>
+                    <div className='w-20 h-20 bg-green-50 rounded-2xl flex items-center justify-center mx-auto mb-6 rotate-3 shadow-sm'>
+                      <FileText className='h-10 w-10 text-green-600' />
+                    </div>
+                    <h3 className='text-2xl font-bold text-gray-900 mb-3'>No applications yet</h3>
+                    <p className='text-gray-500 max-w-md mx-auto text-lg mb-8'>
+                      Get started by creating your first resale certificate application. We'll guide you through the process.
+                    </p>
+                    <button
+                      onClick={startNewApplication}
+                      className='text-green-600 font-semibold hover:text-green-700 flex items-center justify-center gap-2 mx-auto hover:underline'
+                    >
+                      Start your first application <ArrowRight className='w-4 h-4'/>
+                    </button>
+                  </div>
+                </div>
+             </div>
           )}
 
-          {/* Process Steps */}
-          <div className='bg-white rounded-lg shadow-sm border border-gray-200 p-8'>
-            <h3 className='text-2xl font-bold text-gray-900 mb-6 text-center'>
-              How It Works
-            </h3>
-            <div className='grid grid-cols-1 md:grid-cols-3 gap-8'>
-              <div className='text-center'>
-                <div className='w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4'>
-                  <FileText className='h-8 w-8 text-blue-600' />
-                </div>
-                <h4 className='text-lg font-semibold text-gray-900 mb-2'>
-                  1. Submit Application
-                </h4>
-                <p className='text-gray-600'>
-                  Provide property details, transaction information, and select
-                  your processing speed.
-                </p>
+          {/* Second Fold: How It Works */}
+          <div className='bg-slate-50 py-24 border-t border-gray-200'>
+            <div className='max-w-7xl mx-auto px-4 sm:px-6 lg:px-8'>
+              <div className='text-center mb-16'>
+                <span className='text-green-600 font-semibold tracking-wider uppercase text-sm'>Process</span>
+                <h3 className='text-4xl font-extrabold text-gray-900 mt-2'>How It Works</h3>
+                <p className='mt-4 text-xl text-gray-600 max-w-2xl mx-auto'>Three simple steps to get your documents processed quickly and accurately.</p>
               </div>
-              <div className='text-center'>
-                <div className='w-16 h-16 bg-yellow-100 rounded-full flex items-center justify-center mx-auto mb-4'>
-                  <Clock className='h-8 w-8 text-yellow-600' />
+              
+              <div className='grid grid-cols-1 md:grid-cols-3 gap-12 relative'>
+                {/* Connector Line (Desktop) */}
+                <div className='hidden md:block absolute top-12 left-[16%] right-[16%] h-1 bg-gradient-to-r from-blue-200 via-yellow-200 to-green-200 -z-10 rounded-full'></div>
+
+                {/* Step 1 */}
+                <div className='bg-white p-10 rounded-3xl shadow-lg border border-gray-100 hover:shadow-xl transition-all duration-300 transform hover:-translate-y-2 relative group'>
+                  <div className='absolute -top-6 left-1/2 transform -translate-x-1/2'>
+                     <div className='w-12 h-12 bg-blue-600 text-white rounded-full flex items-center justify-center text-xl font-bold shadow-md ring-4 ring-white'>1</div>
+                  </div>
+                  <div className='w-20 h-20 bg-blue-50 rounded-2xl flex items-center justify-center mx-auto mb-6 shadow-inner group-hover:scale-110 transition-transform duration-300'>
+                    <FileText className='h-10 w-10 text-blue-600' />
+                  </div>
+                  <h4 className='text-2xl font-bold text-gray-900 mb-4 text-center'>Submit Application</h4>
+                  <p className='text-gray-600 text-center leading-relaxed'>
+                    Enter property details and select your processing speed. Our smart form guides you through requirements.
+                  </p>
                 </div>
-                <h4 className='text-lg font-semibold text-gray-900 mb-2'>
-                  2. We Process
-                </h4>
-                <p className='text-gray-600'>
-                  Our team handles compliance inspections and gathers all
-                  required HOA documents.
-                </p>
-              </div>
-              <div className='text-center'>
-                <div className='w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4'>
-                  <CheckCircle className='h-8 w-8 text-green-600' />
+
+                {/* Step 2 */}
+                <div className='bg-white p-10 rounded-3xl shadow-lg border border-gray-100 hover:shadow-xl transition-all duration-300 transform hover:-translate-y-2 relative group'>
+                  <div className='absolute -top-6 left-1/2 transform -translate-x-1/2'>
+                     <div className='w-12 h-12 bg-yellow-500 text-white rounded-full flex items-center justify-center text-xl font-bold shadow-md ring-4 ring-white'>2</div>
+                  </div>
+                  <div className='w-20 h-20 bg-yellow-50 rounded-2xl flex items-center justify-center mx-auto mb-6 shadow-inner group-hover:scale-110 transition-transform duration-300'>
+                    <Clock className='h-10 w-10 text-yellow-600' />
+                  </div>
+                  <h4 className='text-2xl font-bold text-gray-900 mb-4 text-center'>Processing</h4>
+                  <p className='text-gray-600 text-center leading-relaxed'>
+                    We perform compliance inspections and gather all necessary HOA documents and financials.
+                  </p>
                 </div>
-                <h4 className='text-lg font-semibold text-gray-900 mb-2'>
-                  3. Receive Documents
-                </h4>
-                <p className='text-gray-600'>
-                  Get your complete resale certificate package delivered
-                  electronically.
-                </p>
+
+                {/* Step 3 */}
+                <div className='bg-white p-10 rounded-3xl shadow-lg border border-gray-100 hover:shadow-xl transition-all duration-300 transform hover:-translate-y-2 relative group'>
+                  <div className='absolute -top-6 left-1/2 transform -translate-x-1/2'>
+                     <div className='w-12 h-12 bg-green-600 text-white rounded-full flex items-center justify-center text-xl font-bold shadow-md ring-4 ring-white'>3</div>
+                  </div>
+                  <div className='w-20 h-20 bg-green-50 rounded-2xl flex items-center justify-center mx-auto mb-6 shadow-inner group-hover:scale-110 transition-transform duration-300'>
+                    <CheckCircle className='h-10 w-10 text-green-600' />
+                  </div>
+                  <h4 className='text-2xl font-bold text-gray-900 mb-4 text-center'>Delivery</h4>
+                  <p className='text-gray-600 text-center leading-relaxed'>
+                    Receive your complete, compliant resale certificate package digitally and securely.
+                  </p>
+                </div>
               </div>
             </div>
           </div>
 
-          {/* Pricing Cards */}
-          <div className='grid grid-cols-1 md:grid-cols-2 gap-6'>
-            <div className='bg-white p-8 rounded-lg shadow-sm border border-gray-200'>
-              <h4 className='text-xl font-semibold text-gray-900 mb-2'>
-                {formData.submitterType === 'lender_questionnaire' ? 'Standard' : 'Standard Processing'}
-              </h4>
-              <div className='text-3xl font-bold text-green-600 mb-4'>
-                {(() => {
-                  if (formData.submitterType === 'lender_questionnaire') {
-                    const pricing = getPricing('lender_questionnaire', false);
-                    return `$${(pricing.base / 100).toFixed(2)}`;
-                  }
-                  return '$317.95';
-                })()}
+          {/* Last Fold: Pricing Options */}
+          <div className='bg-white py-24'>
+            <div className='max-w-6xl mx-auto px-4 sm:px-6 lg:px-8'>
+              <div className='text-center mb-16'>
+                 <span className='text-green-600 font-semibold tracking-wider uppercase text-sm'>Pricing</span>
+                <h3 className='text-4xl font-extrabold text-gray-900 mt-2'>Transparent Pricing</h3>
+                <p className='mt-4 text-xl text-gray-600'>Choose the turnaround time that fits your needs.</p>
               </div>
-              <p className='text-gray-600 mb-4'>
-                {formData.submitterType === 'lender_questionnaire' ? '10 Calendar Days' : '10-15 business days'}
-              </p>
-              <ul className='space-y-2 text-sm text-gray-600'>
-                <li>✓ Complete Virginia Resale Certificate</li>
-                <li>✓ HOA Documents Package</li>
-                <li>✓ Compliance Inspection Report</li>
-                <li>✓ Digital & Print Delivery</li>
-              </ul>
-            </div>
-            <div className='bg-orange-50 p-8 rounded-lg shadow-sm border border-orange-200'>
-              <div className='flex items-center justify-between mb-2'>
-                <h4 className='text-xl font-semibold text-gray-900'>
-                  {formData.submitterType === 'lender_questionnaire' ? 'Rush' : 'Rush Processing'}
-                </h4>
-                <span className='px-3 py-1 bg-orange-100 text-orange-800 text-sm rounded-full font-medium'>
-                  PRIORITY
-                </span>
+
+              <div className='grid grid-cols-1 md:grid-cols-2 gap-8 max-w-4xl mx-auto'>
+                {/* Standard */}
+                <div className='bg-white p-10 rounded-3xl shadow-xl border border-gray-100 hover:border-gray-300 transition-all duration-300 flex flex-col transform hover:-translate-y-1'>
+                  <div className='mb-6'>
+                    <span className='inline-flex items-center px-4 py-1.5 rounded-full text-xs font-bold tracking-wide uppercase bg-gray-100 text-gray-600'>
+                      Standard
+                    </span>
+                  </div>
+                  <h4 className='text-3xl font-bold text-gray-900 mb-2'>
+                    {formData.submitterType === 'lender_questionnaire' ? 'Standard' : 'Standard Processing'}
+                  </h4>
+                  <div className='flex items-baseline mb-2'>
+                    <span className='text-5xl font-extrabold text-gray-900'>
+                      {(() => {
+                        if (formData.submitterType === 'lender_questionnaire') {
+                          const pricing = getPricing('lender_questionnaire', false);
+                          return `$${(pricing.base / 100).toFixed(2)}`;
+                        }
+                        return '$317.95';
+                      })()}
+                    </span>
+                  </div>
+                  <p className='text-gray-500 mb-8 text-lg font-medium'>
+                    {formData.submitterType === 'lender_questionnaire' ? '10 Calendar Days' : '10-15 business days turnaround'}
+                  </p>
+                  <div className='flex-1 border-t border-gray-100 pt-8 mb-8'>
+                    <ul className='space-y-5'>
+                      {[
+                        'Complete Virginia Resale Certificate',
+                        'HOA Documents Package',
+                        'Compliance Inspection Report',
+                        'Digital Delivery'
+                      ].map((item, i) => (
+                        <li key={i} className='flex items-start'>
+                          <div className='flex-shrink-0 w-6 h-6 rounded-full bg-green-100 flex items-center justify-center mt-0.5'>
+                             <CheckCircle className='h-4 w-4 text-green-600' />
+                          </div>
+                          <span className='ml-3 text-gray-700 text-base'>{item}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                  <button 
+                    onClick={() => {
+                        // Scroll to top if authenticated, or show sign up
+                        if (isAuthenticated) {
+                           window.scrollTo({ top: 0, behavior: 'smooth' });
+                           startNewApplication();
+                        } else {
+                           setAuthMode('signup');
+                           setShowAuthModal(true);
+                        }
+                    }}
+                    className='w-full py-4 px-6 bg-gray-50 hover:bg-gray-100 text-gray-900 font-bold text-lg rounded-2xl transition-colors border border-gray-200'
+                  >
+                    Select Standard
+                  </button>
+                </div>
+
+                {/* Rush */}
+                <div className='bg-white p-10 rounded-3xl shadow-2xl border-2 border-orange-400 relative flex flex-col transform hover:-translate-y-1 transition-transform duration-300 overflow-hidden'>
+                  <div className='absolute top-0 right-0'>
+                     <div className='bg-orange-500 text-white text-xs font-bold px-4 py-1.5 rounded-bl-2xl uppercase tracking-wide'>
+                        Recommended
+                     </div>
+                  </div>
+                  <div className='mb-6'>
+                    <span className='inline-flex items-center px-4 py-1.5 rounded-full text-xs font-bold tracking-wide uppercase bg-orange-100 text-orange-700'>
+                      Rush
+                    </span>
+                  </div>
+                  <h4 className='text-3xl font-bold text-gray-900 mb-2'>
+                    {formData.submitterType === 'lender_questionnaire' ? 'Rush' : 'Rush Processing'}
+                  </h4>
+                  <div className='flex items-baseline mb-2'>
+                    <span className='text-5xl font-extrabold text-gray-900'>
+                      {(() => {
+                        if (formData.submitterType === 'lender_questionnaire') {
+                          const pricing = getPricing('lender_questionnaire', true);
+                          return `$${(pricing.total / 100).toFixed(2)}`;
+                        }
+                        return '$388.61';
+                      })()}
+                    </span>
+                  </div>
+                  <p className='text-gray-500 mb-8 text-lg font-medium'>
+                    {formData.submitterType === 'lender_questionnaire' ? '3 Business Days' : '5 business days guaranteed'}
+                  </p>
+                  <div className='flex-1 border-t border-orange-100 pt-8 mb-8'>
+                    <ul className='space-y-5'>
+                      {[
+                        'Everything in Standard',
+                        'Priority Queue Processing',
+                        'Expedited Compliance Inspection',
+                        '5-Day Completion Guarantee'
+                      ].map((item, i) => (
+                        <li key={i} className='flex items-start'>
+                          <div className='flex-shrink-0 w-6 h-6 rounded-full bg-orange-100 flex items-center justify-center mt-0.5'>
+                             <CheckCircle className='h-4 w-4 text-orange-500' />
+                          </div>
+                          <span className='ml-3 text-gray-700 text-base'>{item}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                  <button 
+                    onClick={() => {
+                        if (isAuthenticated) {
+                           window.scrollTo({ top: 0, behavior: 'smooth' });
+                           startNewApplication();
+                        } else {
+                           setAuthMode('signup');
+                           setShowAuthModal(true);
+                        }
+                    }}
+                    className='w-full py-4 px-6 bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 text-white font-bold text-lg rounded-2xl transition-all shadow-md hover:shadow-lg'
+                  >
+                    Select Rush
+                  </button>
+                </div>
               </div>
-              <div className='text-3xl font-bold text-orange-600 mb-4'>
-                {(() => {
-                  if (formData.submitterType === 'lender_questionnaire') {
-                    const pricing = getPricing('lender_questionnaire', true);
-                    return `$${(pricing.total / 100).toFixed(2)}`;
-                  }
-                  return '$388.61';
-                })()}
-              </div>
-              <p className='text-gray-600 mb-4'>
-                {formData.submitterType === 'lender_questionnaire' ? '3 Business Days' : '5 business days'}
-              </p>
-              <ul className='space-y-2 text-sm text-gray-600'>
-                <li>✓ Everything in Standard</li>
-                <li>✓ Priority queue processing</li>
-                <li>✓ Expedited compliance inspection</li>
-                <li>✓ 5-day completion guarantee</li>
-              </ul>
             </div>
           </div>
         </div>
@@ -5235,7 +5575,6 @@ export default function GMGResaleFlow() {
                     !formData.submitterEmail ||
                     (formData.submitterType === 'settlement' && !formData.closingDate))) ||
                 (currentStep === 3 &&
-                  formData.submitterType !== 'settlement' &&
                   (!formData.sellerName ||
                     !formData.sellerEmail ||
                     !formData.sellerPhone))

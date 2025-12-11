@@ -206,9 +206,13 @@ export default async function handler(req, res) {
         if (docsError) {
           console.error('Error fetching property documents:', docsError);
         } else if (propertyDocuments && propertyDocuments.length > 0) {
-          console.log('Found', propertyDocuments.length, 'property documents (excluding Public Offering Statement)');
+          // Sort documents by defined order (property-specific order takes priority)
+          const { sortDocumentsByOrder } = await import('../../lib/documentOrder');
+          const sortedDocuments = await sortDocumentsByOrder(propertyDocuments, application.hoa_property_id, supabase);
           
-          for (const doc of propertyDocuments) {
+          console.log('Found', sortedDocuments.length, 'property documents (excluding Public Offering Statement)');
+          
+          for (const doc of sortedDocuments) {
             try {
               // Create 30-day signed URL for each document
               const { data: urlData, error: docUrlError } = await supabase.storage

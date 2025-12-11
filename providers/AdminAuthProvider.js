@@ -31,19 +31,30 @@ export function AdminAuthProvider({ children }) {
 
     if (isAdminRoute && !isLoginPage && !isAuthenticated()) {
       // Redirect to admin login if accessing admin routes without auth
-      // Preserve applicationId if present in current URL
+      // Preserve redirect URL, applicationId, or default to login
+      const redirect = encodeURIComponent(router.asPath); // Full path with query params
       const applicationId = router.query.applicationId;
+      
       if (applicationId) {
+        // Legacy support for applicationId
         router.push(`/admin/login?applicationId=${applicationId}`);
+      } else if (redirect && redirect !== '/admin/login') {
+        // Preserve the full URL (including query params) for redirect after login
+        router.push(`/admin/login?redirect=${redirect}`);
       } else {
         router.push('/admin/login');
       }
     } else if (isLoginPage && isAuthenticated()) {
       // Redirect if already authenticated and on login page
-      // Check if there's an applicationId in query params for redirect
+      // Check for redirect param first, then applicationId, then default
+      const redirect = router.query.redirect;
       const applicationId = router.query.applicationId;
-      if (applicationId) {
-        // Redirect to applications page with applicationId to open modal
+      
+      if (redirect) {
+        // Decode and redirect to the preserved URL
+        router.push(decodeURIComponent(redirect));
+      } else if (applicationId) {
+        // Legacy support for applicationId
         router.push(`/admin/applications?applicationId=${applicationId}`);
       } else {
         // Default redirect to dashboard

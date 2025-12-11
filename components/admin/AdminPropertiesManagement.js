@@ -910,80 +910,80 @@ const AdminPropertiesManagement = () => {
     <AdminLayout>
       <div className="max-w-7xl mx-auto p-6">
         {/* Header */}
-        <div className='mb-8'>
-          <div className='flex items-center justify-between'>
-            <div>
-              <h1 className='text-3xl font-bold text-gray-900 mb-2'>
-                Properties Management
-              </h1>
-              <p className='text-gray-600'>
-                Manage HOA properties and associated documents
-              </p>
-            </div>
-            <button
-              onClick={() => {
-                setCurrentPage(1);
-                setSearchTerm('');
-                setDebouncedSearchTerm('');
-                mutate();
-              }}
-              disabled={isLoading}
-              className='flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50'
-            >
-              <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
-              {isLoading ? 'Refreshing...' : 'Refresh'}
-            </button>
-          </div>
-        </div>
-
-        {/* Controls */}
-        <div className="flex justify-between items-center mb-6">
-          <div className="flex items-center gap-4">
-            <div className="relative">
-              <Search className="w-5 h-5 absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
-              <input
-                type="text"
-                placeholder="Search properties..."
-                value={searchTerm}
-                onChange={(e) => handleSearch(e.target.value)}
-                className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                autoComplete="off"
-              />
-            </div>
+        <div className='mb-8 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4'>
+          <div>
+            <h1 className='text-2xl font-bold text-gray-900 tracking-tight'>
+              Properties
+            </h1>
+            <p className='text-sm text-gray-500 mt-1'>
+              Manage HOA properties and associated documents
+            </p>
           </div>
           <button
-            onClick={openAddModal}
-            className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+            onClick={() => {
+              setCurrentPage(1);
+              setSearchTerm('');
+              setDebouncedSearchTerm('');
+              mutate();
+            }}
+            disabled={isLoading}
+            className='inline-flex items-center justify-center gap-2 px-4 py-2 bg-white border border-gray-200 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 hover:text-gray-900 transition-all focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-200 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm'
           >
-            <Plus className="w-4 h-4" />
-            Add Property
+            <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
+            {isLoading ? 'Refreshing...' : 'Refresh List'}
           </button>
         </div>
 
-        {/* Properties Table */}
-        <div className="bg-white rounded-lg shadow overflow-hidden">
+        {/* Controls & Search Card */}
+        <div className='bg-white rounded-xl shadow-sm border border-gray-200 mb-6 overflow-hidden'>
+          <div className='p-5'>
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
+              <div className="relative flex-1 w-full sm:max-w-md">
+                <Search className="w-5 h-5 absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
+                <input
+                  type="text"
+                  placeholder="Search properties..."
+                  value={searchTerm}
+                  onChange={(e) => handleSearch(e.target.value)}
+                  className="w-full pl-10 pr-4 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
+                  autoComplete="off"
+                />
+              </div>
+              <button
+                onClick={openAddModal}
+                className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+              >
+                <Plus className="w-4 h-4" />
+                Add Property
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Properties Table (Desktop) */}
+        <div className="hidden sm:block bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
           <div className="overflow-x-auto">
             <table className="min-w-full divide-y divide-gray-200">
-            <thead className="bg-gray-50">
-              <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Property
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Location
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Owner
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Multi-Community
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Actions
-                </th>
-              </tr>
-            </thead>
-            <tbody className="bg-white divide-y divide-gray-200">
+              <thead className="bg-gray-50/80 border-b border-gray-100">
+                <tr>
+                  <th className="px-6 py-4 text-center text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                    Property
+                  </th>
+                  <th className="px-6 py-4 text-center text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                    Location
+                  </th>
+                  <th className="px-6 py-4 text-center text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                    Owner
+                  </th>
+                  <th className="px-6 py-4 text-center text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                    Type
+                  </th>
+                  <th className="px-6 py-4 text-center text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                    Actions
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-50">
               {isLoading && debouncedSearchTerm ? (
                 // Show loading indicator in table during search (not full skeleton)
                 <tr>
@@ -1002,85 +1002,123 @@ const AdminPropertiesManagement = () => {
                 </tr>
               ) : (
                 properties.map((property) => (
-                <tr key={property.id} className="hover:bg-gray-50">
+                <tr key={property.id} className="hover:bg-blue-50/30 transition-colors">
                   <td className="px-6 py-4 whitespace-nowrap">
-                    <div className="text-sm font-medium text-gray-900">
+                    <div className="text-sm font-semibold text-gray-900">
                       {property.name}
                     </div>
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <div className="text-sm text-gray-900">
+                  <td className="px-6 py-4 whitespace-nowrap text-center">
+                    <div className="text-sm text-gray-600">
                       {property.location || 'N/A'}
                     </div>
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <div className="text-sm text-gray-900">
+                  <td className="px-6 py-4 whitespace-nowrap text-center">
+                    <div className="text-sm font-medium text-gray-900">
                       {property.property_owner_name}
                     </div>
-                    <div className="text-sm text-gray-500">
-                      {property.property_owner_email}
+                    <div className="text-xs text-gray-500 mt-1">
+                      {(() => {
+                        if (!property.property_owner_email) return 'N/A';
+                        
+                        // Parse emails - handle both comma-separated string and array
+                        let emails = [];
+                        if (Array.isArray(property.property_owner_email)) {
+                          emails = property.property_owner_email;
+                        } else if (typeof property.property_owner_email === 'string') {
+                          emails = property.property_owner_email.split(',').map(e => e.trim()).filter(Boolean);
+                        }
+                        
+                        if (emails.length === 0) return 'N/A';
+                        
+                        if (emails.length === 1) {
+                          return (
+                            <div className="flex items-center justify-center gap-1.5 text-gray-500" title={emails[0]}>
+                              <Mail className="w-3 h-3 text-gray-400" />
+                              <span className="truncate max-w-[180px]">{emails[0]}</span>
+                            </div>
+                          );
+                        }
+                        
+                        return (
+                          <div className="flex items-center justify-center gap-1.5" title={emails.join(', ')}>
+                            <div className="flex items-center gap-1.5 text-gray-500">
+                              <Mail className="w-3 h-3 text-gray-400" />
+                              <span className="truncate max-w-[120px]">{emails[0]}</span>
+                            </div>
+                            {emails.length > 1 && (
+                              <div className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-gray-100 text-gray-600 border border-gray-200 cursor-help">
+                                +{emails.length - 1}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
                     </div>
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
+                  <td className="px-6 py-4 whitespace-nowrap text-center">
                     {property.is_multi_community ? (
-                      <div className="flex items-center gap-2">
-                        <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
-                        <span className="text-sm text-blue-600 font-medium">Multi-Community</span>
-                      </div>
+                      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-50 text-blue-700 border border-blue-100">
+                        Multi-Community
+                      </span>
                     ) : (
-                      <span className="text-sm text-gray-400">Single</span>
+                      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-50 text-gray-600 border border-gray-100">
+                        Single
+                      </span>
                     )}
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-2">
-                    <button
-                      onClick={() => router.push(`/admin/property-files/${property.id}`)}
-                      className="text-green-600 hover:text-green-900"
-                      title="Manage Documents"
-                    >
-                      <FileText className="w-4 h-4" />
-                    </button>
-                    <button
-                      onClick={() => openLinkModal(property)}
-                      className="text-purple-600 hover:text-purple-900"
-                      title={property.is_multi_community ? "Manage Linked Properties" : "Link Properties"}
-                    >
-                      <Link className="w-4 h-4" />
-                    </button>
-                    <button
-                      onClick={() => openEditModal(property)}
-                      className="text-blue-600 hover:text-blue-900"
-                      title="Edit Property"
-                    >
-                      <Edit className="w-4 h-4" />
-                    </button>
-                    <button
-                      onClick={async () => {
-                        setPropertyToDelete(property);
-                        // Check for related applications before showing confirmation
-                        try {
-                          const { count: applicationCount } = await supabase
-                            .from('applications')
-                            .select('*', { count: 'exact', head: true })
-                            .eq('hoa_property_id', property.id);
+                  <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                    <div className="flex items-center justify-center gap-2">
+                      <button
+                        onClick={() => router.push(`/admin/property-files/${property.id}`)}
+                        className="p-1.5 text-green-600 hover:bg-green-50 hover:shadow-[0_0_8px_rgba(22,163,74,0.4)] rounded-lg transition-all"
+                        title="Manage Documents"
+                      >
+                        <FileText className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={() => openLinkModal(property)}
+                        className="p-1.5 text-purple-600 hover:bg-purple-50 hover:shadow-[0_0_8px_rgba(147,51,234,0.4)] rounded-lg transition-all"
+                        title={property.is_multi_community ? "Manage Linked Properties" : "Link Properties"}
+                      >
+                        <Link className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={() => openEditModal(property)}
+                        className="p-1.5 text-blue-600 hover:bg-blue-50 hover:shadow-[0_0_8px_rgba(37,99,235,0.4)] rounded-lg transition-all"
+                        title="Edit Property"
+                      >
+                        <Edit className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={async () => {
+                          setPropertyToDelete(property);
+                          // Check for related applications before showing confirmation
+                          try {
+                            const { count: applicationCount } = await supabase
+                              .from('applications')
+                              .select('*', { count: 'exact', head: true })
+                              .eq('hoa_property_id', property.id);
 
-                          const { count: groupCount } = await supabase
-                            .from('application_property_groups')
-                            .select('*', { count: 'exact', head: true })
-                            .eq('property_id', property.id);
+                            const { count: groupCount } = await supabase
+                              .from('application_property_groups')
+                              .select('*', { count: 'exact', head: true })
+                              .eq('property_id', property.id);
 
-                          const totalCount = (applicationCount || 0) + (groupCount || 0);
-                          setRelatedApplicationsCount(totalCount);
-                        } catch (error) {
-                          console.error('Error checking related applications:', error);
-                          setRelatedApplicationsCount(0);
-                        }
-                        setShowDeleteConfirm(true);
-                      }}
-                      className="text-red-600 hover:text-red-900"
-                      title="Delete Property"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
+                            const totalCount = (applicationCount || 0) + (groupCount || 0);
+                            setRelatedApplicationsCount(totalCount);
+                          } catch (error) {
+                            console.error('Error checking related applications:', error);
+                            setRelatedApplicationsCount(0);
+                          }
+                          setShowDeleteConfirm(true);
+                        }}
+                        className="p-1.5 text-red-600 hover:bg-red-50 hover:shadow-[0_0_8px_rgba(220,38,38,0.4)] rounded-lg transition-all"
+                        title="Delete Property"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
                   </td>
                 </tr>
                 ))
@@ -1090,13 +1128,138 @@ const AdminPropertiesManagement = () => {
           </div>
         </div>
 
+        {/* Properties List (Mobile) */}
+        <div className="sm:hidden space-y-4">
+          {isLoading && debouncedSearchTerm ? (
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-8 text-center">
+              <div className="flex flex-col items-center gap-3">
+                <RefreshCw className="w-6 h-6 text-blue-600 animate-spin" />
+                <p className="text-gray-600">Searching properties...</p>
+              </div>
+            </div>
+          ) : properties.length === 0 ? (
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-8 text-center text-gray-500">
+              {debouncedSearchTerm ? `No properties found matching "${debouncedSearchTerm}"` : 'No properties found'}
+            </div>
+          ) : (
+            properties.map((property) => (
+              <div key={property.id} className="bg-white rounded-xl shadow-sm border border-gray-200 p-4 space-y-4">
+                <div className="flex justify-between items-start">
+                  <div>
+                    <h3 className="text-base font-semibold text-gray-900">{property.name}</h3>
+                    <p className="text-sm text-gray-500 mt-0.5">{property.location || 'N/A'}</p>
+                  </div>
+                  {property.is_multi_community ? (
+                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-50 text-blue-700 border border-blue-100">
+                      Multi
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-50 text-gray-600 border border-gray-100">
+                      Single
+                    </span>
+                  )}
+                </div>
+
+                <div className="border-t border-gray-100 pt-3">
+                  <div className="text-xs text-gray-500 uppercase tracking-wider font-semibold mb-1">Owner</div>
+                  <div className="text-sm font-medium text-gray-900">{property.property_owner_name}</div>
+                  <div className="text-xs text-gray-500 mt-1">
+                    {(() => {
+                      if (!property.property_owner_email) return 'N/A';
+                      
+                      let emails = [];
+                      if (Array.isArray(property.property_owner_email)) {
+                        emails = property.property_owner_email;
+                      } else if (typeof property.property_owner_email === 'string') {
+                        emails = property.property_owner_email.split(',').map(e => e.trim()).filter(Boolean);
+                      }
+                      
+                      if (emails.length === 0) return 'N/A';
+                      
+                      return (
+                        <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-1.5 text-gray-500 min-w-0">
+                            <Mail className="w-3 h-3 text-gray-400 flex-shrink-0" />
+                            <span className="break-all truncate">{emails[0]}</span>
+                          </div>
+                          {emails.length > 1 && (
+                            <div 
+                              className="flex-shrink-0 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-gray-100 text-gray-600 border border-gray-200 cursor-help"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                alert(emails.join('\n'));
+                              }}
+                            >
+                              +{emails.length - 1}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
+                  </div>
+                </div>
+
+                <div className="border-t border-gray-100 pt-3 flex items-center justify-between gap-2">
+                  <button
+                    onClick={() => router.push(`/admin/property-files/${property.id}`)}
+                    className="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 text-sm text-green-600 bg-green-50 rounded-lg hover:bg-green-100 transition-colors"
+                  >
+                    <FileText className="w-4 h-4" />
+                    <span className="font-medium">Docs</span>
+                  </button>
+                  <button
+                    onClick={() => openLinkModal(property)}
+                    className="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 text-sm text-purple-600 bg-purple-50 rounded-lg hover:bg-purple-100 transition-colors"
+                  >
+                    <Link className="w-4 h-4" />
+                    <span className="font-medium">Link</span>
+                  </button>
+                  <button
+                    onClick={() => openEditModal(property)}
+                    className="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 text-sm text-blue-600 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors"
+                  >
+                    <Edit className="w-4 h-4" />
+                    <span className="font-medium">Edit</span>
+                  </button>
+                  <button
+                    onClick={async () => {
+                      setPropertyToDelete(property);
+                      try {
+                        const { count: applicationCount } = await supabase
+                          .from('applications')
+                          .select('*', { count: 'exact', head: true })
+                          .eq('hoa_property_id', property.id);
+
+                        const { count: groupCount } = await supabase
+                          .from('application_property_groups')
+                          .select('*', { count: 'exact', head: true })
+                          .eq('property_id', property.id);
+
+                        const totalCount = (applicationCount || 0) + (groupCount || 0);
+                        setRelatedApplicationsCount(totalCount);
+                      } catch (error) {
+                        console.error('Error checking related applications:', error);
+                        setRelatedApplicationsCount(0);
+                      }
+                      setShowDeleteConfirm(true);
+                    }}
+                    className="flex items-center justify-center p-2 text-red-600 bg-red-50 rounded-lg hover:bg-red-100 transition-colors"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+
         {/* Pagination */}
         {totalPages > 1 && (
-          <div className="bg-white rounded-lg shadow-md border p-4 mt-6">
-            <div className="flex items-center justify-between">
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4 mt-6">
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
               <div className="flex items-center gap-4">
-                <span className="text-sm text-gray-700">
-                  Showing {((currentPage - 1) * pageSize) + 1} to {Math.min(currentPage * pageSize, totalCount)} of {totalCount} properties
+                <span className="text-sm text-gray-500">
+                  Showing <span className="font-medium text-gray-900">{((currentPage - 1) * pageSize) + 1}</span> to <span className="font-medium text-gray-900">{Math.min(currentPage * pageSize, totalCount)}</span> of <span className="font-medium text-gray-900">{totalCount}</span> properties
                 </span>
                 <select
                   value={pageSize}
@@ -1104,7 +1267,7 @@ const AdminPropertiesManagement = () => {
                     setPageSize(Number(e.target.value));
                     setCurrentPage(1);
                   }}
-                  className="px-3 py-1 border border-gray-300 rounded-md text-sm"
+                  className="px-3 py-1 bg-white border border-gray-200 rounded-lg text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 cursor-pointer"
                 >
                   <option value={10}>10 per page</option>
                   <option value={20}>20 per page</option>
@@ -1116,10 +1279,10 @@ const AdminPropertiesManagement = () => {
                 <button
                   onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
                   disabled={currentPage === 1}
-                  className="px-3 py-1 border border-gray-300 rounded-md text-sm hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+                  className="p-2 rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50 hover:text-gray-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="Previous page"
                 >
                   <ChevronLeft className="w-4 h-4" />
-                  Previous
                 </button>
                 
                 <div className="flex items-center gap-1">
@@ -1139,10 +1302,10 @@ const AdminPropertiesManagement = () => {
                       <button
                         key={pageNum}
                         onClick={() => setCurrentPage(pageNum)}
-                        className={`px-3 py-1 text-sm rounded-md ${
+                        className={`px-3 py-2 text-sm font-medium rounded-lg transition-colors ${
                           currentPage === pageNum
-                            ? 'bg-blue-600 text-white'
-                            : 'border border-gray-300 hover:bg-gray-50'
+                            ? 'bg-blue-600 text-white shadow-sm'
+                            : 'bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 hover:text-gray-900'
                         }`}
                       >
                         {pageNum}
@@ -1154,9 +1317,9 @@ const AdminPropertiesManagement = () => {
                 <button
                   onClick={() => setCurrentPage(Math.min(totalPages, currentPage + 1))}
                   disabled={currentPage === totalPages}
-                  className="px-3 py-1 border border-gray-300 rounded-md text-sm hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+                  className="p-2 rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50 hover:text-gray-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="Next page"
                 >
-                  Next
                   <ChevronRight className="w-4 h-4" />
                 </button>
               </div>

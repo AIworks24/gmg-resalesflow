@@ -254,8 +254,83 @@ export async function createNotifications(applicationId, supabaseClient) {
       console.log(`[Notifications] No property owner email found for application ${applicationId}`);
     }
 
-    // IMPORTANT: Staff/admin users do NOT receive notifications
+    // 2. For Settlement/Closing Attorney requests, notify ALL Accounting role users
+    // This ensures accounting staff are alerted even if they're not the property owner
+    const isSettlementRequest = application.application_type === 'settlement_va' || 
+                                 application.application_type === 'settlement_nc' ||
+                                 application.submitter_type === 'settlement';
+    
+    if (isSettlementRequest) {
+      console.log(`[Notifications] Settlement request detected - finding all accounting users for application ${applicationId}`);
+      
+      // Find all users with 'accounting' role
+      const { data: accountingUsers, error: accountingError } = await supabaseClient
+        .from('profiles')
+        .select('id, email, role')
+        .eq('role', 'accounting');
+      
+      if (accountingError) {
+        console.error('[Notifications] Error fetching accounting users:', accountingError);
+      } else if (accountingUsers && accountingUsers.length > 0) {
+        console.log(`[Notifications] Found ${accountingUsers.length} accounting user(s) to notify`);
+        
+        const appTypeDisplay = formatApplicationType(application.application_type);
+        const packageDisplay = application.package_type === 'rush' ? 'Rush' : 'Standard';
+        const now = new Date().toISOString();
+        
+        // Create notifications for each accounting user
+        for (const accountingUser of accountingUsers) {
+          // Skip if no email
+          if (!accountingUser.email || isFakeEmail(accountingUser.email)) {
+            console.log(`[Notifications] Skipping accounting user with invalid email: ${accountingUser.email}`);
+            continue;
+          }
+          
+          // Skip if this accounting user is already being notified as a property owner
+          const isAlreadyNotified = notifications.some(n => 
+            n.recipient_email?.toLowerCase() === accountingUser.email.toLowerCase()
+          );
+          
+          if (isAlreadyNotified) {
+            console.log(`[Notifications] Accounting user ${accountingUser.email} already notified as property owner, skipping duplicate`);
+            continue;
+          }
+          
+          const notification = {
+            application_id: applicationId,
+            recipient_email: accountingUser.email,
+            recipient_name: accountingUser.email.split('@')[0] || 'Accounting Staff',
+            recipient_user_id: accountingUser.id,
+            notification_type: 'new_application',
+            subject: `🔴 Settlement Request - ${application.property_address} | ${application.hoa_properties?.name || 'Unknown Property'}`,
+            message: `New ${appTypeDisplay.toLowerCase()} request received for ${application.property_address} in ${application.hoa_properties?.name || 'Unknown Property'}. Package: ${packageDisplay}. Submitter: ${application.submitter_name || 'Unknown'} (${application.submitter_email || 'Unknown'}).`,
+            status: 'unread',
+            is_read: false,
+            sent_at: now,
+            created_at: now,
+            metadata: {
+              property_address: application.property_address,
+              hoa_name: application.hoa_properties?.name,
+              submitter_name: application.submitter_name,
+              submitter_type: application.submitter_type,
+              application_type: application.application_type,
+              package_type: application.package_type,
+              is_accounting_notification: true, // Flag to identify accounting-specific notifications
+              skip_email: false, // Accounting users should receive emails
+            },
+          };
+          
+          notifications.push(notification);
+          console.log(`[Notifications] Added notification for accounting user: ${accountingUser.email}`);
+        }
+      } else {
+        console.log(`[Notifications] No accounting users found for settlement request ${applicationId}`);
+      }
+    }
+
+    // IMPORTANT: For non-settlement requests, staff/admin users do NOT receive notifications
     // Only the property owner for the specific application receives notifications (in-app + email)
+    // For settlement requests, accounting users are notified above
 
     // Insert all notifications
     if (notifications.length > 0) {
@@ -325,15 +400,20 @@ export async function createNotifications(applicationId, supabaseClient) {
             
             console.log(`[Notifications] Checking email: ${notificationEmail}, isPropertyOwner: ${isPropertyOwner}`);
             
-            // IMPORTANT: Only send emails to property owners, NOT to staff/admin
-            // Staff/admin will still receive in-app notifications, but no emails
-            if (isPropertyOwner && application.hoa_properties) {
-              // Send property owner notification email
+            // Check if this is an accounting notification for settlement request
+            const isAccountingNotification = notification.metadata?.is_accounting_notification === true;
+            
+            // IMPORTANT: Send emails to:
+            // 1. Property owners (for all application types)
+            // 2. Accounting users (for settlement requests only)
+            // Staff/admin (non-accounting) will still receive in-app notifications, but no emails
+            if ((isPropertyOwner && application.hoa_properties) || isAccountingNotification) {
+              // Send notification email
               emailPromises.push(
                 sendPropertyManagerNotificationEmail({
                   to: notification.recipient_email,
                   applicationId: applicationId,
-                  propertyName: application.hoa_properties.name || 'Unknown Property',
+                  propertyName: application.hoa_properties?.name || 'Unknown Property',
                   propertyAddress: application.property_address,
                   submitterName: application.submitter_name || 'Unknown',
                   submitterEmail: application.submitter_email || '',
@@ -348,8 +428,12 @@ export async function createNotifications(applicationId, supabaseClient) {
                   return { success: false, error: emailError.message };
                 })
               );
+              
+              if (isAccountingNotification) {
+                console.log(`[Notifications] Queued email for accounting user: ${notification.recipient_email}`);
+              }
             } else {
-              // Staff/admin: Skip email, they only get in-app notifications
+              // Staff/admin (non-accounting): Skip email, they only get in-app notifications
               console.log(`[Notifications] Skipping email for staff/admin: ${notificationEmail} (in-app notification only)`);
             }
           } catch (emailError) {

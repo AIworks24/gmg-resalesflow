@@ -26,6 +26,9 @@ import {
   Mail,
   FileCheck,
   Download,
+  MessageSquare,
+  CheckSquare,
+  ChevronDown,
 } from 'lucide-react';
 import { useRouter } from 'next/router';
 import { mapFormDataToPDFFields } from '../../lib/pdfFieldMapper';
@@ -154,7 +157,6 @@ const AdminApplications = ({ userRole }) => {
           table: 'applications',
         },
         (payload) => {
-          console.log('Real-time application change detected:', payload.eventType, payload.new?.id || payload.old?.id);
           
           // For INSERT events, optimistically add then refresh silently
           if (payload.eventType === 'INSERT') {
@@ -164,7 +166,6 @@ const AdminApplications = ({ userRole }) => {
               return;
             }
             
-            console.log('New application inserted, updating silently...');
             // Optimistically add to cache immediately (no loading state)
             mutate(
               (currentData) => {
@@ -208,7 +209,6 @@ const AdminApplications = ({ userRole }) => {
             
             // If status changed from draft to submitted, refresh immediately
             if (oldStatus === 'draft' && newStatus !== 'draft') {
-              console.log('Application submitted, updating silently...');
               // Optimistically update, then refresh in background
               mutate(
                 (currentData) => {
@@ -245,7 +245,6 @@ const AdminApplications = ({ userRole }) => {
             } 
             // For other updates, optimistically update then refresh silently
             else if (newStatus !== 'draft') {
-              console.log('Application updated, updating silently...');
               mutate(
                 (currentData) => {
                   if (!currentData?.data) return currentData;
@@ -273,7 +272,6 @@ const AdminApplications = ({ userRole }) => {
           // For DELETE events, remove immediately
           else if (payload.eventType === 'DELETE') {
             const deletedApp = payload.old;
-            console.log('Application deleted, updating silently...');
             mutate(
               (currentData) => {
                 if (!currentData?.data) return currentData;
@@ -774,14 +772,18 @@ const AdminApplications = ({ userRole }) => {
     }
   };
 
-  const handleCompleteTask = async (applicationId, taskName) => {
+  const handleCompleteTask = async (applicationId, taskName, group = null) => {
     try {
       const response = await fetch('/api/complete-task', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ applicationId, taskName }),
+        body: JSON.stringify({ 
+          applicationId, 
+          taskName,
+          propertyGroupId: group?.id || null // Include property_group_id for settlement forms
+        }),
       });
 
       if (response.ok) {
@@ -863,7 +865,17 @@ const AdminApplications = ({ userRole }) => {
       return { step: 4, text: 'Completed', color: 'bg-green-100 text-green-800' };
     }
     
-    // Check if this is a settlement application
+    // Check if this is a multi-community application FIRST (before settlement check)
+    // This ensures settlement multi-community apps use the multi-community workflow
+    const isMultiCommunity = application.hoa_properties?.is_multi_community && 
+                            application.application_property_groups && 
+                            application.application_property_groups.length > 1;
+
+    if (isMultiCommunity) {
+      return getMultiCommunityWorkflowStep(application);
+    }
+    
+    // Check if this is a settlement application (single property only at this point)
     const isSettlementApp = application.submitter_type === 'settlement' || 
                             application.application_type?.startsWith('settlement');
 
@@ -905,15 +917,6 @@ const AdminApplications = ({ userRole }) => {
       return { step: 1, text: 'Form Required', color: 'bg-yellow-100 text-yellow-800' };
     }
 
-    // Check if this is a multi-community application
-    const isMultiCommunity = application.hoa_properties?.is_multi_community && 
-                            application.application_property_groups && 
-                            application.application_property_groups.length > 1;
-
-    if (isMultiCommunity) {
-      return getMultiCommunityWorkflowStep(application);
-    }
-
     // Standard single property workflow
     const inspectionForm = application.property_owner_forms?.find(form => form.form_type === 'inspection_form');
     const resaleForm = application.property_owner_forms?.find(form => form.form_type === 'resale_certificate');
@@ -951,6 +954,10 @@ const AdminApplications = ({ userRole }) => {
       return { step: 1, text: 'Forms Required', color: 'bg-yellow-100 text-yellow-800' };
     }
 
+    // Check if this is a settlement application
+    const isSettlementApp = application.submitter_type === 'settlement' || 
+                            application.application_type?.startsWith('settlement');
+
     // Track progress for each property group
     let totalProperties = propertyGroups.length;
     let completedProperties = 0;
@@ -959,11 +966,32 @@ const AdminApplications = ({ userRole }) => {
     let emailsSent = 0;
 
     propertyGroups.forEach((group, index) => {
-      // All properties need both inspection and resale forms
-      // Use property-group-specific inspection status only (no fallback to application-level)
-      const inspectionStatus = group.inspection_status ?? 'not_started';
-      const resaleStatus = group.status === 'completed';
-      const formsCompleted = inspectionStatus === 'completed' && resaleStatus;
+      let formsCompleted = false;
+      
+      if (isSettlementApp) {
+        // Settlement application: only needs settlement form
+        const settlementForm = application.property_owner_forms?.find(
+          form => form.form_type === 'settlement_form' && form.property_group_id === group.id
+        );
+        const settlementFormStatus = settlementForm?.status || 'not_started';
+        formsCompleted = settlementFormStatus === 'completed';
+        
+        // Check if form is in progress
+        if (settlementFormStatus === 'in_progress') {
+          formsInProgress++;
+        }
+      } else {
+        // Standard application: needs both inspection and resale forms
+        // Use property-group-specific inspection status only (no fallback to application-level)
+        const inspectionStatus = group.inspection_status ?? 'not_started';
+        const resaleStatus = group.status === 'completed';
+        formsCompleted = inspectionStatus === 'completed' && resaleStatus;
+        
+        // Check if forms are in progress
+        if (group.status === 'in_progress' || inspectionStatus === 'in_progress') {
+          formsInProgress++;
+        }
+      }
 
       if (formsCompleted) {
         // Check PDF generation
@@ -975,13 +1003,6 @@ const AdminApplications = ({ userRole }) => {
             emailsSent++;
             completedProperties++;
           }
-        }
-      } else {
-        // Check if forms are in progress
-        // Use property-group-specific inspection status only (no fallback to application-level)
-        const inspectionStatus = group.inspection_status ?? 'not_started';
-        if (group.status === 'in_progress' || inspectionStatus === 'in_progress') {
-          formsInProgress++;
         }
       }
     });
@@ -1062,7 +1083,7 @@ const AdminApplications = ({ userRole }) => {
     }
   };
 
-  const getTaskStatuses = (application) => {
+  const getTaskStatuses = (application, group = null) => {
     const isLenderQuestionnaire = application.application_type === 'lender_questionnaire';
     
     if (isLenderQuestionnaire) {
@@ -1086,49 +1107,75 @@ const AdminApplications = ({ userRole }) => {
                            application.application_type?.startsWith('settlement');
     
     if (isSettlementApp) {
-      // Settlement application
-      const settlementForm = application.property_owner_forms?.find(form => form.form_type === 'settlement_form');
+      // Settlement application - for multi-community, check forms per property group
+      let settlementForm;
+      if (group?.id) {
+        // Multi-community: find settlement form for this specific property group
+        settlementForm = application.property_owner_forms?.find(
+          form => form.form_type === 'settlement_form' && form.property_group_id === group.id
+        );
+      } else {
+        // Single property: find settlement form at application level
+        settlementForm = application.property_owner_forms?.find(
+          form => form.form_type === 'settlement_form' && !form.property_group_id
+        );
+      }
       
       // Check settlement form status - use settlement_form_completed_at if available, otherwise check form status
       let settlementFormStatus = 'not_started';
-      if (application.settlement_form_completed_at) {
-        settlementFormStatus = 'completed';
-      } else if (settlementForm?.status === 'completed') {
+      if (settlementForm?.status === 'completed') {
         settlementFormStatus = 'completed';
       } else if (settlementForm?.status === 'in_progress') {
         settlementFormStatus = 'in_progress';
+      } else if (!group?.id && application.settlement_form_completed_at) {
+        // For single property, also check application-level completion
+        settlementFormStatus = 'completed';
       }
       
       const hasNotificationSent = application.notifications?.some(n => n.notification_type === 'application_approved');
       const hasEmailCompletedAt = application.email_completed_at;
 
-      // Derive PDF status from settlement PDF URL
+      // Derive PDF status - check property group first, then fallback to application level
       let pdfStatus = 'not_started';
-      if (application.pdf_url && application.pdf_generated_at) {
-        // Check if settlement form was updated after PDF generation
+      if (group?.pdf_url || group?.pdf_status === 'completed') {
+        // Property group has its own PDF
+        pdfStatus = group.pdf_status || 'completed';
+        // Check if form was updated after PDF generation
+        if (settlementForm?.updated_at && group.pdf_completed_at) {
+          const pdfGeneratedAt = new Date(group.pdf_completed_at);
+          const formUpdatedAt = new Date(settlementForm.updated_at);
+          if (formUpdatedAt > pdfGeneratedAt) {
+            pdfStatus = 'update_needed';
+          }
+        }
+      } else if (application.pdf_url && application.pdf_generated_at && !group?.id) {
+        // Single property: use application-level PDF
         const pdfGeneratedAt = new Date(application.pdf_generated_at || 0);
-        
-        // Only use settlement form's updated_at if it exists, don't compare with application.updated_at
-        // because application.updated_at changes when we set pdf_generated_at
         if (settlementForm?.updated_at) {
           const formUpdatedAt = new Date(settlementForm.updated_at || 0);
-          
-          // If form was updated after PDF generation, mark as needing update
           if (formUpdatedAt > pdfGeneratedAt) {
             pdfStatus = 'update_needed';
           } else {
             pdfStatus = 'completed';
           }
         } else {
-          // If no settlement form found, but PDF exists, it's completed
           pdfStatus = 'completed';
         }
+      }
+
+      // Derive email status - check property group first, then fallback to application level
+      let emailStatus = 'not_started';
+      if (group?.email_status === 'completed' || group?.email_completed_at) {
+        emailStatus = 'completed';
+      } else if (!group?.id && (hasNotificationSent || hasEmailCompletedAt)) {
+        // Single property: use application-level email status
+        emailStatus = 'completed';
       }
 
       return {
         settlement: settlementFormStatus,
         pdf: pdfStatus,
-        email: (hasNotificationSent || hasEmailCompletedAt) ? 'completed' : 'not_started'
+        email: emailStatus
       };
     } else {
       // Standard application
@@ -1202,7 +1249,7 @@ const AdminApplications = ({ userRole }) => {
         .select(`
           *,
           hoa_properties(name, property_owner_email, property_owner_name, is_multi_community),
-          property_owner_forms(id, form_type, status, completed_at, form_data, response_data),
+          property_owner_forms(id, form_type, status, completed_at, form_data, response_data, property_group_id),
           notifications(id, notification_type, status, sent_at),
           application_property_groups(
             id,
@@ -1215,7 +1262,8 @@ const AdminApplications = ({ userRole }) => {
             pdf_completed_at,
             email_status,
             email_completed_at,
-            form_data
+            form_data,
+            property_id
           )
         `)
         .eq('id', application.id)
@@ -1282,9 +1330,12 @@ const AdminApplications = ({ userRole }) => {
       } else if (formType === 'resale') {
         setShowResaleFormModal(true);
       } else if (formType === 'settlement') {
-        // Open settlement form modal
+        // Open settlement form modal with property group context
         setShowSettlementFormModal(true);
-        setSelectedApplicationForSettlement(selectedApplication);
+        setSelectedApplicationForSettlement({
+          ...selectedApplication,
+          propertyGroupId: group?.id || null
+        });
       }
     } catch (error) {
       console.error(`Failed to load form data for ${formType} form:`, error);
@@ -1310,7 +1361,7 @@ const AdminApplications = ({ userRole }) => {
             .select(`
               *,
               hoa_properties(name, property_owner_email, property_owner_name, is_multi_community),
-              property_owner_forms(id, form_type, status, completed_at, form_data, response_data),
+              property_owner_forms(id, form_type, status, completed_at, form_data, response_data, property_group_id),
               notifications(id, notification_type, status, sent_at)
             `)
             .eq('id', updatedId)
@@ -1350,16 +1401,27 @@ const AdminApplications = ({ userRole }) => {
       const effectiveHoaId = group?.property_id || appData.hoa_property_id;
 
       // Get or create the form
-      // For inspection forms in multi-community apps, query by property_group_id if available
+      // For inspection and settlement forms in multi-community apps, query by property_group_id if available
+      let formTypeValue;
+      if (formType === 'inspection') {
+        formTypeValue = 'inspection_form';
+      } else if (formType === 'resale') {
+        formTypeValue = 'resale_certificate';
+      } else if (formType === 'settlement') {
+        formTypeValue = 'settlement_form';
+      } else {
+        throw new Error(`Unknown form type: ${formType}`);
+      }
+      
       let query = supabase
         .from('property_owner_forms')
         .select('id, form_data, response_data, status, property_group_id')
         .eq('application_id', applicationId)
-        .eq('form_type', formType === 'inspection' ? 'inspection_form' : 'resale_certificate');
+        .eq('form_type', formTypeValue);
       
-      // If this is an inspection form and we have a property group, filter by property_group_id
+      // If this is an inspection or settlement form and we have a property group, filter by property_group_id
       // This ensures each property has its own form
-      if (formType === 'inspection' && group?.id) {
+      if ((formType === 'inspection' || formType === 'settlement') && group?.id) {
         query = query.eq('property_group_id', group.id);
       }
       
@@ -1367,8 +1429,7 @@ const AdminApplications = ({ userRole }) => {
       
       // Special handling: If we found a form without property_group_id in a multi-community context,
       // treat it as "not found" and create a new form for this property group
-      if (formData && formType === 'inspection' && group?.id && !formData.property_group_id) {
-        console.log(`⚠️ Found inspection form without property_group_id for multi-community app. Creating new form for property group ${group.id}`);
+      if (formData && (formType === 'inspection' || formType === 'settlement') && group?.id && !formData.property_group_id) {
         formError = { code: 'PGRST116' }; // Simulate "not found" to trigger form creation
         formData = null;
       }
@@ -1377,7 +1438,7 @@ const AdminApplications = ({ userRole }) => {
       if (formError && formError.code === 'PGRST116') {
         const formDataToInsert = {
           application_id: applicationId,
-          form_type: formType === 'inspection' ? 'inspection_form' : 'resale_certificate',
+          form_type: formTypeValue,
           status: 'not_started',
           access_token: crypto.randomUUID(),
           recipient_email: appData.hoa_properties?.property_owner_email || appData.submitter_email || 'admin@gmgva.com',
@@ -1385,8 +1446,8 @@ const AdminApplications = ({ userRole }) => {
           created_at: new Date().toISOString()
         };
         
-        // For inspection forms in multi-community apps, associate with property group
-        if (formType === 'inspection' && group?.id) {
+        // For inspection and settlement forms in multi-community apps, associate with property group
+        if ((formType === 'inspection' || formType === 'settlement') && group?.id) {
           formDataToInsert.property_group_id = group.id;
         }
         
@@ -1429,8 +1490,16 @@ const AdminApplications = ({ userRole }) => {
 
       if (formType === 'inspection') {
         setInspectionFormData(combinedData);
-      } else {
+      } else if (formType === 'resale') {
         setResaleFormData(combinedData);
+      } else if (formType === 'settlement') {
+        // For settlement forms, open the settlement form modal
+        // Use the selectedApplication with the group context
+        setShowSettlementFormModal(true);
+        setSelectedApplicationForSettlement({
+          ...combinedData,
+          propertyGroupId: group?.id || null
+        });
       }
 
       return formData?.id || null;
@@ -1448,9 +1517,10 @@ const AdminApplications = ({ userRole }) => {
         .select(`
           *,
           hoa_properties(name, property_owner_email, property_owner_name, is_multi_community),
-          property_owner_forms(id, form_type, status, completed_at, form_data, response_data),
+          property_owner_forms(id, form_type, status, completed_at, form_data, response_data, property_group_id),
           notifications(id, notification_type, status, sent_at),
           application_property_groups(id, property_id, property_name, property_location, is_primary, status, inspection_status, inspection_completed_at,
+            pdf_url, pdf_status, pdf_completed_at, email_status, email_completed_at,
             hoa_properties(id, name, location)
           )
         `)
@@ -1524,7 +1594,6 @@ const AdminApplications = ({ userRole }) => {
             if (groupUpdateError) {
               console.error('Error updating property group inspection status:', groupUpdateError);
             } else {
-              console.log(`✅ Updated inspection_status for property group ${currentGroupId}`);
             }
           }
           
@@ -1592,7 +1661,6 @@ const AdminApplications = ({ userRole }) => {
 
   const handleGeneratePDF = async (formData, applicationId) => {
     const startTime = Date.now();
-    console.log('🚀 Starting PDF generation for application:', applicationId);
     setGeneratingPDF(true);
     
     let pdfGeneratedSuccessfully = false;
@@ -1609,14 +1677,12 @@ const AdminApplications = ({ userRole }) => {
       });
       
       const result = await response.json();
-      console.log('📄 PDF API response:', result);
       
       if (!result.success) throw new Error(result.error || 'Failed to generate PDF');
       
       // Mark PDF as generated successfully
       pdfGeneratedSuccessfully = true;
       pdfUrl = result.pdfUrl;
-      console.log('✅ PDF generated successfully!');
       
     } catch (error) {
       console.error('❌ Failed to generate PDF:', error);
@@ -1624,7 +1690,6 @@ const AdminApplications = ({ userRole }) => {
     }
     
     // Always clear the generating state first, regardless of what happened
-    console.log('🔄 Clearing generatingPDF state');
     setGeneratingPDF(false);
     
     // If PDF was generated successfully, do the post-processing
@@ -1633,7 +1698,6 @@ const AdminApplications = ({ userRole }) => {
         // PRIMARY: Immediately update the selected application's PDF status
         // This ensures the UI updates instantly and consistently
         if (selectedApplication && selectedApplication.id === applicationId) {
-          console.log('🔄 Immediately updating selected application PDF status');
           setSelectedApplication(prev => ({
             ...prev,
             pdf_url: pdfUrl,
@@ -1645,7 +1709,6 @@ const AdminApplications = ({ userRole }) => {
         // SECONDARY: Try to refresh from database (optional, runs in background)
         try {
           await refreshSelectedApplication(applicationId);
-          console.log('✅ Successfully refreshed selected application from database');
         } catch (refreshError) {
           console.warn('Database refresh failed, but UI was already updated:', refreshError);
         }
@@ -1658,7 +1721,6 @@ const AdminApplications = ({ userRole }) => {
           // Don't throw - PDF was generated successfully
         }
         
-        console.log('✅ Showing success message');
         showSnackbar('PDF generated successfully!', 'success');
         
       } catch (postProcessingError) {
@@ -1668,14 +1730,23 @@ const AdminApplications = ({ userRole }) => {
     }
   };
 
-  const handleGenerateSettlementPDF = async (applicationId) => {
+  const handleGenerateSettlementPDF = async (applicationId, group = null) => {
     try {
       setGeneratingPDF(true);
 
-      // Get settlement form data
-      const settlementForm = selectedApplication.property_owner_forms?.find(
-        form => form.form_type === 'settlement_form'
-      );
+      // Get settlement form data - filter by property_group_id for multi-community
+      let settlementForm;
+      if (group?.id) {
+        // Multi-community: find settlement form for this specific property group
+        settlementForm = selectedApplication.property_owner_forms?.find(
+          form => form.form_type === 'settlement_form' && form.property_group_id === group.id
+        );
+      } else {
+        // Single property: find settlement form without property_group_id
+        settlementForm = selectedApplication.property_owner_forms?.find(
+          form => form.form_type === 'settlement_form' && !form.property_group_id
+        );
+      }
 
       if (!settlementForm) {
         showSnackbar('Settlement form not found', 'error');
@@ -1690,6 +1761,7 @@ const AdminApplications = ({ userRole }) => {
         body: JSON.stringify({
           applicationId,
           formData: settlementForm.form_data || settlementForm.response_data,
+          propertyGroupId: group?.id || null,
         }),
       });
       
@@ -1721,8 +1793,7 @@ const AdminApplications = ({ userRole }) => {
     }
   };
 
-  const handleSendApprovalEmail = async (applicationId) => {
-    console.log('🚀 Starting email send for application:', applicationId);
+  const handleSendApprovalEmail = async (applicationId, group = null) => {
     setSendingEmail(true);
     
     let emailSentSuccessfully = false;
@@ -1735,12 +1806,12 @@ const AdminApplications = ({ userRole }) => {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({ 
-          applicationId
+          applicationId,
+          propertyGroupId: group?.id || null // Pass property_group_id for multi-community
         }),
       });
 
       const data = await response.json();
-      console.log('📧 Email API response:', data);
 
       if (!response.ok) {
         throw new Error(data.error || 'Failed to send approval email');
@@ -1748,7 +1819,6 @@ const AdminApplications = ({ userRole }) => {
 
       // Mark email as sent successfully
       emailSentSuccessfully = true;
-      console.log('✅ Email sent successfully!');
       
     } catch (error) {
       console.error('❌ Failed to send approval email:', error);
@@ -1762,7 +1832,6 @@ const AdminApplications = ({ userRole }) => {
     }
     
     // Always clear the sending state first, regardless of what happened
-    console.log('🔄 Clearing sendingEmail state');
     setSendingEmail(false);
     
     // If email was sent successfully, do the post-processing
@@ -1774,7 +1843,6 @@ const AdminApplications = ({ userRole }) => {
         // PRIMARY: Immediately update the selected application's email status
         // This ensures the UI updates instantly and consistently
         if (selectedApplication && selectedApplication.id === applicationId) {
-          console.log('🔄 Immediately updating selected application email status');
           setSelectedApplication(prev => ({
             ...prev,
             // Update email completion fields
@@ -1789,7 +1857,6 @@ const AdminApplications = ({ userRole }) => {
         // SECONDARY: Try to refresh from database (optional, runs in background)
         try {
           await refreshSelectedApplication(applicationId);
-          console.log('✅ Successfully refreshed selected application from database after email send');
         } catch (refreshError) {
           console.warn('Database refresh failed after email send, but UI was already updated:', refreshError);
         }
@@ -1802,7 +1869,6 @@ const AdminApplications = ({ userRole }) => {
           // Don't throw - email was sent successfully
         }
         
-        console.log('✅ Showing success message');
         showSnackbar('Email sent successfully!', 'success');
         
       } catch (postProcessingError) {
@@ -1849,12 +1915,10 @@ const AdminApplications = ({ userRole }) => {
   // Property files loading function
   const loadPropertyFiles = async (propertyId) => {
     if (!propertyId) {
-      console.log('No propertyId provided to loadPropertyFiles');
       setPropertyFiles([]);
       return;
     }
     
-    console.log('Loading property files for propertyId:', propertyId);
     setLoadingPropertyFiles(true);
     try {
       const { data, error } = await supabase.storage
@@ -1868,8 +1932,6 @@ const AdminApplications = ({ userRole }) => {
         console.error('Storage list error:', error);
         throw error;
       }
-      
-      console.log('Found files:', data?.length || 0);
       
       // Convert to format with URLs
       const filesWithUrls = await Promise.all((data || []).map(async (file) => {
@@ -1892,7 +1954,6 @@ const AdminApplications = ({ userRole }) => {
         };
       }));
       
-      console.log('Property files loaded successfully:', filesWithUrls.length);
       setPropertyFiles(filesWithUrls);
     } catch (error) {
       console.error('Error loading property files:', error);
@@ -1920,7 +1981,6 @@ const AdminApplications = ({ userRole }) => {
 
   const uploadPropertyFiles = async () => {
     if (!selectedApplication?.hoa_property_id || selectedFilesForUpload.length === 0) {
-      console.log('❌ Upload cancelled - missing propertyId or files');
       return;
     }
 
@@ -1928,26 +1988,16 @@ const AdminApplications = ({ userRole }) => {
     try {
       // Check authentication
       const { data: { user }, error: authError } = await supabase.auth.getUser();
-      console.log('👤 Current user:', user);
       if (authError || !user) {
         throw new Error('User not authenticated');
       }
 
       const propertyId = selectedApplication.hoa_property_id;
-      console.log('🚀 Starting upload for property:', propertyId);
-      console.log('📁 Files to upload:', selectedFilesForUpload.length);
       
       const uploadPromises = selectedFilesForUpload.map(async (file, index) => {
         const fileName = `${Date.now()}_${file.name}`;
         const filePath = `property_files/${propertyId}/${fileName}`;
         
-        console.log(`📤 Uploading file ${index + 1}:`, {
-          originalName: file.name,
-          fileName,
-          filePath,
-          fileSize: file.size,
-          fileType: file.type
-        });
 
         const { data, error } = await supabase.storage
           .from('bucket0')
@@ -1958,12 +2008,10 @@ const AdminApplications = ({ userRole }) => {
           throw error;
         }
         
-        console.log(`✅ Upload successful for ${file.name}:`, data);
         return filePath;
       });
 
       await Promise.all(uploadPromises);
-      console.log('🎉 All uploads completed successfully');
 
       // Reload property files to show new uploads
       await loadPropertyFiles(propertyId);
@@ -2013,7 +2061,6 @@ const AdminApplications = ({ userRole }) => {
     
     setLoadingGroups(true);
     try {
-      console.log(`🔄 Loading property groups for application ${applicationId}`);
       const { data, error } = await supabase
         .from('application_property_groups')
         .select('id, property_id, property_name, property_location, is_primary, status, inspection_status, inspection_completed_at, pdf_status, pdf_url, email_status, form_data, hoa_properties(id, name, location)')
@@ -2023,13 +2070,6 @@ const AdminApplications = ({ userRole }) => {
 
       if (error) throw error;
       
-      console.log(`📊 Property groups loaded:`, data?.map(g => ({
-        id: g.id,
-        name: g.property_name,
-        email_status: g.email_status,
-        email_completed_at: g.email_completed_at,
-        pdf_status: g.pdf_status
-      })));
       
       // Sort property groups to ensure primary is always first
       const sortedGroups = (data || []).sort((a, b) => {
@@ -2041,7 +2081,6 @@ const AdminApplications = ({ userRole }) => {
       });
       
       setPropertyGroups(sortedGroups);
-      console.log(`✅ Property groups state updated`);
     } catch (error) {
       console.error('Error loading property groups:', error);
       setSnackbar({ show: true, message: 'Error loading property groups: ' + error.message, type: 'error' });
@@ -2340,8 +2379,6 @@ const AdminApplications = ({ userRole }) => {
         throw new Error('No form data available for this property');
       }
 
-      console.log(`🚀 Generating PDF for property: ${group.property_name} (ID: ${group.id})`);
-      console.log(`📋 Using form data:`, formData ? 'Found' : 'Not found');
 
       const response = await fetch('/api/regenerate-pdf', {
         method: 'POST',
@@ -2359,8 +2396,6 @@ const AdminApplications = ({ userRole }) => {
       if (!result.success) {
         throw new Error(result.error || 'Failed to generate PDF');
       }
-      
-      console.log(`✅ PDF generated successfully for property: ${group.property_name}`);
       
       // Update the property group with PDF information
       await supabase
@@ -2411,7 +2446,6 @@ const AdminApplications = ({ userRole }) => {
         throw new Error('PDF must be generated first');
       }
 
-      console.log(`📧 Sending email for property: ${group.property_name} (ID: ${group.id})`);
 
       const response = await fetch('/api/send-approval-email', {
         method: 'POST',
@@ -2429,12 +2463,8 @@ const AdminApplications = ({ userRole }) => {
       if (!result.success) {
         throw new Error(result.error || 'Failed to send email');
       }
-      
-      console.log(`✅ Email sent successfully for property: ${group.property_name}`);
-      console.log(`📧 API Response:`, result);
 
       // Refresh the property groups to get updated status
-      console.log(`🔄 Refreshing property groups after email send...`);
       
       // Add timeout protection
       const loadGroupsWithTimeout = () => Promise.race([
@@ -2507,39 +2537,64 @@ const AdminApplications = ({ userRole }) => {
       <div className='max-w-7xl mx-auto p-6'>
 
         {/* Header */}
-        <div className='mb-8'>
-          <div className='flex items-center justify-between'>
-            <div>
-              <h1 className='text-3xl font-bold text-gray-900 mb-2'>
-                Applications Management
-              </h1>
-              <p className='text-gray-600'>
-                Monitor and manage all resale certificate applications
-              </p>
-            </div>
-            <button
-              onClick={() => mutate()}
-              disabled={isLoading}
-              className='flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50'
-            >
-              <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
-              {isLoading ? 'Refreshing...' : 'Refresh'}
-            </button>
+        <div className='mb-8 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4'>
+          <div>
+            <h1 className='text-2xl font-bold text-gray-900 tracking-tight'>
+              Applications
+            </h1>
+            <p className='text-sm text-gray-500 mt-1'>
+              Monitor and manage all resale certificate applications
+            </p>
           </div>
+          <button
+            onClick={() => mutate()}
+            disabled={isLoading}
+            className='inline-flex items-center justify-center gap-2 px-4 py-2 bg-white border border-gray-200 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 hover:text-gray-900 transition-all focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-200 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm'
+          >
+            <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
+            {isLoading ? 'Refreshing...' : 'Refresh List'}
+          </button>
         </div>
 
-        {/* Filters */}
-        <div className='bg-white p-6 rounded-lg shadow-md border mb-8 filters-section'>
-          <div className='grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4'>
+        {/* Filters & Search Card */}
+        <div className='bg-white rounded-xl shadow-sm border border-gray-200 mb-6 overflow-hidden'>
+          <div className='p-5 space-y-4'>
+            {/* Search & Primary Filters */}
+            <div className='flex flex-col lg:flex-row gap-4'>
+              <div className='relative flex-1'>
+                <Search className='w-5 h-5 absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400' />
+                <input
+                  type='text'
+                  placeholder='Search by property address, submitter name, or HOA...'
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className='w-full pl-10 pr-4 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all'
+                />
+              </div>
+              <div className='flex items-center gap-2'>
+                <label className='flex items-center gap-2 px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg cursor-pointer hover:bg-gray-100 transition-colors select-none'>
+                  <input
+                    type='checkbox'
+                    checked={assignedToMe}
+                    onChange={(e) => setAssignedToMe(e.target.checked)}
+                    className='rounded border-gray-300 text-blue-600 focus:ring-blue-500 h-4 w-4'
+                  />
+                  <span className='text-sm font-medium text-gray-700'>Assigned to me</span>
+                </label>
+              </div>
+            </div>
+
+            {/* Secondary Filters Grid */}
+            <div className='grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 pt-4 border-t border-gray-100'>
             {/* Date Filter */}
-            <div>
-              <label className='block text-sm font-medium text-gray-700 mb-2'>
-                Date Range
+            <div className='space-y-1.5'>
+              <label className='text-xs font-semibold text-gray-500 uppercase tracking-wider'>
+                Time Period
               </label>
               <select
                 value={dateFilter}
                 onChange={(e) => setDateFilter(e.target.value)}
-                className='w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500'
+                className='w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all'
               >
                 <option value='all'>All Time</option>
                 <option value='today'>Today</option>
@@ -2552,40 +2607,40 @@ const AdminApplications = ({ userRole }) => {
             {/* Custom Date Range */}
             {dateFilter === 'custom' && (
               <>
-                <div>
-                  <label className='block text-sm font-medium text-gray-700 mb-2'>
+                <div className='space-y-1.5'>
+                  <label className='text-xs font-semibold text-gray-500 uppercase tracking-wider'>
                     Start Date
                   </label>
                   <input
                     type='date'
                     value={customDateRange.startDate}
                     onChange={(e) => setCustomDateRange({...customDateRange, startDate: e.target.value})}
-                    className='w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500'
+                    className='w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500'
                   />
                 </div>
-                <div>
-                  <label className='block text-sm font-medium text-gray-700 mb-2'>
+                <div className='space-y-1.5'>
+                  <label className='text-xs font-semibold text-gray-500 uppercase tracking-wider'>
                     End Date
                   </label>
                   <input
                     type='date'
                     value={customDateRange.endDate}
                     onChange={(e) => setCustomDateRange({...customDateRange, endDate: e.target.value})}
-                    className='w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500'
+                    className='w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500'
                   />
                 </div>
               </>
             )}
 
             {/* Workflow Step Filter */}
-            <div>
-              <label className='block text-sm font-medium text-gray-700 mb-2'>
-                Workflow Step
+            <div className='space-y-1.5'>
+              <label className='text-xs font-semibold text-gray-500 uppercase tracking-wider'>
+                Status
               </label>
               <select
                 value={selectedStatus}
                 onChange={(e) => setSelectedStatus(e.target.value)}
-                className='w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500'
+                className='w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all'
               >
                 <option value='all'>All Steps</option>
                 <option value='urgent'>Urgent Applications</option>
@@ -2596,14 +2651,14 @@ const AdminApplications = ({ userRole }) => {
             </div>
 
             {/* Application Type Filter */}
-            <div>
-              <label className='block text-sm font-medium text-gray-700 mb-2'>
-                Application Type
+            <div className='space-y-1.5'>
+              <label className='text-xs font-semibold text-gray-500 uppercase tracking-wider'>
+                Type
               </label>
               <select
                 value={selectedApplicationType}
                 onChange={(e) => setSelectedApplicationType(e.target.value)}
-                className='w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500'
+                className='w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all'
               >
                 <option value='all'>All Types</option>
                 <option value='standard'>Standard</option>
@@ -2612,85 +2667,60 @@ const AdminApplications = ({ userRole }) => {
               </select>
             </div>
 
-            {/* Assigned to Me Filter */}
-            <div>
-              <label className='block text-sm font-medium text-gray-700 mb-2'>
-                Assignment Filter
-              </label>
-              <label className='flex items-center'>
-                <input
-                  type='checkbox'
-                  checked={assignedToMe}
-                  onChange={(e) => setAssignedToMe(e.target.checked)}
-                  className='rounded border-gray-300 text-blue-600 focus:ring-blue-500'
-                />
-                <span className='ml-2 text-sm text-gray-700'>Assigned to me only</span>
-              </label>
-            </div>
           </div>
 
-          {/* Search */}
-          <div className='mt-4'>
-            <div className='relative'>
-              <Search className='w-5 h-5 absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400' />
-              <input
-                type='text'
-                placeholder='Search by property address, submitter name, or HOA...'
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className='w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500'
-              />
-            </div>
           </div>
         </div>
 
-        {/* Applications Table */}
-        <div className='bg-white rounded-lg shadow-md border overflow-hidden applications-table'>
+        {/* Applications Table (Desktop) */}
+        <div className='hidden sm:block bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden'>
           <div className='overflow-x-auto'>
             <table className='w-full'>
-              <thead className='bg-gray-50 border-b'>
+              <thead className='bg-gray-50/80 border-b border-gray-100'>
                 <tr>
-                  <th className='px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider'>
-                    Property Details
+                  <th className='px-6 py-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider'>
+                    Property / Applicant
                   </th>
-                  <th className='px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider'>
-                    Application Type
+                  <th className='px-6 py-4 text-center text-xs font-semibold text-gray-500 uppercase tracking-wider'>
+                    Type
                   </th>
-                  <th className='px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider workflow-column'>
-                    Workflow Step
+                  <th className='px-6 py-4 text-center text-xs font-semibold text-gray-500 uppercase tracking-wider'>
+                    Status
                   </th>
-                  <th className='px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider'>
-                    Submitted
+                  <th className='px-6 py-4 text-center text-xs font-semibold text-gray-500 uppercase tracking-wider'>
+                    Date Submitted
                   </th>
-                  <th className='px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider'>
-                    Assigned
+                  <th className='px-6 py-4 text-center text-xs font-semibold text-gray-500 uppercase tracking-wider'>
+                    Assignee
                   </th>
-                  <th className='px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider'>
+                  <th className='px-6 py-4 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider'>
                     Actions
                   </th>
                 </tr>
               </thead>
-              <tbody className='bg-white divide-y divide-gray-200'>
+              <tbody className='divide-y divide-gray-50'>
                 {applications.map((app) => {
                   const workflowStep = getWorkflowStep(app);
                   return (
-                    <tr key={app.id} className='hover:bg-gray-50'>
+                    <tr key={app.id} className='hover:bg-blue-50/30 transition-colors'>
                       <td className='px-6 py-4 whitespace-nowrap'>
                         <div className='flex items-center gap-3'>
                           <Building className='w-5 h-5 text-gray-400' />
                           <div>
-                            <div className='text-sm font-medium text-gray-900'>
+                            <div className='text-sm font-semibold text-gray-900 mb-0.5'>
                               {app.property_address}
                             </div>
-                            <div className='text-sm text-gray-500'>
-                              {app.submitter_name} • {app.hoa_properties?.name || 'Unknown HOA'}
+                            <div className='text-xs text-gray-500 flex items-center gap-1.5'>
+                              <span className='font-medium text-gray-700'>{app.submitter_name}</span>
+                              <span className='text-gray-300'>•</span>
+                              <span>{app.hoa_properties?.name || 'Unknown HOA'}</span>
                             </div>
                           </div>
                         </div>
                       </td>
 
-                      <td className='px-6 py-4 whitespace-nowrap'>
-                        <div className='text-sm text-gray-900'>
+                      <td className='px-6 py-4 whitespace-nowrap text-center'>
+                        <div className='flex justify-center'>
                           {(() => {
                             const appType = app.application_type || 'single_property';
                             const isRush = app.package_type === 'rush';
@@ -2737,7 +2767,7 @@ const AdminApplications = ({ userRole }) => {
                         </div>
                       </td>
 
-                      <td className='px-6 py-4 whitespace-nowrap'>
+                      <td className='px-6 py-4 whitespace-nowrap text-center'>
                         <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${workflowStep.color}`}>
                           Step {workflowStep.step}: {workflowStep.text}
                         </span>
@@ -2745,14 +2775,14 @@ const AdminApplications = ({ userRole }) => {
 
                       <td className='px-6 py-4 whitespace-nowrap text-sm text-gray-900'>
                         {app.submitted_at ? (
-                          <div className='space-y-1'>
-                            <div className='flex items-center gap-1'>
+                          <div className='space-y-1 text-center'>
+                            <div className='flex items-center justify-center gap-1'>
                               <Calendar className='w-3 h-3 text-gray-400' />
                               <span>
                                 {formatDate(app.submitted_at)}
                               </span>
                             </div>
-                            <div className='flex items-center gap-1 text-xs'>
+                            <div className='flex items-center justify-center gap-1 text-xs'>
                               <Clock className='w-3 h-3 text-gray-400' />
                               <span className='text-gray-600'>
                                 Deadline: {(() => {
@@ -2765,13 +2795,13 @@ const AdminApplications = ({ userRole }) => {
                             </div>
                           </div>
                         ) : (
-                          <span className='text-gray-400'>Not submitted</span>
+                          <span className='text-gray-400 block text-center'>Not submitted</span>
                         )}
                       </td>
 
                       <td className='px-6 py-4 whitespace-nowrap text-sm text-gray-900'>
                         {app.assigned_to ? (
-                          <div className='flex items-center gap-1'>
+                          <div className='flex items-center justify-center gap-1'>
                             <User className='w-3 h-3 text-gray-400' />
                             <span>
                               {(() => {
@@ -2783,14 +2813,14 @@ const AdminApplications = ({ userRole }) => {
                             </span>
                           </div>
                         ) : (
-                          <span className='text-gray-400'>Unassigned</span>
+                          <span className='text-gray-400 block text-center'>Unassigned</span>
                         )}
                       </td>
 
-                      <td className='px-6 py-4 whitespace-nowrap text-sm font-medium action-buttons'>
+                      <td className='px-6 py-4 whitespace-nowrap text-sm font-medium text-right'>
                         <button
                           onClick={() => handleApplicationClick(app)}
-                          className='px-3 py-1 text-sm bg-blue-100 text-blue-800 rounded-md hover:bg-blue-200 flex items-center space-x-1'
+                          className='inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 transition-colors'
                         >
                           <Eye className='w-4 h-4' />
                           <span>View</span>
@@ -2818,13 +2848,135 @@ const AdminApplications = ({ userRole }) => {
           )}
         </div>
 
+        {/* Applications List (Mobile) */}
+        <div className='sm:hidden space-y-4'>
+          {applications.length === 0 ? (
+            <div className='bg-white rounded-xl shadow-sm border border-gray-200 p-8 text-center'>
+              <FileText className='w-12 h-12 text-gray-400 mx-auto mb-4' />
+              <h3 className='text-lg font-medium text-gray-900 mb-2'>
+                {searchTerm || dateFilter !== 'all' || assignedToMe ? 'No applications found' : 'No applications yet'}
+              </h3>
+              <p className='text-gray-500'>
+                {searchTerm || dateFilter !== 'all' || assignedToMe
+                  ? 'Try adjusting your search criteria or filters'
+                  : 'Applications will appear here once submitted'}
+              </p>
+            </div>
+          ) : (
+            applications.map((app) => {
+              const workflowStep = getWorkflowStep(app);
+              return (
+                <div key={app.id} className='bg-white rounded-xl shadow-sm border border-gray-200 p-4 space-y-4'>
+                  {/* Header: Address and Status */}
+                  <div className='flex justify-between items-start'>
+                    <div>
+                      <h3 className='text-base font-semibold text-gray-900'>{app.property_address}</h3>
+                      <div className='text-sm text-gray-500 mt-0.5 flex flex-col'>
+                        <span className='font-medium'>{app.submitter_name}</span>
+                        <span className='text-xs opacity-75'>{app.hoa_properties?.name || 'Unknown HOA'}</span>
+                      </div>
+                    </div>
+                    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${workflowStep.color}`}>
+                      Step {workflowStep.step}
+                    </span>
+                  </div>
+
+                  {/* Type Badge */}
+                  <div>
+                    {(() => {
+                      const appType = app.application_type || 'single_property';
+                      const isRush = app.package_type === 'rush';
+                      
+                      let typeLabel = '';
+                      let typeColor = '';
+                      
+                      if (appType === 'settlement_va') {
+                        typeLabel = 'Settlement - VA';
+                        typeColor = 'bg-green-100 text-green-800';
+                      } else if (appType === 'settlement_nc') {
+                        typeLabel = 'Settlement - NC';
+                        typeColor = 'bg-blue-100 text-blue-800';
+                      } else if (appType === 'public_offering') {
+                        typeLabel = 'Public Offering';
+                        typeColor = 'bg-purple-100 text-purple-800';
+                      } else if (appType === 'multi_community') {
+                        typeLabel = 'Multi-Community';
+                        typeColor = 'bg-orange-100 text-orange-800';
+                      } else if (appType === 'lender_questionnaire') {
+                        typeLabel = 'Lender Questionnaire';
+                        typeColor = 'bg-indigo-100 text-indigo-800';
+                      } else {
+                        typeLabel = 'Single Property';
+                        typeColor = 'bg-gray-100 text-gray-800';
+                      }
+                      
+                      return (
+                        <div className='flex items-center gap-2'>
+                          <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${typeColor}`}>
+                            {typeLabel}
+                          </span>
+                          {isRush && (
+                            <span className='inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-orange-100 text-orange-800'>
+                              RUSH
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })()}
+                  </div>
+
+                  {/* Details Grid */}
+                  <div className='grid grid-cols-2 gap-4 border-t border-gray-100 pt-3'>
+                    <div>
+                      <div className='text-xs text-gray-500 uppercase tracking-wider font-semibold mb-1'>Submitted</div>
+                      {app.submitted_at ? (
+                        <div className='space-y-0.5'>
+                          <div className='text-sm font-medium text-gray-900'>{formatDate(app.submitted_at)}</div>
+                          <div className='text-xs text-gray-500'>
+                            Due: {(() => {
+                              const submittedDate = new Date(app.submitted_at);
+                              const businessDays = app.package_type === 'rush' ? 5 : 15;
+                              const deadline = calculateBusinessDaysDeadline(submittedDate, businessDays);
+                              return formatDate(deadline.toISOString());
+                            })()}
+                          </div>
+                        </div>
+                      ) : (
+                        <span className='text-sm text-gray-400'>Not submitted</span>
+                      )}
+                    </div>
+                    <div>
+                      <div className='text-xs text-gray-500 uppercase tracking-wider font-semibold mb-1'>Assignee</div>
+                      <div className='text-sm font-medium text-gray-900'>
+                        {app.assigned_to ? (() => {
+                          const staff = staffMembers.find(s => s.email === app.assigned_to);
+                          return staff ? `${staff.first_name} ${staff.last_name}` : app.assigned_to;
+                        })() : <span className='text-gray-400'>Unassigned</span>}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Action Button */}
+                  <button
+                    onClick={() => handleApplicationClick(app)}
+                    className='w-full flex items-center justify-center gap-2 py-2.5 px-4 bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 transition-colors font-medium text-sm'
+                  >
+                    <Eye className='w-4 h-4' />
+                    View Details
+                  </button>
+                </div>
+              );
+            })
+          )}
+        </div>
+
         {/* Pagination */}
         {totalCount > 0 && (
-          <div className='bg-white rounded-lg shadow-md border p-4 mt-6'>
-            <div className='flex items-center justify-between'>
+          <div className='bg-white rounded-xl shadow-sm border border-gray-200 p-4 mt-6'>
+            <div className='flex flex-col sm:flex-row items-center justify-between gap-4'>
               <div className='flex items-center gap-4'>
-                <span className='text-sm text-gray-700'>
-                  Showing {((currentPage - 1) * itemsPerPage) + 1} to {Math.min(currentPage * itemsPerPage, totalCount)} of {totalCount} applications
+                <span className='text-sm text-gray-500'>
+                  Showing <span className='font-medium text-gray-900'>{((currentPage - 1) * itemsPerPage) + 1}</span> to <span className='font-medium text-gray-900'>{Math.min(currentPage * itemsPerPage, totalCount)}</span> of <span className='font-medium text-gray-900'>{totalCount}</span> applications
                 </span>
                 <select
                   value={itemsPerPage}
@@ -2832,7 +2984,7 @@ const AdminApplications = ({ userRole }) => {
                     setItemsPerPage(Number(e.target.value));
                     setCurrentPage(1);
                   }}
-                  className='px-3 py-1 border border-gray-300 rounded-md text-sm'
+                  className='px-3 py-1 bg-white border border-gray-200 rounded-lg text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 cursor-pointer'
                 >
                   <option value={10}>10 per page</option>
                   <option value={20}>20 per page</option>
@@ -2844,7 +2996,7 @@ const AdminApplications = ({ userRole }) => {
                 <button
                   onClick={() => setCurrentPage(1)}
                   disabled={currentPage === 1}
-                  className='p-2 rounded-md border border-gray-300 text-gray-500 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed'
+                  className='p-2 rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50 hover:text-gray-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed'
                   title="First page"
                 >
                   <ChevronsLeft className='w-4 h-4' />
@@ -2852,7 +3004,7 @@ const AdminApplications = ({ userRole }) => {
                 <button
                   onClick={() => setCurrentPage(currentPage - 1)}
                   disabled={currentPage === 1}
-                  className='p-2 rounded-md border border-gray-300 text-gray-500 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed'
+                  className='p-2 rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50 hover:text-gray-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed'
                   title="Previous page"
                 >
                   <ChevronLeft className='w-4 h-4' />
@@ -2876,10 +3028,10 @@ const AdminApplications = ({ userRole }) => {
                         <button
                           key={i}
                           onClick={() => setCurrentPage(i)}
-                          className={`px-3 py-2 text-sm rounded-md ${
+                          className={`px-3 py-2 text-sm font-medium rounded-lg transition-colors ${
                             i === currentPage
-                              ? 'bg-blue-600 text-white'
-                              : 'border border-gray-300 text-gray-700 hover:bg-gray-50'
+                              ? 'bg-blue-600 text-white shadow-sm'
+                              : 'bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 hover:text-gray-900'
                           }`}
                         >
                           {i}
@@ -2893,7 +3045,7 @@ const AdminApplications = ({ userRole }) => {
                 <button
                   onClick={() => setCurrentPage(currentPage + 1)}
                   disabled={currentPage >= Math.ceil(totalCount / itemsPerPage)}
-                  className='p-2 rounded-md border border-gray-300 text-gray-500 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed'
+                  className='p-2 rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50 hover:text-gray-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed'
                   title="Next page"
                 >
                   <ChevronRight className='w-4 h-4' />
@@ -2901,7 +3053,7 @@ const AdminApplications = ({ userRole }) => {
                 <button
                   onClick={() => setCurrentPage(Math.ceil(totalCount / itemsPerPage))}
                   disabled={currentPage >= Math.ceil(totalCount / itemsPerPage)}
-                  className='p-2 rounded-md border border-gray-300 text-gray-500 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed'
+                  className='p-2 rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50 hover:text-gray-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed'
                   title="Last page"
                 >
                   <ChevronsRight className='w-4 h-4' />
@@ -2914,220 +3066,232 @@ const AdminApplications = ({ userRole }) => {
         {/* Application Detail Modal */}
         {selectedApplication && (
           <div 
-            className='fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50'
+            className='fixed inset-0 bg-gray-900/50 backdrop-blur-sm flex items-center justify-center p-4 z-50 transition-opacity'
             onClick={handleCloseModal}
           >
             <div 
-              className='bg-white rounded-lg max-w-4xl w-full max-h-[90vh] overflow-y-auto p-6'
+              className='bg-white rounded-2xl shadow-xl w-full max-w-5xl max-h-[90vh] overflow-hidden flex flex-col transform transition-all'
               onClick={(e) => e.stopPropagation()}
             >
-              {/* Loading overlay for modal content */}
-              {loadingFormData && (
-                <div className='absolute inset-0 bg-white bg-opacity-75 flex items-center justify-center z-10 rounded-lg'>
-                  <div className='flex items-center space-x-2'>
-                    <div className='animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600'></div>
-                    <span className='text-sm text-gray-600'>Loading application details...</span>
+              {/* Modal Header */}
+              <div className='px-6 py-4 border-b border-gray-100 flex items-center justify-between bg-white z-10'>
+                <div className='flex items-center gap-3'>
+                  <div className='h-10 w-10 rounded-full bg-blue-50 flex items-center justify-center'>
+                    <FileText className='w-5 h-5 text-blue-600' />
+                  </div>
+                  <div>
+                    <h2 className='text-lg font-bold text-gray-900'>
+                      Application #{selectedApplication.id}
+                    </h2>
+                    <p className='text-xs text-gray-500'>
+                      View and manage application details
+                    </p>
                   </div>
                 </div>
-              )}
-              <div className='p-6 border-b'>
-                <div className='flex justify-between items-center'>
-                  <h2 className='text-xl font-bold text-gray-900'>
-                    Application #{selectedApplication.id} Details
-                  </h2>
-                  <div className='flex items-center space-x-2'>
-                    <button
-                      onClick={() => handleApplicationClick(selectedApplication)}
-                      className='text-blue-400 hover:text-blue-600'
-                      title='Refresh application data'
-                    >
-                      <RefreshCw className='w-5 h-5' />
-                    </button>
-                    <button
-                      onClick={handleCloseModal}
-                      className='text-gray-400 hover:text-gray-600'
-                    >
-                      <X className='w-6 h-6' />
-                    </button>
-                  </div>
+                <div className='flex items-center gap-2'>
+                  <button
+                    onClick={() => handleApplicationClick(selectedApplication)}
+                    className='p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors'
+                    title='Refresh application data'
+                  >
+                    <RefreshCw className='w-5 h-5' />
+                  </button>
+                  <button
+                    onClick={handleCloseModal}
+                    className='p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors'
+                  >
+                    <X className='w-5 h-5' />
+                  </button>
                 </div>
               </div>
 
-              <div className='p-6 space-y-6'>
-                {/* Error boundary for modal content */}
+              {/* Modal Content */}
+              <div className='flex-1 overflow-y-auto custom-scrollbar p-6 space-y-8 bg-gray-50/30'>
+                {/* Loading overlay */}
+                {loadingFormData && (
+                  <div className='absolute inset-0 bg-white/80 backdrop-blur-sm flex items-center justify-center z-50 rounded-2xl'>
+                    <div className='flex flex-col items-center gap-3'>
+                      <div className='animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600'></div>
+                      <span className='text-sm font-medium text-gray-600'>Loading details...</span>
+                    </div>
+                  </div>
+                )}
+
+                {/* Error Banner */}
                 {!selectedApplication.id && (
-                  <div className='bg-red-50 border border-red-200 rounded-lg p-4 mb-6'>
-                    <div className='flex items-center'>
-                      <div className='text-red-600 mr-2'>⚠️</div>
-                      <div>
-                        <h3 className='text-sm font-semibold text-red-800'>
-                          Application Data Error
-                        </h3>
-                        <p className='text-sm text-red-600 mt-1'>
-                          Unable to load application details. Please try refreshing the page.
-                        </p>
-                      </div>
+                  <div className='bg-red-50 border border-red-200 rounded-xl p-4 flex items-start gap-3'>
+                    <div className='text-red-600 mt-0.5'>⚠️</div>
+                    <div>
+                      <h3 className='text-sm font-semibold text-red-800'>Application Data Error</h3>
+                      <p className='text-sm text-red-600 mt-0.5'>Unable to load application details. Please try refreshing the page.</p>
                     </div>
                   </div>
                 )}
 
-                {/* Multi-Community Indicator */}
+                {/* Multi-Community Banner */}
                 {selectedApplication.hoa_properties?.is_multi_community && (
-                  <div className='bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6'>
-                    <div className='flex items-center'>
-                      <Building className='w-5 h-5 text-blue-600 mr-2' />
-                      <div>
-                        <h3 className='text-sm font-semibold text-blue-800'>
-                          Multi-Community Application
-                        </h3>
-                        <p className='text-sm text-blue-600 mt-1'>
-                          This application includes multiple community associations. Each property will be processed separately.
-                        </p>
-                      </div>
+                  <div className='bg-blue-50 border border-blue-100 rounded-xl p-4 flex items-start gap-3'>
+                    <Building className='w-5 h-5 text-blue-600 mt-0.5' />
+                    <div>
+                      <h3 className='text-sm font-semibold text-blue-800'>Multi-Community Application</h3>
+                      <p className='text-sm text-blue-600 mt-0.5'>
+                        This application includes multiple community associations. Each property will be processed separately.
+                      </p>
                     </div>
                   </div>
                 )}
 
-                {/* Application Overview */}
-                <div className='grid md:grid-cols-2 gap-6'>
-                  <div>
-                    <h3 className='text-lg font-semibold text-gray-800 mb-3'>
+                {/* Info Grid */}
+                <div className='grid grid-cols-1 md:grid-cols-2 gap-6'>
+                  {/* Property Info Card */}
+                  <div className='bg-white rounded-xl border border-gray-200 p-5 shadow-sm'>
+                    <h3 className='text-sm font-semibold text-gray-900 mb-4 flex items-center gap-2 uppercase tracking-wider'>
+                      <Building className='w-4 h-4 text-gray-400' />
                       Property Information
                     </h3>
-                    <div className='space-y-2 text-sm'>
-                      <div>
-                        <strong>Address:</strong>{' '}
-                        {selectedApplication.property_address}
+                    <div className='grid grid-cols-2 gap-y-4 gap-x-2'>
+                      <div className='col-span-2'>
+                        <label className='text-xs font-medium text-gray-500 uppercase tracking-wider block mb-1'>Address</label>
+                        <div className='text-sm font-medium text-gray-900 break-words'>{selectedApplication.property_address}</div>
                       </div>
                       <div>
-                        <strong>Unit:</strong>{' '}
-                        {selectedApplication.unit_number || 'N/A'}
+                        <label className='text-xs font-medium text-gray-500 uppercase tracking-wider block mb-1'>Unit</label>
+                        <div className='text-sm text-gray-900'>{selectedApplication.unit_number || 'N/A'}</div>
                       </div>
                       <div>
-                        <strong>HOA:</strong>{' '}
-                        {selectedApplication.hoa_properties?.name || 'N/A'}
+                        <label className='text-xs font-medium text-gray-500 uppercase tracking-wider block mb-1'>HOA</label>
+                        <div className='text-sm text-gray-900'>{selectedApplication.hoa_properties?.name || 'N/A'}</div>
                       </div>
                       <div>
-                        <strong>Buyer:</strong> {selectedApplication.buyer_name || 'N/A'}
+                        <label className='text-xs font-medium text-gray-500 uppercase tracking-wider block mb-1'>Buyer</label>
+                        <div className='text-sm text-gray-900'>{selectedApplication.buyer_name || 'N/A'}</div>
                       </div>
                       <div>
-                        <strong>Seller:</strong> {selectedApplication.seller_name || 'N/A'}
+                        <label className='text-xs font-medium text-gray-500 uppercase tracking-wider block mb-1'>Seller</label>
+                        <div className='text-sm text-gray-900'>{selectedApplication.seller_name || 'N/A'}</div>
                       </div>
                       <div>
-                        <strong>Sale Price:</strong> $
-                        {selectedApplication.sale_price?.toLocaleString() || 'N/A'}
+                        <label className='text-xs font-medium text-gray-500 uppercase tracking-wider block mb-1'>Sale Price</label>
+                        <div className='text-sm text-gray-900'>${selectedApplication.sale_price?.toLocaleString() || 'N/A'}</div>
                       </div>
                       <div>
-                        <strong>Closing Date:</strong>{' '}
-                        {selectedApplication.closing_date
-                          ? formatDate(selectedApplication.closing_date)
-                          : 'TBD'}
+                        <label className='text-xs font-medium text-gray-500 uppercase tracking-wider block mb-1'>Closing Date</label>
+                        <div className='text-sm text-gray-900'>
+                          {selectedApplication.closing_date ? formatDate(selectedApplication.closing_date) : 'TBD'}
+                        </div>
                       </div>
                     </div>
                   </div>
 
-                  <div>
-                    <h3 className='text-lg font-semibold text-gray-800 mb-3'>
+                  {/* Submission Info Card */}
+                  <div className='bg-white rounded-xl border border-gray-200 p-5 shadow-sm'>
+                    <h3 className='text-sm font-semibold text-gray-900 mb-4 flex items-center gap-2 uppercase tracking-wider'>
+                      <FileText className='w-4 h-4 text-gray-400' />
                       Submission Details
                     </h3>
-                    <div className='space-y-2 text-sm'>
-                      <div>
-                        <strong>Submitted by:</strong>{' '}
-                        {selectedApplication.submitter_name || 'N/A'}
+                    <div className='grid grid-cols-2 gap-y-4 gap-x-2'>
+                      <div className='col-span-2'>
+                        <label className='text-xs font-medium text-gray-500 uppercase tracking-wider block mb-1'>Submitted By</label>
+                        <div className='text-sm font-medium text-gray-900'>{selectedApplication.submitter_name || 'N/A'}</div>
+                        <div className='text-xs text-gray-500 mt-0.5'>{selectedApplication.submitter_email || 'N/A'}</div>
+                        {selectedApplication.submitter_phone && (
+                          <div className='text-xs text-gray-500'>{selectedApplication.submitter_phone}</div>
+                        )}
                       </div>
                       <div>
-                        <strong>Email:</strong>{' '}
-                        {selectedApplication.submitter_email || 'N/A'}
+                        <label className='text-xs font-medium text-gray-500 uppercase tracking-wider block mb-1'>Type</label>
+                        <div className='text-sm text-gray-900 capitalize'>{selectedApplication.submitter_type || 'N/A'}</div>
+                      </div>
+                       <div>
+                        <label className='text-xs font-medium text-gray-500 uppercase tracking-wider block mb-1'>License</label>
+                        <div className='text-sm text-gray-900'>{selectedApplication.realtor_license || 'N/A'}</div>
+                      </div>
+                      <div className='col-span-2'>
+                         <label className='text-xs font-medium text-gray-500 uppercase tracking-wider block mb-1'>Application Type</label>
+                         <div className='inline-flex'>
+                          {(() => {
+                            const appType = selectedApplication.application_type || 'single_property';
+                            let label = 'Single Property';
+                            let color = 'bg-gray-100 text-gray-800';
+                            
+                            if (appType === 'settlement_va') { label = 'Settlement - VA'; color = 'bg-green-100 text-green-800'; }
+                            else if (appType === 'settlement_nc') { label = 'Settlement - NC'; color = 'bg-blue-100 text-blue-800'; }
+                            else if (appType === 'public_offering') { label = 'Public Offering'; color = 'bg-purple-100 text-purple-800'; }
+                            else if (appType === 'multi_community') { label = 'Multi-Community'; color = 'bg-orange-100 text-orange-800'; }
+                            else if (appType === 'lender_questionnaire') { label = 'Lender Questionnaire'; color = 'bg-indigo-100 text-indigo-800'; }
+                            
+                            return <span className={`px-2 py-1 rounded-md text-xs font-medium ${color}`}>{label}</span>;
+                          })()}
+                         </div>
+                      </div>
+                       <div>
+                        <label className='text-xs font-medium text-gray-500 uppercase tracking-wider block mb-1'>Package</label>
+                        <div className='text-sm text-gray-900 capitalize'>{selectedApplication.package_type || 'N/A'}</div>
                       </div>
                       <div>
-                        <strong>Phone:</strong>{' '}
-                        {selectedApplication.submitter_phone || 'N/A'}
-                      </div>
-                      <div>
-                        <strong>Application Type:</strong>{' '}
-                        {(() => {
-                          const appType = selectedApplication.application_type || 'single_property';
-                          if (appType === 'settlement_va') return 'Settlement - VA';
-                          if (appType === 'settlement_nc') return 'Settlement - NC';
-                          if (appType === 'public_offering') return 'Public Offering';
-                          if (appType === 'multi_community') return 'Multi-Community';
-                          if (appType === 'lender_questionnaire') return 'Lender Questionnaire';
-                          return 'Single Property';
-                        })()}
-                      </div>
-                      <div>
-                        <strong>Type:</strong> {selectedApplication.submitter_type || 'N/A'}
-                      </div>
-                      <div>
-                        <strong>License:</strong>{' '}
-                        {selectedApplication.realtor_license || 'N/A'}
-                      </div>
-                      <div>
-                        <strong>Package:</strong> {selectedApplication.package_type || 'N/A'}
-                      </div>
-                      <div>
-                        <strong>Total Amount:</strong> $
-                        {selectedApplication.total_amount?.toFixed(2) || '0.00'}
+                        <label className='text-xs font-medium text-gray-500 uppercase tracking-wider block mb-1'>Total Amount</label>
+                        <div className='text-sm font-bold text-gray-900'>${selectedApplication.total_amount?.toFixed(2) || '0.00'}</div>
                       </div>
                     </div>
                   </div>
                 </div>
                 
                 {/* Assignment Section */}
-                <div>
-                  <h3 className='text-lg font-semibold text-gray-800 mb-4'>
-                    Assignment
-                  </h3>
-                  <div className='bg-gray-50 rounded-lg p-4'>
-                    <div className='flex items-center justify-between'>
-                      <div className='flex items-center gap-3'>
-                        <User className='w-5 h-5 text-gray-400' />
-                        <div className='flex-1'>
-                          <label className='block text-sm font-medium text-gray-700 mb-1'>
-                            Assigned to:
-                          </label>
-                          <div className='flex gap-2 items-end'>
-                            <select
-                              value={selectedApplication.assigned_to || ''}
-                              onChange={(e) => handleAssignApplication(selectedApplication.id, e.target.value || null)}
-                              disabled={assigningApplication === selectedApplication.id}
-                              className='px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white min-w-[200px] flex-1'
-                            >
-                              <option value="">Unassigned</option>
-                              {staffMembers.map((staff) => (
-                                <option key={staff.email} value={staff.email}>
-                                  {staff.first_name} {staff.last_name} ({staff.role})
-                                </option>
-                              ))}
-                            </select>
-                            {!selectedApplication.assigned_to && isLegacyApplication(selectedApplication) && (
-                              <button
-                                onClick={() => handleAutoAssignApplication(selectedApplication.id)}
-                                disabled={assigningApplication === selectedApplication.id}
-                                className='px-3 py-2 text-sm bg-blue-100 text-blue-800 rounded-md hover:bg-blue-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap'
-                                title='Auto-assign to property owner (legacy application)'
-                              >
-                                Auto-Assign
-                              </button>
-                            )}
-                          </div>
+                <div className='bg-white rounded-xl border border-gray-200 p-5 shadow-sm'>
+                   <h3 className='text-sm font-semibold text-gray-900 mb-4 flex items-center gap-2 uppercase tracking-wider'>
+                      <User className='w-4 h-4 text-gray-400' />
+                      Assignment
+                    </h3>
+                  <div className='flex items-center gap-4 bg-gray-50 p-4 rounded-lg border border-gray-100'>
+                    <div className='flex-1 max-w-md'>
+                       <label className='block text-xs font-medium text-gray-500 uppercase tracking-wider mb-2'>
+                          Assigned Staff Member
+                        </label>
+                        <div className="relative">
+                          <select
+                            value={selectedApplication.assigned_to || ''}
+                            onChange={(e) => handleAssignApplication(selectedApplication.id, e.target.value || null)}
+                            disabled={assigningApplication === selectedApplication.id}
+                            className='w-full pl-3 pr-10 py-2.5 bg-white border border-gray-300 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 appearance-none transition-all'
+                          >
+                            <option value="">Unassigned</option>
+                            {staffMembers.map((staff) => (
+                              <option key={staff.email} value={staff.email}>
+                                {staff.first_name} {staff.last_name} ({staff.role})
+                              </option>
+                            ))}
+                          </select>
+                          <ChevronDown className="w-4 h-4 text-gray-400 absolute right-3 top-1/2 transform -translate-y-1/2 pointer-events-none" />
                         </div>
-                      </div>
-                      {assigningApplication === selectedApplication.id && (
-                        <div className='flex items-center gap-2 text-blue-600'>
-                          <RefreshCw className='w-4 h-4 animate-spin' />
-                          <span className='text-sm'>Updating...</span>
-                        </div>
-                      )}
                     </div>
+                    
+                    {!selectedApplication.assigned_to && isLegacyApplication(selectedApplication) && (
+                      <div className='flex items-end h-full pt-6'>
+                         <button
+                            onClick={() => handleAutoAssignApplication(selectedApplication.id)}
+                            disabled={assigningApplication === selectedApplication.id}
+                            className='px-4 py-2.5 text-sm font-medium bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed'
+                          >
+                            Auto-Assign
+                          </button>
+                      </div>
+                    )}
+
+                    {assigningApplication === selectedApplication.id && (
+                      <div className='flex items-center gap-2 text-blue-600 pt-6'>
+                        <RefreshCw className='w-5 h-5 animate-spin' />
+                        <span className='text-sm font-medium'>Updating...</span>
+                      </div>
+                    )}
                   </div>
                 </div>
 
                 {/* Lender Questionnaire Workflow */}
                 {selectedApplication.application_type === 'lender_questionnaire' && (
                   <div>
-                    <h3 className='text-lg font-semibold text-gray-800 mb-4'>
-                      Tasks
+                    <h3 className='text-lg font-bold text-gray-900 mb-4 flex items-center gap-2'>
+                      <span className="flex items-center justify-center w-6 h-6 rounded bg-indigo-100 text-indigo-600 text-xs">LQ</span>
+                      Questionnaire Tasks
                     </h3>
                     <div className='space-y-4'>
                       {(() => {
@@ -3136,19 +3300,19 @@ const AdminApplications = ({ userRole }) => {
                         return (
                           <>
                             {/* Step 1: Download the Form */}
-                            <div className={`border rounded-lg p-4 ${getTaskStatusColor(taskStatuses.download)}`}>
-                              <div className='flex items-center justify-between'>
-                                <div className='flex items-center gap-3'>
-                                  <div className='flex items-center justify-center w-8 h-8 rounded-full bg-white border-2 border-current'>
+                            <div className={`border rounded-xl p-5 bg-white shadow-sm transition-all ${getTaskStatusColor(taskStatuses.download)}`}>
+                              <div className='flex flex-col sm:flex-row sm:items-center justify-between gap-4'>
+                                <div className='flex items-start gap-4'>
+                                  <div className={`flex-shrink-0 flex items-center justify-center w-10 h-10 rounded-full border-2 ${
+                                    taskStatuses.download === 'completed' ? 'bg-green-50 border-green-500 text-green-600' : 'bg-gray-50 border-gray-300 text-gray-500'
+                                  }`}>
                                     <span className='text-sm font-bold'>1</span>
                                   </div>
-                                  {getTaskStatusIcon(taskStatuses.download)}
                                   <div>
-                                    <h4 className='font-medium'>Download the Form</h4>
-                                    <p className='text-sm opacity-75'>{getTaskStatusText(taskStatuses.download)}</p>
-                                    <p className='text-xs opacity-60 mt-1'>Download the original lender questionnaire form uploaded by the requester</p>
+                                    <h4 className='font-semibold text-gray-900'>Download the Form</h4>
+                                    <p className='text-sm text-gray-500 mt-1'>Download the original lender questionnaire form uploaded by the requester</p>
                                     {selectedApplication.lender_questionnaire_deletion_date && (
-                                      <p className='text-xs opacity-50 mt-1'>
+                                      <p className='text-xs text-orange-600 mt-2 bg-orange-50 inline-block px-2 py-1 rounded'>
                                         Auto-deletes: {formatDate(selectedApplication.lender_questionnaire_deletion_date)}
                                       </p>
                                     )}
@@ -3156,6 +3320,7 @@ const AdminApplications = ({ userRole }) => {
                                 </div>
                                 <button
                                   onClick={async () => {
+                                    /* ... existing download logic ... */
                                     try {
                                       if (!selectedApplication.lender_questionnaire_file_path) {
                                         showSnackbar('No file available to download', 'error');
@@ -3184,7 +3349,6 @@ const AdminApplications = ({ userRole }) => {
                                           }
                                         } catch (trackError) {
                                           console.error('Error tracking download:', trackError);
-                                          // Don't show error to user, download was successful
                                         }
                                       }
                                     } catch (error) {
@@ -3193,49 +3357,52 @@ const AdminApplications = ({ userRole }) => {
                                     }
                                   }}
                                   disabled={!selectedApplication.lender_questionnaire_file_path}
-                                  className='px-4 py-2 bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1'
+                                  className='flex items-center justify-center gap-2 px-4 py-2.5 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 hover:text-gray-900 transition-all font-medium text-sm shadow-sm'
                                 >
                                   <Download className='w-4 h-4' />
-                                  Download
+                                  Download Form
                                 </button>
                               </div>
                               {selectedApplication.lender_questionnaire_file_path && (
-                                <div className='mt-2 text-sm opacity-75'>
+                                <div className='mt-3 pl-14 text-xs text-gray-500'>
                                   File: {selectedApplication.lender_questionnaire_file_path.split('/').pop()}
                                 </div>
                               )}
                             </div>
 
                             {/* Step 2: Reupload or Edit the Form */}
-                            <div className={`border rounded-lg p-4 ${getTaskStatusColor(taskStatuses.upload)}`}>
-                              <div className='flex items-center justify-between'>
-                                <div className='flex items-center gap-3'>
-                                  <div className='flex items-center justify-center w-8 h-8 rounded-full bg-white border-2 border-current'>
+                            <div className={`border rounded-xl p-5 bg-white shadow-sm transition-all ${getTaskStatusColor(taskStatuses.upload)}`}>
+                               {/* ... Similar structure for Step 2 ... */}
+                              <div className='flex flex-col sm:flex-row sm:items-center justify-between gap-4'>
+                                <div className='flex items-start gap-4'>
+                                  <div className={`flex-shrink-0 flex items-center justify-center w-10 h-10 rounded-full border-2 ${
+                                    taskStatuses.upload === 'completed' ? 'bg-green-50 border-green-500 text-green-600' : 'bg-gray-50 border-gray-300 text-gray-500'
+                                  }`}>
                                     <span className='text-sm font-bold'>2</span>
                                   </div>
-                                  {getTaskStatusIcon(taskStatuses.upload)}
                                   <div>
-                                    <h4 className='font-medium'>Reupload or Edit the Form</h4>
-                                    <p className='text-sm opacity-75'>{getTaskStatusText(taskStatuses.upload)}</p>
-                                    <p className='text-xs opacity-60 mt-1'>Upload the completed lender questionnaire form or edit the PDF directly</p>
-                                    {selectedApplication.lender_questionnaire_completed_uploaded_at && (
-                                      <p className='text-sm opacity-75 mt-1'>
-                                        Uploaded: {formatDateTimeFull(selectedApplication.lender_questionnaire_completed_uploaded_at)}
-                                      </p>
-                                    )}
-                                    {selectedApplication.lender_questionnaire_edited_at && (
-                                      <p className='text-sm opacity-75 mt-1'>
-                                        Edited: {formatDateTimeFull(selectedApplication.lender_questionnaire_edited_at)}
-                                      </p>
-                                    )}
+                                    <h4 className='font-semibold text-gray-900'>Reupload or Edit</h4>
+                                    <p className='text-sm text-gray-500 mt-1'>Upload completed form or edit directly</p>
+                                     <div className="flex flex-col gap-1 mt-2">
+                                        {selectedApplication.lender_questionnaire_completed_uploaded_at && (
+                                          <span className='text-xs text-green-600 bg-green-50 px-2 py-1 rounded w-fit'>
+                                            Uploaded: {formatDateTimeFull(selectedApplication.lender_questionnaire_completed_uploaded_at)}
+                                          </span>
+                                        )}
+                                        {selectedApplication.lender_questionnaire_edited_at && (
+                                          <span className='text-xs text-blue-600 bg-blue-50 px-2 py-1 rounded w-fit'>
+                                            Edited: {formatDateTimeFull(selectedApplication.lender_questionnaire_edited_at)}
+                                          </span>
+                                        )}
+                                     </div>
                                   </div>
                                 </div>
-                                <div className='flex gap-2 flex-wrap'>
-                                  {/* View button - enabled when there's uploaded or edited file */}
+                                <div className='flex flex-wrap gap-2'>
                                   {(selectedApplication.lender_questionnaire_completed_file_path || selectedApplication.lender_questionnaire_edited_file_path) && (
                                     <button
                                       onClick={async () => {
-                                        try {
+                                         /* ... existing view logic ... */
+                                          try {
                                           const filePath = selectedApplication.lender_questionnaire_completed_file_path || selectedApplication.lender_questionnaire_edited_file_path;
                                           const { data, error } = await supabase.storage
                                             .from('bucket0')
@@ -3250,16 +3417,15 @@ const AdminApplications = ({ userRole }) => {
                                           showSnackbar('Failed to view file', 'error');
                                         }
                                       }}
-                                      className='px-3 py-2 bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity text-sm font-medium flex items-center gap-1'
+                                      className='flex items-center gap-2 px-3 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 text-sm font-medium shadow-sm'
                                     >
-                                      <Eye className='w-4 h-4' />
-                                      View
+                                      <Eye className='w-4 h-4' /> View
                                     </button>
                                   )}
-                                  {/* Edit PDF button */}
                                   <button
                                     onClick={async () => {
-                                      try {
+                                        /* ... existing edit logic ... */
+                                        try {
                                         if (!selectedApplication.lender_questionnaire_file_path) {
                                           showSnackbar('No original file available to edit', 'error');
                                           return;
@@ -3305,15 +3471,13 @@ const AdminApplications = ({ userRole }) => {
                                       }
                                     }}
                                     disabled={!selectedApplication.lender_questionnaire_file_path || editingPdf || !simplePdfReady || !selectedApplication.lender_questionnaire_downloaded_at}
-                                    className='px-3 py-2 bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1'
+                                    className='flex items-center gap-2 px-3 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 text-sm font-medium shadow-sm disabled:opacity-50'
                                   >
-                                    <Edit className='w-4 h-4' />
-                                    {editingPdf ? 'Opening...' : 'Edit PDF'}
+                                    <Edit className='w-4 h-4' /> {editingPdf ? 'Opening...' : 'Edit PDF'}
                                   </button>
-                                  {/* Upload button */}
-                                  {selectedApplication.lender_questionnaire_completed_file_path ? (
-                                    <button
+                                  <button
                                       onClick={() => {
+                                        /* ... existing upload logic ... */
                                         const input = document.createElement('input');
                                         input.type = 'file';
                                         input.accept = '.pdf,.doc,.docx';
@@ -3349,85 +3513,28 @@ const AdminApplications = ({ userRole }) => {
                                         input.click();
                                       }}
                                       disabled={uploading || !selectedApplication.lender_questionnaire_downloaded_at}
-                                      className='px-4 py-2 bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1'
+                                      className='flex items-center gap-2 px-3 py-2 bg-blue-600 text-white border border-transparent rounded-lg hover:bg-blue-700 text-sm font-medium shadow-sm disabled:opacity-50'
                                     >
-                                      <Upload className='w-4 h-4' />
-                                      {uploading ? 'Uploading...' : 'Replace'}
-                                    </button>
-                                  ) : (
-                                    <button
-                                      onClick={() => {
-                                        const input = document.createElement('input');
-                                        input.type = 'file';
-                                        input.accept = '.pdf,.doc,.docx';
-                                        input.onchange = async (e) => {
-                                          const file = e.target.files?.[0];
-                                          if (!file) return;
-
-                                          try {
-                                            setUploading(true);
-                                            const formData = new FormData();
-                                            formData.append('file', file);
-                                            formData.append('applicationId', selectedApplication.id);
-
-                                            const response = await fetch('/api/upload-lender-questionnaire-completed', {
-                                              method: 'POST',
-                                              body: formData,
-                                            });
-
-                                            if (!response.ok) {
-                                              const error = await response.json();
-                                              throw new Error(error.error || 'Failed to upload file');
-                                            }
-
-                                            showSnackbar('Completed form uploaded successfully', 'success');
-                                            await refreshSelectedApplication(selectedApplication.id);
-                                          } catch (error) {
-                                            console.error('Error uploading completed form:', error);
-                                            showSnackbar(error.message || 'Failed to upload completed form', 'error');
-                                          } finally {
-                                            setUploading(false);
-                                          }
-                                        };
-                                        input.click();
-                                      }}
-                                      disabled={uploading || !selectedApplication.lender_questionnaire_downloaded_at}
-                                      className='px-4 py-2 bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1'
-                                    >
-                                      <Upload className='w-4 h-4' />
-                                      {uploading ? 'Uploading...' : 'Upload Completed Form'}
-                                    </button>
-                                  )}
+                                      <Upload className='w-4 h-4' /> {uploading ? 'Uploading...' : (selectedApplication.lender_questionnaire_completed_file_path ? 'Replace' : 'Upload')}
+                                  </button>
                                 </div>
                               </div>
-                              {(selectedApplication.lender_questionnaire_completed_file_path || selectedApplication.lender_questionnaire_edited_file_path) && (
-                                <div className='mt-2 text-sm opacity-75'>
-                                  {selectedApplication.lender_questionnaire_completed_file_path && (
-                                    <div>Uploaded File: {selectedApplication.lender_questionnaire_completed_file_path.split('/').pop()}</div>
-                                  )}
-                                  {selectedApplication.lender_questionnaire_edited_file_path && (
-                                    <div>Edited File: {selectedApplication.lender_questionnaire_edited_file_path.split('/').pop()}</div>
-                                  )}
-                                </div>
-                              )}
                             </div>
 
                             {/* Step 3: Send Form via Email */}
-                            <div className={`border rounded-lg p-4 ${getTaskStatusColor(taskStatuses.email)}`}>
-                              <div className='flex items-center justify-between'>
-                                <div className='flex items-center gap-3'>
-                                  <div className='flex items-center justify-center w-8 h-8 rounded-full bg-white border-2 border-current'>
+                            <div className={`border rounded-xl p-5 bg-white shadow-sm transition-all ${getTaskStatusColor(taskStatuses.email)}`}>
+                              <div className='flex flex-col sm:flex-row sm:items-center justify-between gap-4'>
+                                <div className='flex items-start gap-4'>
+                                  <div className={`flex-shrink-0 flex items-center justify-center w-10 h-10 rounded-full border-2 ${
+                                    taskStatuses.email === 'completed' ? 'bg-green-50 border-green-500 text-green-600' : 'bg-gray-50 border-gray-300 text-gray-500'
+                                  }`}>
                                     <span className='text-sm font-bold'>3</span>
                                   </div>
-                                  {getTaskStatusIcon(taskStatuses.email, sendingEmail)}
                                   <div>
-                                    <h4 className='font-medium'>Send Form via Email</h4>
-                                    <p className='text-sm opacity-75'>
-                                      {sendingEmail ? 'Sending...' : getTaskStatusText(taskStatuses.email)}
-                                    </p>
-                                    <p className='text-xs opacity-60 mt-1'>Send the completed lender questionnaire form to the requester via email</p>
+                                    <h4 className='font-semibold text-gray-900'>Send via Email</h4>
+                                    <p className='text-sm text-gray-500 mt-1'>Email the completed form to the requester</p>
                                     {selectedApplication.email_completed_at && (
-                                      <p className='text-sm opacity-75 mt-1'>
+                                      <p className='text-xs text-green-600 bg-green-50 px-2 py-1 rounded w-fit mt-2'>
                                         Sent: {formatDateTimeFull(selectedApplication.email_completed_at)}
                                       </p>
                                     )}
@@ -3435,7 +3542,8 @@ const AdminApplications = ({ userRole }) => {
                                 </div>
                                 <button
                                   onClick={async () => {
-                                    try {
+                                      /* ... existing email logic ... */
+                                      try {
                                       setSendingEmail(true);
                                       const response = await fetch('/api/send-lender-questionnaire-email', {
                                         method: 'POST',
@@ -3460,20 +3568,19 @@ const AdminApplications = ({ userRole }) => {
                                     }
                                   }}
                                   disabled={(!selectedApplication.lender_questionnaire_completed_file_path && !selectedApplication.lender_questionnaire_edited_file_path) || sendingEmail}
-                                  className='px-4 py-2 bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1'
+                                  className='flex items-center gap-2 px-4 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium shadow-sm disabled:opacity-50'
                                 >
-                                  <Mail className='w-4 h-4' />
-                                  {sendingEmail ? 'Sending...' : 'Send Email'}
+                                  <Mail className='w-4 h-4' /> {sendingEmail ? 'Sending...' : 'Send Email'}
                                 </button>
                               </div>
-                              {/* Include Property Documents Checkbox */}
-                              <div className='mt-4 p-3 border border-gray-200 rounded-md bg-gray-50'>
+                              <div className='mt-4 p-4 border border-blue-100 rounded-lg bg-blue-50/50'>
                                 <label className='flex items-start gap-3 cursor-pointer'>
                                   <input
                                     type='checkbox'
                                     checked={!!selectedApplication.include_property_documents}
                                     onChange={async (e) => {
-                                      try {
+                                        /* ... existing toggle logic ... */
+                                        try {
                                         const response = await fetch('/api/update-application-field', {
                                           method: 'POST',
                                           headers: { 'Content-Type': 'application/json' },
@@ -3495,11 +3602,11 @@ const AdminApplications = ({ userRole }) => {
                                         showSnackbar(error.message || 'Failed to update setting', 'error');
                                       }
                                     }}
-                                    className='mt-1 h-4 w-4 text-green-600 border-gray-300 rounded focus:ring-green-500'
+                                    className='mt-1 h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500'
                                   />
                                   <div>
-                                    <div className='font-medium text-gray-900'>Include All Property Documents</div>
-                                    <div className='text-sm text-gray-600 mt-1'>
+                                    <div className='font-medium text-gray-900 text-sm'>Include All Property Documents</div>
+                                    <div className='text-xs text-gray-500 mt-0.5'>
                                       When checked, all property supporting documents (except Public Offering Statement) will be included in the email.
                                     </div>
                                   </div>
@@ -3516,253 +3623,260 @@ const AdminApplications = ({ userRole }) => {
                 {/* Multi-Community Properties Section */}
                 {(() => {
                   const isMultiCommunity = selectedApplication.hoa_properties?.is_multi_community && propertyGroups.length > 1;
+                  const isLenderQuestionnaire = selectedApplication.application_type === 'lender_questionnaire';
                   
-                  if (isMultiCommunity) {
+                  if (isMultiCommunity && !isLenderQuestionnaire) {
                     return (
                       <div>
-                        <h3 className='text-lg font-semibold text-gray-800 mb-4'>
+                        <h3 className='text-lg font-bold text-gray-900 mb-4 flex items-center gap-2'>
+                          <Building className='w-5 h-5 text-gray-500' />
                           Multi-Community Properties
                         </h3>
-                        <div className='space-y-4'>
+                        <div className='space-y-6'>
                           {loadingGroups ? (
-                            <div className='flex items-center justify-center py-8'>
+                            <div className='flex items-center justify-center py-12 bg-white rounded-xl border border-gray-200'>
                               <RefreshCw className='w-6 h-6 animate-spin text-blue-600' />
-                              <span className='ml-2 text-gray-600'>Loading property groups...</span>
+                              <span className='ml-2 text-gray-600 font-medium'>Loading properties...</span>
                             </div>
                           ) : (
-                            propertyGroups
-                              .sort((a, b) => {
-                                // Primary property always comes first
+                            propertyGroups.sort((a, b) => {
                                 if (a.is_primary && !b.is_primary) return -1;
                                 if (!a.is_primary && b.is_primary) return 1;
-                                // If both are primary or both are secondary, sort by name
                                 return (a.property_name || '').localeCompare(b.property_name || '');
-                              })
-                              .map((group) => (
-                              <div key={group.id} className='bg-gray-50 rounded-lg p-4 border border-gray-200'>
-                                <div className='flex items-center justify-between mb-3'>
+                            }).map((group) => (
+                              <div key={group.id} className='bg-white rounded-xl border border-gray-200 overflow-hidden shadow-sm'>
+                                {/* Group Header */}
+                                <div className='px-5 py-4 bg-gray-50 border-b border-gray-200 flex flex-col sm:flex-row sm:items-center justify-between gap-4'>
                                   <div className='flex items-center gap-3'>
-                                    <Building className='w-5 h-5 text-gray-600' />
+                                    <div className={`w-2 h-2 rounded-full ${group.is_primary ? 'bg-blue-600' : 'bg-gray-400'}`}></div>
                                     <div>
-                                      <h4 className='font-medium text-gray-900'>
+                                      <h4 className='font-bold text-gray-900 flex items-center gap-2'>
                                         {group.property_name}
-                                        {group.is_primary && (
-                                          <span className='ml-2 px-2 py-1 text-xs bg-blue-100 text-blue-800 rounded-full'>
-                                            Primary
-                                          </span>
-                                        )}
+                                        {group.is_primary && <span className='px-2 py-0.5 bg-blue-100 text-blue-700 text-xs rounded-full font-medium'>Primary</span>}
                                       </h4>
-                                      <p className='text-sm text-gray-600'>
-                                        {group.property_location}
-                                      </p>
-                                      {group.property_owner_email && (
-                                        <p className='text-sm text-gray-500'>
-                                          Manager: {group.property_owner_email}
-                                        </p>
-                                      )}
+                                      <p className='text-sm text-gray-500 mt-0.5'>{group.property_location}</p>
                                     </div>
                                   </div>
-                                  <div className='flex items-center gap-2'>
+                                  <div className='flex items-center gap-3'>
+                                    {group.property_owner_email && (
+                                       <span className='text-xs text-gray-500 bg-white px-2 py-1 border border-gray-200 rounded'>Mgr: {group.property_owner_email}</span>
+                                    )}
+                                    {/* Status Badge Logic */}
                                     {(() => {
-                                      // Derive user-facing status for header badge
-                                      const isPrimary = !!group.is_primary;
-                                      const primaryCompleted = !!(selectedApplication.inspection_form_completed_at && selectedApplication.resale_certificate_completed_at);
-                                      const derivedStatus = isPrimary
-                                        ? (primaryCompleted ? 'completed' : 'pending')
-                                        : (group.status === 'completed' ? 'completed' : (group.status === 'failed' ? 'failed' : (group.status === 'email_sent' ? 'email_sent' : 'pending')));
+                                      const isSettlementApp = selectedApplication.submitter_type === 'settlement' || selectedApplication.application_type?.startsWith('settlement');
+                                      let isCompleted = false;
+                                      let label = 'Pending';
+                                      let badgeColor = 'bg-gray-100 text-gray-600';
 
-                                      const badgeClass = derivedStatus === 'completed'
-                                        ? 'bg-green-100 text-green-800'
-                                        : derivedStatus === 'email_sent'
-                                          ? 'bg-blue-100 text-blue-800'
-                                          : derivedStatus === 'failed'
-                                            ? 'bg-red-100 text-red-800'
-                                            : 'bg-yellow-100 text-yellow-800';
+                                      if (isSettlementApp) {
+                                          const taskStatuses = getTaskStatuses(selectedApplication, group);
+                                          // Check if all tasks are completed
+                                          const settlementCompleted = taskStatuses.settlement === 'completed';
+                                          const pdfCompleted = taskStatuses.pdf === 'completed' || !!group.pdf_url || (group.pdf_status === 'completed');
+                                          const emailCompleted = taskStatuses.email === 'completed' || !!group.email_completed_at || (group.email_status === 'completed');
+                                          
+                                          isCompleted = settlementCompleted && pdfCompleted && emailCompleted;
+                                      } else {
+                                          // For standard applications
+                                          const inspectionStatus = group.inspection_status || 'not_started';
+                                          // group.status === 'completed' often indicates resale form completion in this context,
+                                          // OR it might be used as the overall status. 
+                                          // To be safe, let's check if all steps are done.
+                                          const resaleStatus = group.status === 'completed'; 
+                                          const pdfStatus = group.pdf_status === 'completed' || !!group.pdf_url;
+                                          const emailStatus = group.email_status === 'completed' || !!group.email_completed_at;
+                                          
+                                          isCompleted = (inspectionStatus === 'completed') && resaleStatus && pdfStatus && emailStatus;
+                                      }
 
-                                      const label = derivedStatus === 'completed'
-                                        ? 'Completed'
-                                        : derivedStatus === 'email_sent'
-                                          ? 'Email Sent'
-                                          : derivedStatus === 'failed'
-                                            ? 'Failed'
-                                            : 'Pending';
+                                      if (isCompleted) { 
+                                        badgeColor = 'bg-green-100 text-green-700'; 
+                                        label = 'Completed'; 
+                                      } else if (group.status === 'failed') {
+                                         badgeColor = 'bg-red-100 text-red-700'; 
+                                         label = 'Failed';
+                                      } else if (group.email_status === 'completed' || group.email_completed_at) {
+                                        // If email is sent but maybe something else is missing? (Unlikely flow, but good for feedback)
+                                        // Usually email is the last step.
+                                        // But if we are here, it means !isCompleted.
+                                        // If email is sent, it should be completed unless we added more steps.
+                                        // So this branch might not be hit if isCompleted is true.
+                                        // Keep consistent with old logic:
+                                        badgeColor = 'bg-blue-100 text-blue-700';
+                                        label = 'Email Sent';
+                                      }
 
-                                      return (
-                                        <span className={`px-2 py-1 text-xs rounded-full ${badgeClass}`}>
-                                          {label}
-                                        </span>
-                                      );
+                                      return <span className={`px-2.5 py-1 text-xs font-semibold rounded-full ${badgeColor}`}>{label}</span>;
                                     })()}
                                   </div>
-                              </div>
+                                </div>
 
-                              {/* Per-Property Tasks */}
-                              <div className='mt-3 space-y-3'>
-                                {(() => {
-                                  const taskStatuses = getTaskStatuses(selectedApplication);
-                                  const isPrimary = !!group.is_primary;
-                                  const resaleStatusForGroup = group.status === 'completed' ? 'completed' : 'not_started';
-                                  // Use property-group-specific inspection status for multi-community apps
-                                  // For multi-community, never fall back to application-level - default to 'not_started' if not set
-                                  const inspectionStatusForGroup = group.inspection_status ?? 'not_started';
+                                {/* Group Tasks */}
+                                <div className='p-5 space-y-4'>
+                                    {/* ... Logic for Per-Property Tasks ... */}
+                                   {(() => {
+                                      const taskStatuses = getTaskStatuses(selectedApplication, group);
+                                      const isSettlementApp = selectedApplication.submitter_type === 'settlement' || selectedApplication.application_type?.startsWith('settlement');
+                                      const isPrimary = !!group.is_primary;
 
-                                  return (
-                                    <>
-                                      {/* Task A: Property Inspection Form (All properties) */}
-                                      <div className={`border rounded-lg p-3 ${getTaskStatusColor(inspectionStatusForGroup)}`}>
-                                        <div className='flex items-center justify-between'>
-                                          <div className='flex items-center gap-3'>
-                                            <div className='flex items-center justify-center w-6 h-6 rounded-full bg-white border-2 border-current'>
-                                              <span className='text-xs font-bold'>1</span>
+                                      if (isSettlementApp) {
+                                         /* ... Settlement Tasks UI ... */
+                                         // Simplify for length - use similar structure to main Settlement tasks but within this loop
+                                          const settlementFormCompleted = taskStatuses.settlement === 'completed';
+                                          const pdfCanBeGenerated = settlementFormCompleted && (taskStatuses.pdf === 'not_started' || taskStatuses.pdf === 'update_needed' || taskStatuses.pdf === 'completed');
+                                          const emailCanBeSent = taskStatuses.pdf === 'completed';
+
+                                          return (
+                                            <div className="grid grid-cols-1 gap-4">
+                                               {/* Task 1 */}
+                                               <div className={`flex items-center justify-between p-3 rounded-lg border ${getTaskStatusColor(taskStatuses.settlement)}`}>
+                                                  <div className="flex items-center gap-3">
+                                                    <span className="flex items-center justify-center w-6 h-6 rounded-full bg-white border border-gray-300 text-xs font-bold">1</span>
+                                                    <span className="text-sm font-medium">Settlement Form</span>
+                                                  </div>
+                                                  <div className="flex gap-2">
+                                                     <button onClick={() => handleCompleteForm(selectedApplication.id, 'settlement', group)} className="px-3 py-1 text-xs font-medium bg-white border border-gray-300 rounded hover:bg-gray-50 text-gray-700">
+                                                        {loadingFormData ? (
+                                                          <div className="flex items-center gap-1.5">
+                                                            <RefreshCw className="w-3 h-3 animate-spin" />
+                                                            <span>Loading...</span>
+                                                          </div>
+                                                        ) : getFormButtonText(taskStatuses.settlement)}
+                                                     </button>
+                                                     {taskStatuses.settlement !== 'completed' && (
+                                                        <button onClick={() => handleCompleteTask(selectedApplication.id, 'settlement_form', group)} className="px-2 py-1 text-xs font-medium text-green-700 bg-green-50 border border-green-200 rounded hover:bg-green-100">Complete</button>
+                                                     )}
+                                                  </div>
+                                               </div>
+                                               {/* Task 2 */}
+                                                <div className={`flex items-center justify-between p-3 rounded-lg border ${getTaskStatusColor(taskStatuses.pdf)}`}>
+                                                  <div className="flex items-center gap-3">
+                                                    <span className="flex items-center justify-center w-6 h-6 rounded-full bg-white border border-gray-300 text-xs font-bold">2</span>
+                                                    <span className="text-sm font-medium">Generate PDF</span>
+                                                  </div>
+                                                   <div className="flex gap-2">
+                                                     <button onClick={() => handleGenerateSettlementPDF(selectedApplication.id, group)} disabled={!pdfCanBeGenerated || generatingPDF} className="px-3 py-1 text-xs font-medium bg-white border border-gray-300 rounded hover:bg-gray-50 text-gray-700 disabled:opacity-50">
+                                                        {generatingPDF ? (
+                                                          <div className="flex items-center gap-1.5">
+                                                            <RefreshCw className="w-3 h-3 animate-spin" />
+                                                            <span>Generating...</span>
+                                                          </div>
+                                                        ) : 'Generate'}
+                                                     </button>
+                                                     {selectedApplication.pdf_url && <button onClick={() => window.open(selectedApplication.pdf_url, '_blank')} className="text-xs px-2 py-1 bg-gray-100 border rounded text-gray-600">View</button>}
+                                                  </div>
+                                               </div>
+                                                {/* Task 3 */}
+                                                <div className={`flex items-center justify-between p-3 rounded-lg border ${getTaskStatusColor(taskStatuses.email)}`}>
+                                                  <div className="flex items-center gap-3">
+                                                    <span className="flex items-center justify-center w-6 h-6 rounded-full bg-white border border-gray-300 text-xs font-bold">3</span>
+                                                    <span className="text-sm font-medium">Send Email</span>
+                                                  </div>
+                                                   <div className="flex gap-2">
+                                                     <button onClick={() => handleSendApprovalEmail(selectedApplication.id, group)} disabled={!emailCanBeSent || sendingEmail} className="px-3 py-1 text-xs font-medium bg-white border border-gray-300 rounded hover:bg-gray-50 text-gray-700 disabled:opacity-50">
+                                                        {sendingEmail ? (
+                                                          <div className="flex items-center gap-1.5">
+                                                            <RefreshCw className="w-3 h-3 animate-spin" />
+                                                            <span>Sending...</span>
+                                                          </div>
+                                                        ) : 'Send'}
+                                                     </button>
+                                                  </div>
+                                               </div>
                                             </div>
-                                            {getTaskStatusIcon(inspectionStatusForGroup)}
-                                            <div>
-                                              <h5 className='font-medium text-sm'>Property Inspection Form</h5>
-                                              <p className='text-xs opacity-75'>{getTaskStatusText(inspectionStatusForGroup)}</p>
-                                            </div>
-                                          </div>
-                                          <div className='flex gap-2'>
-                                            <button
-                                              onClick={() => handleCompleteForm(selectedApplication.id, 'inspection', group)}
-                                              disabled={loadingFormData}
-                                              className='px-3 py-1 text-xs bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity font-medium disabled:opacity-50 disabled:cursor-not-allowed'
-                                            >
-                                              {loadingFormKey === `inspection:${group.id}` ? 'Loading...' : getFormButtonText(inspectionStatusForGroup)}
-                                            </button>
-                                            {inspectionStatusForGroup !== 'completed' && (
-                                              <button
-                                                onClick={() => {
-                                                  // Update property group inspection status directly
-                                                  supabase
-                                                    .from('application_property_groups')
-                                                    .update({
-                                                      inspection_status: 'completed',
-                                                      inspection_completed_at: new Date().toISOString()
-                                                    })
-                                                    .eq('id', group.id)
-                                                    .then(() => refreshSelectedApplication(selectedApplication.id));
-                                                }}
-                                                className='px-2 py-1 text-xs bg-green-100 text-green-800 border border-green-300 rounded-md hover:bg-green-200 transition-colors font-medium'
-                                                title='Mark this task as completed'
-                                              >
-                                                Mark Complete
-                                              </button>
-                                            )}
-                                          </div>
+                                          )
+                                      } else {
+                                          /* ... Standard Tasks UI ... */
+                                          const inspectionStatusForGroup = group.inspection_status ?? 'not_started';
+                                          const resaleStatusForGroup = group.status === 'completed' ? 'completed' : 'not_started';
+                                          
+                                          return (
+                                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                                {/* Inspection */}
+                                                <div className={`flex flex-col p-3 rounded-lg border ${getTaskStatusColor(inspectionStatusForGroup)}`}>
+                                                    <div className="flex justify-between items-start mb-2">
+                                                       <span className="text-xs font-bold uppercase tracking-wider text-gray-500">Inspection</span>
+                                                       {inspectionStatusForGroup !== 'completed' && (
+                                                           <button onClick={() => {
+                                                              supabase.from('application_property_groups').update({ inspection_status: 'completed', inspection_completed_at: new Date().toISOString() }).eq('id', group.id).then(() => refreshSelectedApplication(selectedApplication.id));
+                                                           }} className="text-[10px] text-green-600 font-medium hover:underline">Mark Done</button>
+                                                       )}
+                                                    </div>
+                                                    <button onClick={() => handleCompleteForm(selectedApplication.id, 'inspection', group)} className="w-full mt-auto py-1.5 bg-white border border-gray-300 rounded text-xs font-medium text-gray-700 hover:bg-gray-50">
+                                                       {loadingFormKey === `inspection:${group.id}` ? (
+                                                          <div className="flex items-center justify-center gap-1.5">
+                                                            <RefreshCw className="w-3 h-3 animate-spin" />
+                                                            <span>Loading...</span>
+                                                          </div>
+                                                       ) : getFormButtonText(inspectionStatusForGroup)}
+                                                    </button>
+                                                </div>
+
+                                                {/* Resale */}
+                                                <div className={`flex flex-col p-3 rounded-lg border ${getTaskStatusColor(resaleStatusForGroup)}`}>
+                                                    <div className="flex justify-between items-start mb-2">
+                                                       <span className="text-xs font-bold uppercase tracking-wider text-gray-500">Resale Cert</span>
+                                                        {isPrimary && !selectedApplication.resale_certificate_completed_at && (
+                                                           <button onClick={() => handleCompleteTask(selectedApplication.id, 'resale_certificate')} className="text-[10px] text-green-600 font-medium hover:underline">Mark Done</button>
+                                                       )}
+                                                    </div>
+                                                    <button onClick={() => handleCompleteForm(selectedApplication.id, 'resale', group)} className="w-full mt-auto py-1.5 bg-white border border-gray-300 rounded text-xs font-medium text-gray-700 hover:bg-gray-50">
+                                                       {loadingFormKey === `resale:${group.id}` ? (
+                                                          <div className="flex items-center justify-center gap-1.5">
+                                                            <RefreshCw className="w-3 h-3 animate-spin" />
+                                                            <span>Loading...</span>
+                                                          </div>
+                                                       ) : getFormButtonText(resaleStatusForGroup)}
+                                                    </button>
+                                                </div>
+
+                                                {/* PDF */}
+                                                 <div className={`flex flex-col p-3 rounded-lg border ${getTaskStatusColor(group.pdf_status || 'not_started')}`}>
+                                                    <div className="flex justify-between items-start mb-2">
+                                                       <span className="text-xs font-bold uppercase tracking-wider text-gray-500">PDF</span>
+                                                       {group.pdf_url && <button onClick={() => window.open(group.pdf_url, '_blank')} className="text-[10px] text-blue-600 font-medium hover:underline">View</button>}
+                                                    </div>
+                                                    <button onClick={() => handleGeneratePDFForProperty(selectedApplication.id, group)} disabled={generatingPDFForProperty === group.id || !canGeneratePDFForProperty(group)} className="w-full mt-auto py-1.5 bg-white border border-gray-300 rounded text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50">
+                                                       {generatingPDFForProperty === group.id ? (
+                                                          <div className="flex items-center justify-center gap-1.5">
+                                                            <RefreshCw className="w-3 h-3 animate-spin" />
+                                                            <span>Generating...</span>
+                                                          </div>
+                                                       ) : 'Generate'}
+                                                    </button>
+                                                </div>
+
+                                                {/* Email */}
+                                                <div className={`flex flex-col p-3 rounded-lg border ${getTaskStatusColor(group.email_status || 'not_started')}`}>
+                                                    <div className="flex justify-between items-start mb-2">
+                                                       <span className="text-xs font-bold uppercase tracking-wider text-gray-500">Email</span>
+                                                    </div>
+                                                    <button onClick={() => handleSendEmailForProperty(selectedApplication.id, group)} disabled={sendingEmailForProperty === group.id || !canSendEmailForProperty(group)} className="w-full mt-auto py-1.5 bg-white border border-gray-300 rounded text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50">
+                                                       {sendingEmailForProperty === group.id ? (
+                                                          <div className="flex items-center justify-center gap-1.5">
+                                                            <RefreshCw className="w-3 h-3 animate-spin" />
+                                                            <span>Sending...</span>
+                                                          </div>
+                                                       ) : 'Send'}
+                                                    </button>
+                                                </div>
+                                             </div>
+                                          )
+                                      }
+                                   })()}
+
+                                   {/* Generated Docs Display */}
+                                   {group.generated_docs && group.generated_docs.length > 0 && (
+                                     <div className="mt-3 pt-3 border-t border-gray-100">
+                                        <p className="text-xs text-gray-500 mb-2">Documents:</p>
+                                        <div className="flex flex-wrap gap-2">
+                                           {group.generated_docs.map((doc, i) => (
+                                              <span key={i} className="px-2 py-1 text-xs bg-gray-100 text-gray-600 rounded border border-gray-200">{doc.type}</span>
+                                           ))}
                                         </div>
-                                      </div>
-
-                                      {/* Task B: Virginia Resale Certificate (All properties) */}
-                                      <div className={`border rounded-lg p-3 ${getTaskStatusColor(resaleStatusForGroup)}`}>
-                                        <div className='flex items-center justify-between'>
-                                          <div className='flex items-center gap-3'>
-                                            <div className='flex items-center justify-center w-6 h-6 rounded-full bg-white border-2 border-current'>
-                                              <span className='text-xs font-bold'>2</span>
-                                            </div>
-                                            {getTaskStatusIcon(resaleStatusForGroup)}
-                                            <div>
-                                              <h5 className='font-medium text-sm'>Virginia Resale Certificate</h5>
-                                              <p className='text-xs opacity-75'>{getTaskStatusText(resaleStatusForGroup)}</p>
-                                            </div>
-                                          </div>
-                                          <div className='flex gap-2'>
-                                            <button
-                                              onClick={() => handleCompleteForm(selectedApplication.id, 'resale', group)}
-                                              disabled={loadingFormData}
-                                              className='px-3 py-1 text-xs bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity font-medium disabled:opacity-50 disabled:cursor-not-allowed'
-                                            >
-                                              {loadingFormKey === `resale:${group.id}` ? 'Loading...' : getFormButtonText(group.status === 'completed' ? 'completed' : 'not_started')}
-                                            </button>
-                                            {isPrimary && !selectedApplication.resale_certificate_completed_at && (
-                                              <button
-                                                onClick={() => handleCompleteTask(selectedApplication.id, 'resale_certificate')}
-                                                className='px-2 py-1 text-xs bg-green-100 text-green-800 border border-green-300 rounded-md hover:bg-green-200 transition-colors font-medium'
-                                                title='Mark this task as completed'
-                                              >
-                                                Mark Complete
-                                              </button>
-                                            )}
-                                          </div>
-                                        </div>
-                                      </div>
-
-                                      {/* Task C: Generate PDF (All properties) */}
-                                      <div className={`border rounded-lg p-3 ${getTaskStatusColor(group.pdf_status || 'not_started')}`}>
-                                        <div className='flex items-center justify-between'>
-                                          <div className='flex items-center gap-3'>
-                                            <div className='flex items-center justify-center w-6 h-6 rounded-full bg-white border-2 border-current'>
-                                              <span className='text-xs font-bold'>3</span>
-                                            </div>
-                                            {getTaskStatusIcon(group.pdf_status || 'not_started')}
-                                            <div>
-                                              <h5 className='font-medium text-sm'>Generate PDF</h5>
-                                              <p className='text-xs opacity-75'>{getTaskStatusText(group.pdf_status || 'not_started')}</p>
-                                            </div>
-                                          </div>
-                                          <div className='flex gap-2'>
-                                            <button
-                                              onClick={() => handleGeneratePDFForProperty(selectedApplication.id, group)}
-                                              disabled={generatingPDFForProperty === group.id || !canGeneratePDFForProperty(group)}
-                                              className='px-3 py-1 text-xs bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity font-medium disabled:opacity-50 disabled:cursor-not-allowed'
-                                              title={!canGeneratePDFForProperty(group) ? 'Both forms must be completed first' : 'Generate PDF for this property'}
-                                            >
-                                              {generatingPDFForProperty === group.id ? 'Generating...' : 'Generate PDF'}
-                                            </button>
-                                            {group.pdf_url && (
-                                              <button
-                                                onClick={() => window.open(group.pdf_url, '_blank')}
-                                                className='px-2 py-1 text-xs bg-gray-100 text-gray-700 border border-gray-300 rounded-md hover:bg-gray-200 transition-colors font-medium'
-                                                title='View PDF'
-                                              >
-                                                View
-                                              </button>
-                                            )}
-                                          </div>
-                                        </div>
-                                      </div>
-
-                                      {/* Task D: Send Email (All properties) */}
-                                      <div className={`border rounded-lg p-3 ${getTaskStatusColor(group.email_status || 'not_started')}`}>
-                                        <div className='flex items-center justify-between'>
-                                          <div className='flex items-center gap-3'>
-                                            <div className='flex items-center justify-center w-6 h-6 rounded-full bg-white border-2 border-current'>
-                                              <span className='text-xs font-bold'>4</span>
-                                            </div>
-                                            {getTaskStatusIcon(group.email_status || 'not_started')}
-                                            <div>
-                                              <h5 className='font-medium text-sm'>Send Email</h5>
-                                              <p className='text-xs opacity-75'>{getTaskStatusText(group.email_status || 'not_started')}</p>
-                                            </div>
-                                          </div>
-                                          <div className='flex gap-2'>
-                                            <button
-                                              onClick={() => handleSendEmailForProperty(selectedApplication.id, group)}
-                                              disabled={sendingEmailForProperty === group.id || !canSendEmailForProperty(group)}
-                                              className='px-3 py-1 text-xs bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity font-medium disabled:opacity-50 disabled:cursor-not-allowed'
-                                              title={!canSendEmailForProperty(group) ? 'PDF must be generated first' : 'Send email for this property'}
-                                            >
-                                              {sendingEmailForProperty === group.id ? 'Sending...' : 'Send Email'}
-                                            </button>
-                                          </div>
-                                        </div>
-                                      </div>
-                                    </>
-                                  );
-                                })()}
-                              </div>
-
-                              {group.generated_docs && group.generated_docs.length > 0 && (
-                                  <div className='mt-3 pt-3 border-t border-gray-200'>
-                                    <p className='text-sm text-gray-600 mb-2'>Generated Documents:</p>
-                                    <div className='flex flex-wrap gap-2'>
-                                      {group.generated_docs.map((doc, index) => (
-                                        <span key={index} className='px-2 py-1 text-xs bg-gray-200 text-gray-700 rounded'>
-                                          {doc.type || `Document ${index + 1}`}
-                                        </span>
-                                      ))}
-                                    </div>
-                                  </div>
-                                )}
+                                     </div>
+                                   )}
+                                </div>
                               </div>
                             ))
                           )}
@@ -3774,410 +3888,210 @@ const AdminApplications = ({ userRole }) => {
                 })()}
 
                 {/* Comments Section */}
-                <div>
-                  <h3 className='text-lg font-semibold text-gray-800 mb-4'>
-                    Comments & Notes
-                  </h3>
-                  <div className='bg-gray-50 rounded-lg p-4'>
-                    <div className='space-y-3'>
-                      <div>
-                        <label className='block text-sm font-medium text-gray-700 mb-2'>
-                          Add a comment:
-                        </label>
-                        <textarea
-                          value={selectedApplication.comments || ''}
-                          onChange={(e) => setSelectedApplication({
-                            ...selectedApplication,
-                            comments: e.target.value
-                          })}
-                          className='w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none'
-                          rows='4'
-                          placeholder='Add notes about this application, task progress, issues, or important information...'
-                        />
-                      </div>
-                      <div className='flex justify-end'>
-                        <button
-                          onClick={() => handleSaveComments(selectedApplication.id, selectedApplication.comments)}
-                          className='px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors text-sm font-medium'
-                        >
-                          Save Comments
-                        </button>
-                      </div>
+                <div className='bg-white rounded-xl border border-gray-200 p-5 shadow-sm'>
+                   <h3 className='text-sm font-semibold text-gray-900 mb-4 flex items-center gap-2 uppercase tracking-wider'>
+                      <MessageSquare className='w-4 h-4 text-gray-400' />
+                      Comments & Notes
+                    </h3>
+                  <div className='flex flex-col gap-3'>
+                    <textarea
+                      value={selectedApplication.comments || ''}
+                      onChange={(e) => setSelectedApplication({
+                        ...selectedApplication,
+                        comments: e.target.value
+                      })}
+                      className='w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 resize-none transition-all text-sm'
+                      rows='4'
+                      placeholder='Add notes about this application, task progress, issues, or important information...'
+                    />
+                    <div className='flex justify-end'>
+                      <button
+                        onClick={() => handleSaveComments(selectedApplication.id, selectedApplication.comments)}
+                        className='px-4 py-2 bg-gray-900 text-white rounded-lg hover:bg-gray-800 transition-colors text-sm font-medium shadow-sm'
+                      >
+                        Save Comments
+                      </button>
                     </div>
                   </div>
                 </div>
 
-                {/* Task-Based Workflow (hidden for multi-community and lender questionnaire; use per-property tasks above) */}
-                {!selectedApplication.hoa_properties?.is_multi_community && 
-                 selectedApplication.application_type !== 'lender_questionnaire' && (
+                {/* Standard/Settlement Tasks (Single Property) */}
+                {(() => {
+                  const isMultiCommunity = selectedApplication.hoa_properties?.is_multi_community && propertyGroups.length > 1;
+                  const isLenderQuestionnaire = selectedApplication.application_type === 'lender_questionnaire';
+                  return !isMultiCommunity && !isLenderQuestionnaire;
+                })() && (
                   <div>
-                    <h3 className='text-lg font-semibold text-gray-800 mb-4'>
-                      Tasks
+                    <h3 className='text-lg font-bold text-gray-900 mb-4 flex items-center gap-2'>
+                       <CheckSquare className='w-5 h-5 text-gray-500' />
+                       Tasks Checklist
                     </h3>
                     <div className='space-y-4'>
                     {(() => {
                       const taskStatuses = getTaskStatuses(selectedApplication);
-                      const isSettlementApp = selectedApplication.submitter_type === 'settlement' || 
-                                             selectedApplication.application_type?.startsWith('settlement');
+                      const isSettlementApp = selectedApplication.submitter_type === 'settlement' || selectedApplication.application_type?.startsWith('settlement');
                       
+                      const TaskCard = ({ step, icon, title, description, status, children, completedAt }) => (
+                         <div className={`border rounded-xl p-5 bg-white shadow-sm transition-all ${getTaskStatusColor(status)}`}>
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                               <div className="flex items-start gap-4">
+                                  <div className={`flex-shrink-0 flex items-center justify-center w-10 h-10 rounded-full border-2 ${
+                                    status === 'completed' ? 'bg-green-50 border-green-500 text-green-600' : 'bg-gray-50 border-gray-300 text-gray-500'
+                                  }`}>
+                                    <span className='text-sm font-bold'>{step}</span>
+                                  </div>
+                                  <div>
+                                     <div className="flex items-center gap-2">
+                                        <h4 className='font-semibold text-gray-900'>{title}</h4>
+                                        {icon}
+                                     </div>
+                                     <p className='text-sm text-gray-500 mt-1'>{description}</p>
+                                     {completedAt && (
+                                        <div className="mt-2 text-xs text-green-600 bg-green-50 px-2 py-1 rounded inline-block">
+                                           Completed: {formatDateTimeFull(completedAt)}
+                                        </div>
+                                     )}
+                                  </div>
+                               </div>
+                               <div className="flex items-center gap-2 sm:self-center self-start">
+                                  {children}
+                               </div>
+                            </div>
+                         </div>
+                      );
+
                       if (isSettlementApp) {
-                        // Settlement application workflow - 3 tasks (Form + PDF + Email)
                         const settlementFormCompleted = taskStatuses.settlement === 'completed';
-                        // Allow regeneration even when PDF is completed
                         const pdfCanBeGenerated = settlementFormCompleted && (taskStatuses.pdf === 'not_started' || taskStatuses.pdf === 'update_needed' || taskStatuses.pdf === 'completed');
                         const emailCanBeSent = taskStatuses.pdf === 'completed';
 
                         return (
                           <>
-                            {/* Task 1: Settlement Form */}
-                            <div className={`border rounded-lg p-4 ${getTaskStatusColor(taskStatuses.settlement)}`}>
-                              <div className='flex items-center justify-between'>
-                                <div className='flex items-center gap-3'>
-                                  <div className='flex items-center justify-center w-8 h-8 rounded-full bg-white border-2 border-current'>
-                                    <span className='text-sm font-bold'>1</span>
-                                  </div>
-                                  {getTaskStatusIcon(taskStatuses.settlement)}
-                                  <div>
-                                    <h4 className='font-medium'>Settlement Form</h4>
-                                    <p className='text-sm opacity-75'>{getTaskStatusText(taskStatuses.settlement)}</p>
-                                    <p className='text-xs opacity-60 mt-1'>Complete the settlement form with assessment details and community manager information</p>
-                                  </div>
-                                </div>
-                                <div className='flex gap-2'>
-                                  <button
-                                    onClick={() => handleCompleteForm(selectedApplication.id, 'settlement')}
-                                    disabled={loadingFormData}
-                                    className='px-4 py-2 bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed'
-                                  >
-                                    {loadingFormData ? 'Loading...' : getFormButtonText(taskStatuses.settlement)}
-                                  </button>
-                                  {!selectedApplication.settlement_form_completed_at && (
-                                    <button
-                                      onClick={() => handleCompleteTask(selectedApplication.id, 'settlement_form')}
-                                      className='px-3 py-2 bg-green-100 text-green-800 border border-green-300 rounded-md hover:bg-green-200 transition-colors text-sm font-medium'
-                                      title='Mark this task as completed'
-                                    >
-                                      Mark Complete
-                                    </button>
-                                  )}
-                                </div>
-                              </div>
-                              <div className='mt-2 space-y-1'>
-                                {selectedApplication.settlement_form_completed_at && (
-                                  <div className='text-sm opacity-75'>
-                                    Task Completed: {formatDateTimeFull(selectedApplication.settlement_form_completed_at)}
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-
-                            {/* Task 2: Generate PDF */}
-                            <div className={`border rounded-lg p-4 ${getTaskStatusColor(taskStatuses.pdf)}`}>
-                              <div className='flex items-center justify-between'>
-                                <div className='flex items-center gap-3'>
-                                  <div className='flex items-center justify-center w-8 h-8 rounded-full bg-white border-2 border-current'>
-                                    <span className='text-sm font-bold'>2</span>
-                                  </div>
-                                  {getTaskStatusIcon(taskStatuses.pdf, generatingPDF)}
-                                  <div>
-                                    <h4 className='font-medium'>Generate PDF</h4>
-                                    <p className='text-sm opacity-75'>
-                                      {generatingPDF ? 'Generating...' : getTaskStatusText(taskStatuses.pdf)}
-                                    </p>
-                                    <p className='text-xs opacity-60 mt-1'>Generate the settlement form as a PDF document</p>
-                                  </div>
-                                </div>
-                                <div className='flex gap-2'>
-                                  <button
-                                    onClick={() => handleGenerateSettlementPDF(selectedApplication.id)}
-                                    disabled={!pdfCanBeGenerated || generatingPDF}
-                                    className='px-4 py-2 bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed'
-                                    title={!settlementFormCompleted ? 'Settlement form must be completed first' : ''}
-                                  >
-                                    {generatingPDF ? 'Generating...' : 
-                                      (taskStatuses.pdf === 'completed' || taskStatuses.pdf === 'update_needed' ? 'Regenerate' : 'Generate PDF')
-                                    }
-                                  </button>
-                                  {selectedApplication.pdf_url && (
-                                    <button
-                                      onClick={() => window.open(selectedApplication.pdf_url, '_blank')}
-                                      className='px-3 py-2 bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity text-sm font-medium flex items-center gap-1'
-                                      title='View PDF'
-                                    >
-                                      <Eye className='w-4 h-4' />
-                                      View
-                                    </button>
-                                  )}
-                                </div>
-                              </div>
-                              <div className='mt-2 space-y-1'>
-                                {selectedApplication.pdf_completed_at && (
-                                  <div className='text-sm opacity-75'>
-                                    Task Completed: {formatDateTimeFull(selectedApplication.pdf_completed_at)}
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-
-                            {/* Task 3: Send Settlement Email */}
-                            <div className={`border rounded-lg p-4 ${getTaskStatusColor(taskStatuses.email)}`}>
-                              <div className='flex items-center justify-between'>
-                                <div className='flex items-center gap-3'>
-                                  <div className='flex items-center justify-center w-8 h-8 rounded-full bg-white border-2 border-current'>
-                                    <span className='text-sm font-bold'>3</span>
-                                  </div>
-                                  {getTaskStatusIcon(taskStatuses.email, sendingEmail)}
-                                  <div>
-                                    <h4 className='font-medium'>Send Settlement Email</h4>
-                                    <p className='text-sm opacity-75'>
-                                      {sendingEmail ? 'Sending...' : getTaskStatusText(taskStatuses.email)}
-                                    </p>
-                                    <p className='text-xs opacity-60 mt-1'>Send the completed settlement form details to the settlement agent</p>
-                                  </div>
-                                </div>
-                                <button
-                                  onClick={() => handleSendApprovalEmail(selectedApplication.id)}
-                                  disabled={!emailCanBeSent || sendingEmail}
-                                  className='px-4 py-2 bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed'
-                                  title={!settlementFormCompleted ? 'Settlement form must be completed first' : ''}
-                                >
-                                  {sendingEmail ? 'Sending...' : 'Send Email'}
+                             <TaskCard step="1" status={taskStatuses.settlement} title="Settlement Form" description="Complete form with assessment details" completedAt={selectedApplication.settlement_form_completed_at}>
+                                <button onClick={() => handleCompleteForm(selectedApplication.id, 'settlement')} disabled={loadingFormData} className="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 text-sm font-medium">
+                                   {loadingFormData ? (
+                                      <div className="flex items-center gap-1.5">
+                                        <RefreshCw className="w-4 h-4 animate-spin" />
+                                        <span>Loading...</span>
+                                      </div>
+                                   ) : getFormButtonText(taskStatuses.settlement)}
                                 </button>
-                              </div>
-                              <div className='mt-2 space-y-1'>
-                                {selectedApplication.notifications?.find(n => n.notification_type === 'application_approved')?.sent_at && (
-                                  <div className='text-sm opacity-75'>
-                                    Task Completed: {formatDateTimeFull(selectedApplication.notifications.find(n => n.notification_type === 'application_approved').sent_at)}
-                                  </div>
+                                {!selectedApplication.settlement_form_completed_at && (
+                                   <button onClick={() => handleCompleteTask(selectedApplication.id, 'settlement_form')} className="px-3 py-2 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 text-sm font-medium">Complete</button>
                                 )}
-                              </div>
-                            </div>
+                             </TaskCard>
+                             
+                             <TaskCard step="2" status={taskStatuses.pdf} title="Generate PDF" description="Generate settlement PDF document" completedAt={selectedApplication.pdf_completed_at}>
+                                <button onClick={() => handleGenerateSettlementPDF(selectedApplication.id)} disabled={!pdfCanBeGenerated || generatingPDF} className="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 text-sm font-medium disabled:opacity-50">
+                                   {generatingPDF ? (
+                                      <div className="flex items-center gap-1.5">
+                                        <RefreshCw className="w-4 h-4 animate-spin" />
+                                        <span>Generating...</span>
+                                      </div>
+                                   ) : (taskStatuses.pdf === 'completed' || taskStatuses.pdf === 'update_needed' ? 'Regenerate' : 'Generate')}
+                                </button>
+                                {selectedApplication.pdf_url && <button onClick={() => window.open(selectedApplication.pdf_url, '_blank')} className="px-3 py-2 bg-gray-100 border border-gray-300 text-gray-600 rounded-lg hover:bg-gray-200 text-sm font-medium">View</button>}
+                             </TaskCard>
+                             
+                             <TaskCard step="3" status={taskStatuses.email} title="Send Email" description="Send details to settlement agent" completedAt={selectedApplication.notifications?.find(n => n.notification_type === 'application_approved')?.sent_at}>
+                                <button onClick={() => handleSendApprovalEmail(selectedApplication.id)} disabled={!emailCanBeSent || sendingEmail} className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium disabled:opacity-50">
+                                   {sendingEmail ? (
+                                      <div className="flex items-center gap-1.5">
+                                        <RefreshCw className="w-4 h-4 animate-spin" />
+                                        <span>Sending...</span>
+                                      </div>
+                                   ) : 'Send Email'}
+                                </button>
+                             </TaskCard>
                           </>
                         );
                       } else {
-                        // Standard application workflow - 4 tasks
-                        const bothFormsCompleted = taskStatuses.inspection === 'completed' && taskStatuses.resale === 'completed';
-                        const pdfCanBeGenerated = bothFormsCompleted && (taskStatuses.pdf === 'not_started' || taskStatuses.pdf === 'update_needed');
-                        const emailCanBeSent = bothFormsCompleted && taskStatuses.pdf === 'completed';
+                        // Standard App
+                         const bothFormsCompleted = taskStatuses.inspection === 'completed' && taskStatuses.resale === 'completed';
+                         const pdfCanBeGenerated = bothFormsCompleted && (taskStatuses.pdf === 'not_started' || taskStatuses.pdf === 'update_needed');
+                         const emailCanBeSent = bothFormsCompleted && taskStatuses.pdf === 'completed';
 
-                      return (
-                        <>
-                                {/* Task 1: Property Inspection Form */}
-                                <div className={`border rounded-lg p-4 ${getTaskStatusColor(taskStatuses.inspection)}`}>
-                                  <div className='flex items-center justify-between'>
-                                    <div className='flex items-center gap-3'>
-                                      <div className='flex items-center justify-center w-8 h-8 rounded-full bg-white border-2 border-current'>
-                                        <span className='text-sm font-bold'>1</span>
+                        return (
+                           <>
+                              <TaskCard step="1" status={taskStatuses.inspection} title="Inspection Form" description="Complete property inspection checklist" completedAt={selectedApplication.inspection_form_completed_at}>
+                                 <button onClick={() => handleCompleteForm(selectedApplication.id, 'inspection')} disabled={loadingFormData} className="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 text-sm font-medium">
+                                    {loadingFormData ? (
+                                      <div className="flex items-center gap-1.5">
+                                        <RefreshCw className="w-4 h-4 animate-spin" />
+                                        <span>Loading...</span>
                                       </div>
-                                      {getTaskStatusIcon(taskStatuses.inspection)}
-                                      <div>
-                                        <h4 className='font-medium'>Property Inspection Form</h4>
-                                        <p className='text-sm opacity-75'>{getTaskStatusText(taskStatuses.inspection)}</p>
-                                        <p className='text-xs opacity-60 mt-1'>Complete the property inspection checklist and verify compliance requirements</p>
-                                      </div>
-                                    </div>
-                                    <div className='flex gap-2'>
-                                      <button
-                                        onClick={() => handleCompleteForm(selectedApplication.id, 'inspection')}
-                                        disabled={loadingFormData}
-                                        className='px-4 py-2 bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed'
-                                      >
-                                        {loadingFormData ? 'Loading...' : getFormButtonText(taskStatuses.inspection)}
-                                      </button>
-                                      {!selectedApplication.inspection_form_completed_at && (
-                                        <button
-                                          onClick={() => handleCompleteTask(selectedApplication.id, 'inspection_form')}
-                                          className='px-3 py-2 bg-green-100 text-green-800 border border-green-300 rounded-md hover:bg-green-200 transition-colors text-sm font-medium'
-                                          title='Mark this task as completed'
-                                        >
-                                          Mark Complete
-                                        </button>
-                                      )}
-                                    </div>
-                                  </div>
-                                  <div className='mt-2 space-y-1'>
-                                    {selectedApplication.inspection_form_completed_at && (
-                                      <div className='text-sm opacity-75'>
-                                        Task Completed: {formatDateTimeFull(selectedApplication.inspection_form_completed_at)}
-                                      </div>
-                                    )}
-                                  </div>
-                                </div>
+                                   ) : getFormButtonText(taskStatuses.inspection)}
+                                 </button>
+                                 {!selectedApplication.inspection_form_completed_at && (
+                                    <button onClick={() => handleCompleteTask(selectedApplication.id, 'inspection_form')} className="px-3 py-2 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 text-sm font-medium">Mark Done</button>
+                                 )}
+                              </TaskCard>
 
-                                {/* Task 2: Virginia Resale Certificate */}
-                                <div className={`border rounded-lg p-4 ${getTaskStatusColor(taskStatuses.resale)}`}>
-                                  <div className='flex items-center justify-between'>
-                                    <div className='flex items-center gap-3'>
-                                      <div className='flex items-center justify-center w-8 h-8 rounded-full bg-white border-2 border-current'>
-                                        <span className='text-sm font-bold'>2</span>
+                              <TaskCard step="2" status={taskStatuses.resale} title="Resale Certificate" description="Fill out Virginia resale disclosure" completedAt={selectedApplication.resale_certificate_completed_at}>
+                                 <button onClick={() => handleCompleteForm(selectedApplication.id, 'resale')} disabled={loadingFormData} className="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 text-sm font-medium">
+                                    {loadingFormData ? (
+                                      <div className="flex items-center gap-1.5">
+                                        <RefreshCw className="w-4 h-4 animate-spin" />
+                                        <span>Loading...</span>
                                       </div>
-                                      {getTaskStatusIcon(taskStatuses.resale)}
-                                      <div>
-                                        <h4 className='font-medium'>Virginia Resale Certificate</h4>
-                                        <p className='text-sm opacity-75'>{getTaskStatusText(taskStatuses.resale)}</p>
-                                        <p className='text-xs opacity-60 mt-1'>Fill out the official Virginia resale disclosure form with property and HOA information</p>
-                                      </div>
-                                    </div>
-                                    <div className='flex gap-2'>
-                                      <button
-                                        onClick={() => handleCompleteForm(selectedApplication.id, 'resale')}
-                                        disabled={loadingFormData}
-                                        className='px-4 py-2 bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed'
-                                      >
-                                        {loadingFormData ? 'Loading...' : getFormButtonText(taskStatuses.resale)}
-                                      </button>
-                                      {!selectedApplication.resale_certificate_completed_at && (
-                                        <button
-                                          onClick={() => handleCompleteTask(selectedApplication.id, 'resale_certificate')}
-                                          className='px-3 py-2 bg-green-100 text-green-800 border border-green-300 rounded-md hover:bg-green-200 transition-colors text-sm font-medium'
-                                          title='Mark this task as completed'
-                                        >
-                                          Mark Complete
-                                        </button>
-                                      )}
-                                    </div>
-                                  </div>
-                                  <div className='mt-2 space-y-1'>
-                                    {selectedApplication.resale_certificate_completed_at && (
-                                      <div className='text-sm opacity-75'>
-                                        Task Completed: {formatDateTimeFull(selectedApplication.resale_certificate_completed_at)}
-                                      </div>
-                                    )}
-                                  </div>
-                                </div>
+                                   ) : getFormButtonText(taskStatuses.resale)}
+                                 </button>
+                                 {!selectedApplication.resale_certificate_completed_at && (
+                                    <button onClick={() => handleCompleteTask(selectedApplication.id, 'resale_certificate')} className="px-3 py-2 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 text-sm font-medium">Mark Done</button>
+                                 )}
+                              </TaskCard>
 
-                                {/* Task 3: Generate PDF */}
-                                <div className={`border rounded-lg p-4 ${getTaskStatusColor(taskStatuses.pdf)}`}>
-                                  <div className='flex items-center justify-between'>
-                                    <div className='flex items-center gap-3'>
-                                      <div className='flex items-center justify-center w-8 h-8 rounded-full bg-white border-2 border-current'>
-                                        <span className='text-sm font-bold'>3</span>
+                              <TaskCard step="3" status={taskStatuses.pdf} title="Generate PDF" description="Create final PDF document" completedAt={selectedApplication.pdf_completed_at}>
+                                 <button 
+                                    onClick={() => {
+                                      const inspectionForm = selectedApplication.property_owner_forms?.find(form => form.form_type === 'inspection_form');
+                                      const resaleForm = selectedApplication.property_owner_forms?.find(form => form.form_type === 'resale_certificate');
+                                      handleGeneratePDF({ inspectionForm: inspectionForm?.form_data, resaleCertificate: resaleForm?.form_data }, selectedApplication.id);
+                                    }} 
+                                    disabled={generatingPDF} 
+                                    className="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 text-sm font-medium disabled:opacity-50"
+                                  >
+                                    {generatingPDF ? (
+                                      <div className="flex items-center gap-1.5">
+                                        <RefreshCw className="w-4 h-4 animate-spin" />
+                                        <span>Generating...</span>
                                       </div>
-                                      {getTaskStatusIcon(taskStatuses.pdf, generatingPDF)}
-                                      <div>
-                                        <h4 className='font-medium'>Generate PDF</h4>
-                                        <p className='text-sm opacity-75'>
-                                          {generatingPDF ? 'Generating...' : getTaskStatusText(taskStatuses.pdf)}
-                                        </p>
-                                        <p className='text-xs opacity-60 mt-1'>Create the final PDF document combining both completed forms for delivery</p>
-                                      </div>
-                                    </div>
-                                    <div className='flex gap-2'>
-                                      <button
-                                        onClick={() => {
-                                          const inspectionForm = selectedApplication.property_owner_forms?.find(form => form.form_type === 'inspection_form');
-                                          const resaleForm = selectedApplication.property_owner_forms?.find(form => form.form_type === 'resale_certificate');
-                                          const formsData = {
-                                            inspectionForm: inspectionForm?.form_data,
-                                            resaleCertificate: resaleForm?.form_data
-                                          };
-                                          handleGeneratePDF(formsData, selectedApplication.id);
-                                        }}
-                                        disabled={generatingPDF}
-                                        className='px-4 py-2 bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed'
-                                        title="Generate or regenerate PDF."
-                                      >
-                                        {generatingPDF ? 'Generating...' : 
-                                          (taskStatuses.pdf === 'completed' || taskStatuses.pdf === 'update_needed' ? 'Regenerate' : 'Generate')
-                                        }
-                                      </button>
-                                      {selectedApplication.pdf_url && (
-                                        <button
-                                          onClick={() => window.open(selectedApplication.pdf_url, '_blank')}
-                                          className='px-3 py-2 bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity text-sm font-medium flex items-center gap-1'
-                                          title='View PDF'
-                                        >
-                                          <Eye className='w-4 h-4' />
-                                          View
-                                        </button>
-                                      )}
-                                    </div>
-                                  </div>
-                                  <div className='mt-2 space-y-1'>
-                                    {selectedApplication.pdf_completed_at && (
-                                      <div className='text-sm opacity-75'>
-                                        Task Completed: {formatDateTimeFull(selectedApplication.pdf_completed_at)}
-                                      </div>
-                                    )}
-                                  </div>
-                                </div>
+                                   ) : (taskStatuses.pdf === 'completed' ? 'Regenerate' : 'Generate')}
+                                 </button>
+                                 {selectedApplication.pdf_url && <button onClick={() => window.open(selectedApplication.pdf_url, '_blank')} className="px-3 py-2 bg-gray-100 border border-gray-300 text-gray-600 rounded-lg hover:bg-gray-200 text-sm font-medium">View</button>}
+                              </TaskCard>
 
-                                {/* Task 4: Send Completion Email */}
-                                <div className={`border rounded-lg p-4 ${getTaskStatusColor(taskStatuses.email)}`}>
-                                  <div className='flex items-center justify-between'>
-                                    <div className='flex items-center gap-3'>
-                                      <div className='flex items-center justify-center w-8 h-8 rounded-full bg-white border-2 border-current'>
-                                        <span className='text-sm font-bold'>4</span>
-                                      </div>
-                                      {getTaskStatusIcon(taskStatuses.email, sendingEmail)}
-                                      <div>
-                                        <h4 className='font-medium'>Send Completion Email</h4>
-                                        <p className='text-sm opacity-75'>
-                                          {sendingEmail ? 'Sending...' : getTaskStatusText(taskStatuses.email)}
-                                        </p>
-                                        <p className='text-xs opacity-60 mt-1'>Send the completed resale certificate PDF and property files to the applicant</p>
-                                      </div>
-                                    </div>
-                                    <div className='flex items-center gap-2'>
-                                      <button
-                                        onClick={() => setShowAttachmentModal(true)}
-                                        className='px-3 py-1.5 bg-gray-100 text-gray-700 border border-gray-300 rounded-md hover:opacity-80 transition-opacity text-xs font-medium'
-                                        title="Manage email attachments"
-                                      >
-                                        Update Attachment
-                                      </button>
-                                      <button
-                                        onClick={() => handleSendApprovalEmail(selectedApplication.id)}
-                                        disabled={!emailCanBeSent || sendingEmail || taskStatuses.pdf === 'update_needed'}
-                                        className='px-4 py-2 bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed'
-                                        title={
-                                          !bothFormsCompleted 
-                                            ? 'Both forms must be completed first' 
-                                            : taskStatuses.pdf !== 'completed' 
-                                              ? 'PDF must be generated first' 
-                                              : taskStatuses.pdf === 'update_needed'
-                                                ? 'PDF needs to be regenerated after form updates'
-                                                : ''
-                                        }
-                                      >
-                                        {sendingEmail ? 'Sending...' : 'Send Email'}
-                                      </button>
-                                      {!selectedApplication.email_completed_at && (
-                                        <button
-                                          onClick={() => handleCompleteTask(selectedApplication.id, 'email')}
-                                          className='px-3 py-2 bg-green-100 text-green-800 border border-green-300 rounded-md hover:bg-green-200 transition-colors text-sm font-medium'
-                                          title='Mark this task as completed'
-                                        >
-                                          Mark Complete
-                                        </button>
-                                      )}
-                                    </div>
-                                  </div>
-                                  <div className='mt-2 space-y-1'>
-                                    {selectedApplication.email_completed_at && (
-                                      <div className='text-sm opacity-75'>
-                                        Task Completed: {new Date(selectedApplication.email_completed_at).toLocaleString()}
-                                      </div>
-                                    )}
-                                  </div>
-                                </div>
-                        </>
-                      );
+                              <TaskCard step="4" status={taskStatuses.email} title="Send Completion Email" description="Send PDF and files to applicant" completedAt={selectedApplication.email_completed_at}>
+                                 <div className="flex gap-2">
+                                     <button onClick={() => setShowAttachmentModal(true)} className="px-3 py-2 bg-gray-100 text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-200 text-xs font-medium">Attachments</button>
+                                     <button onClick={() => handleSendApprovalEmail(selectedApplication.id)} disabled={!emailCanBeSent || sendingEmail || taskStatuses.pdf === 'update_needed'} className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium disabled:opacity-50">
+                                       {sendingEmail ? (
+                                          <div className="flex items-center gap-1.5">
+                                            <RefreshCw className="w-4 h-4 animate-spin" />
+                                            <span>Sending...</span>
+                                          </div>
+                                       ) : 'Send Email'}
+                                     </button>
+                                     {!selectedApplication.email_completed_at && (
+                                        <button onClick={() => handleCompleteTask(selectedApplication.id, 'email')} className="px-3 py-2 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 text-sm font-medium">Mark Done</button>
+                                     )}
+                                 </div>
+                              </TaskCard>
+                           </>
+                        );
                       }
                     })()}
+                    </div>
                   </div>
-                </div>
-
                 )}
 
-
                 {/* Close Button */}
-                <div className='flex justify-center pt-6 border-t'>
+                <div className='flex justify-center pt-6 border-t border-gray-200'>
                   <button
                     onClick={handleCloseModal}
-                    className='px-6 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50 font-medium'
+                    className='px-8 py-2.5 bg-white border border-gray-300 rounded-xl text-gray-700 hover:bg-gray-50 font-semibold shadow-sm transition-all'
                   >
-                    Close
+                    Close Modal
                   </button>
                 </div>
               </div>
@@ -4264,6 +4178,7 @@ const AdminApplications = ({ userRole }) => {
               <div className='flex-1 overflow-auto max-h-[calc(95vh-80px)]'>
                 <AdminSettlementForm
                   applicationId={selectedApplicationForSettlement.id}
+                  propertyGroupId={selectedApplicationForSettlement.propertyGroupId || null}
                   applicationData={{
                     id: selectedApplicationForSettlement.id,
                     ...selectedApplicationForSettlement,

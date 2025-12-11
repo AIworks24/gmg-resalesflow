@@ -62,7 +62,8 @@ export default async function handler(req, res) {
       applicationType = determineApplicationType(formData.submitterType, hoaProperty, formData.publicOffering);
       
       // Check if this is a multi-community property
-      if (hoaProperty.is_multi_community) {
+      // Skip multi-community pricing for lender_questionnaire - treat as single application
+      if (hoaProperty.is_multi_community && applicationType !== 'lender_questionnaire') {
         isMultiCommunity = true;
         // Multi-community property detected
         

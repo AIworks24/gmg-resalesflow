@@ -64,6 +64,7 @@ export default async function handler(req, res) {
         property:property_id (
           id,
           name,
+          location,
           property_owner_email,
           property_owner_name
         )
@@ -74,6 +75,9 @@ export default async function handler(req, res) {
       .not('expiration_date', 'is', null);
 
     if (error) throw error;
+
+    // Generate base URL once for all document links
+    const baseUrl = process.env.NEXT_PUBLIC_SITE_URL || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
 
     // Group documents by property
     const propertiesWithExpiringDocs = {};
@@ -97,12 +101,18 @@ export default async function handler(req, res) {
       const specificFileName = doc.display_name || doc.file_name || doc.document_name;
       const isSpecificFile = doc.display_name || doc.file_name;
       
+      // Generate URL to property document page
+      const documentUrl = `${baseUrl}/admin/property-files/${propertyId}?docKey=${encodeURIComponent(doc.document_key)}`;
+      
       propertiesWithExpiringDocs[propertyId].documents.push({
         document_type: doc.document_name, // The document category (e.g., "VA Appendix 02/Architectural Guidelines")
         file_name: specificFileName, // The specific file name
         is_specific: isSpecificFile, // Whether this is a specific file or just the category
         expiration_date: doc.expiration_date,
-        days_until_expiration: daysUntilExpiration
+        days_until_expiration: daysUntilExpiration,
+        document_key: doc.document_key, // The document key for URL generation
+        document_id: doc.id, // Document ID
+        document_url: documentUrl // Direct link to the document section
       });
     });
 
@@ -120,11 +130,15 @@ export default async function handler(req, res) {
           property_name: property.name,
           property_location: property.location || 'N/A',
           property_owner_name: property.property_owner_name || 'N/A',
+          property_id: property.id,
           document_type: doc.document_type,
           file_name: doc.file_name,
           is_specific: doc.is_specific,
           expiration_date: doc.expiration_date,
-          days_until_expiration: doc.days_until_expiration
+          days_until_expiration: doc.days_until_expiration,
+          document_key: doc.document_key,
+          document_id: doc.document_id,
+          document_url: doc.document_url
         });
       });
     }
@@ -140,8 +154,8 @@ export default async function handler(req, res) {
       // Create document list HTML for admin email with urgency highlighting
       const adminDocumentListHtml = allAdminDocs.map(doc => {
         const displayName = doc.is_specific 
-          ? `<strong>${doc.document_type}</strong><br/><span style="color: #6b7280; font-size: 0.9em;">File: ${doc.file_name}</span>`
-          : `<strong>${doc.document_type}</strong>`;
+          ? `<strong><a href="${doc.document_url}" style="color: ${doc.days_until_expiration <= 7 ? '#dc2626' : doc.days_until_expiration <= 14 ? '#f59e0b' : '#059669'}; text-decoration: none; font-weight: 600;">${doc.document_type}</a></strong><br/><span style="color: #6b7280; font-size: 0.9em;">File: ${doc.file_name}</span>`
+          : `<strong><a href="${doc.document_url}" style="color: ${doc.days_until_expiration <= 7 ? '#dc2626' : doc.days_until_expiration <= 14 ? '#f59e0b' : '#059669'}; text-decoration: none; font-weight: 600;">${doc.document_type}</a></strong>`;
         
         // Determine urgency level and styling
         let urgencyColor = '#10b981'; // green for >20 days
@@ -166,6 +180,7 @@ export default async function handler(req, res) {
         <tr style="background-color: ${urgencyBg};">
           <td style="padding: 12px; border-bottom: 1px solid #e5e7eb;">
             ${displayName}
+            <br/><a href="${doc.document_url}" style="color: #3b82f6; text-decoration: none; font-size: 0.85em; margin-top: 4px; display: inline-block;">🔗 View Document →</a>
           </td>
           <td style="padding: 12px; border-bottom: 1px solid #e5e7eb;">
             ${doc.property_name}<br/><span style="color: #6b7280; font-size: 0.9em;">${doc.property_location}</span>
@@ -311,13 +326,14 @@ export default async function handler(req, res) {
       const documentListHtml = documents.map(doc => {
         // If it's a specific file (not just the category), show both category and file name
         const displayName = doc.is_specific 
-          ? `<strong>${doc.document_type}</strong><br/><span style="color: #6b7280; font-size: 0.9em;">File: ${doc.file_name}</span>`
-          : `<strong>${doc.document_type}</strong>`;
+          ? `<strong><a href="${doc.document_url}" style="color: ${doc.days_until_expiration <= 7 ? '#dc2626' : doc.days_until_expiration <= 14 ? '#f59e0b' : '#059669'}; text-decoration: none; font-weight: 600;">${doc.document_type}</a></strong><br/><span style="color: #6b7280; font-size: 0.9em;">File: ${doc.file_name}</span>`
+          : `<strong><a href="${doc.document_url}" style="color: ${doc.days_until_expiration <= 7 ? '#dc2626' : doc.days_until_expiration <= 14 ? '#f59e0b' : '#059669'}; text-decoration: none; font-weight: 600;">${doc.document_type}</a></strong>`;
         
         return `
         <tr>
           <td style="padding: 12px; border-bottom: 1px solid #e5e7eb;">
             ${displayName}
+            <br/><a href="${doc.document_url}" style="color: #3b82f6; text-decoration: none; font-size: 0.85em; margin-top: 4px; display: inline-block;">🔗 View Document →</a>
           </td>
           <td style="padding: 12px; border-bottom: 1px solid #e5e7eb;">
             ${new Date(doc.expiration_date).toLocaleDateString('en-US', { 

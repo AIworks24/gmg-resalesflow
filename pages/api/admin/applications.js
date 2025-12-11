@@ -70,7 +70,7 @@ export default async function handler(req, res) {
       .select(`
         *,
         hoa_properties(name, property_owner_email, property_owner_name, is_multi_community),
-        property_owner_forms(id, form_type, status, completed_at, form_data, response_data),
+        property_owner_forms(id, form_type, status, completed_at, form_data, response_data, property_group_id),
         notifications(id, notification_type, status, sent_at),
         application_property_groups(
           id,
@@ -84,6 +84,8 @@ export default async function handler(req, res) {
           pdf_completed_at,
           email_status,
           email_completed_at,
+          inspection_status,
+          inspection_completed_at,
           form_data,
           hoa_properties(id, name, location)
         )

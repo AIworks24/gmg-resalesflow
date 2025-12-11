@@ -30,7 +30,7 @@ export default async function handler(req, res) {
       return res.status(403).json({ error: 'Forbidden' });
     }
 
-    const { applicationId, formData: formDataFromClient } = req.body;
+    const { applicationId, formData: formDataFromClient, propertyGroupId } = req.body;
     if (!applicationId) {
       return res.status(400).json({ error: 'Application ID is required' });
     }
@@ -41,17 +41,26 @@ export default async function handler(req, res) {
       .select(`
         *,
         hoa_properties(name, location),
-        property_owner_forms(id, form_type, form_data)
+        property_owner_forms(id, form_type, form_data, property_group_id)
       `)
       .eq('id', applicationId)
       .single();
 
     if (appError) throw appError;
 
-    // Get settlement form from nested data
-    const settlementForm = application.property_owner_forms?.find(
-      (f) => f.form_type === 'settlement_form'
-    );
+    // Get settlement form from nested data - filter by property_group_id for multi-community
+    let settlementForm;
+    if (propertyGroupId) {
+      // Multi-community: find settlement form for this specific property group
+      settlementForm = application.property_owner_forms?.find(
+        (f) => f.form_type === 'settlement_form' && f.property_group_id === propertyGroupId
+      );
+    } else {
+      // Single property: find settlement form without property_group_id
+      settlementForm = application.property_owner_forms?.find(
+        (f) => f.form_type === 'settlement_form' && !f.property_group_id
+      );
+    }
 
     // Use form_data from database if available, otherwise use client formData
     const formData = settlementForm?.form_data || formDataFromClient || {};
@@ -334,18 +343,35 @@ export default async function handler(req, res) {
     // Update both applications table and property_owner_forms table with PDF URL
     const timestamp = new Date().toISOString();
     
-    // Update application with PDF URL and mark task as completed
-    const { error: updateError } = await supabase
-      .from('applications')
-      .update({
-        pdf_url: publicUrl,
-        pdf_generated_at: timestamp,
-        pdf_completed_at: timestamp,
-        updated_at: timestamp, // Explicitly set updated_at to match pdf_generated_at
-      })
-      .eq('id', applicationId);
+    // For multi-community, update the property group instead of application-level
+    if (propertyGroupId) {
+      // Update the specific property group with PDF URL
+      const { error: groupUpdateError } = await supabase
+        .from('application_property_groups')
+        .update({
+          pdf_url: publicUrl,
+          pdf_status: 'completed',
+          pdf_completed_at: timestamp,
+          updated_at: timestamp,
+        })
+        .eq('id', propertyGroupId)
+        .eq('application_id', applicationId);
 
-    if (updateError) throw updateError;
+      if (groupUpdateError) throw groupUpdateError;
+    } else {
+      // Single property: update application with PDF URL
+      const { error: updateError } = await supabase
+        .from('applications')
+        .update({
+          pdf_url: publicUrl,
+          pdf_generated_at: timestamp,
+          pdf_completed_at: timestamp,
+          updated_at: timestamp, // Explicitly set updated_at to match pdf_generated_at
+        })
+        .eq('id', applicationId);
+
+      if (updateError) throw updateError;
+    }
 
     // Also update the settlement form with PDF URL
     if (settlementForm?.id) {

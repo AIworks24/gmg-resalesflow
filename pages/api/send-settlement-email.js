@@ -198,6 +198,78 @@ export default async function handler(req, res) {
       // Continue without PDF if generation fails
     }
 
+    // For Settlement - NC applications, automatically include all property documents (excluding Public Offering Statement)
+    if (propertyState === 'NC') {
+      try {
+        // Get the application to access hoa_property_id
+        const { data: fullApplication, error: appError } = await supabase
+          .from('applications')
+          .select('hoa_property_id')
+          .eq('id', applicationId)
+          .single();
+
+        if (appError) {
+          console.error('Error fetching application for property documents:', appError);
+        } else if (fullApplication?.hoa_property_id) {
+          console.log('Including property documents for NC settlement, property ID:', fullApplication.hoa_property_id);
+          
+          // Get property documents from property_documents table (excluding Public Offering Statement)
+          const { data: propertyDocuments, error: docsError } = await supabase
+            .from('property_documents')
+            .select('*')
+            .eq('property_id', fullApplication.hoa_property_id)
+            .neq('document_key', 'public_offering_statement') // Exclude Public Offering Statement
+            .not('file_path', 'is', null); // Only documents with files
+
+          if (docsError) {
+            console.error('Error fetching property documents:', docsError);
+          } else if (propertyDocuments && propertyDocuments.length > 0) {
+            // Sort documents by defined order (property-specific order takes priority)
+            const { sortDocumentsByOrder } = await import('../../lib/documentOrder');
+            const sortedDocuments = await sortDocumentsByOrder(propertyDocuments, fullApplication.hoa_property_id, supabase);
+            
+            console.log('Found', sortedDocuments.length, 'property documents to include');
+            
+            const EXPIRY_30_DAYS = 30 * 24 * 60 * 60; // 30 days in seconds
+            
+            for (const doc of sortedDocuments) {
+              try {
+                // Create 30-day signed URL for each document
+                const { data: urlData, error: docUrlError } = await supabase.storage
+                  .from('bucket0')
+                  .createSignedUrl(doc.file_path, EXPIRY_30_DAYS);
+
+                if (docUrlError) {
+                  console.error(`Error creating signed URL for ${doc.document_name}:`, docUrlError);
+                  continue;
+                }
+
+                // Use display_name if available, otherwise use document_name
+                const displayName = doc.display_name || doc.document_name || doc.file_name || 'Property Document';
+                
+                downloadLinks.push({
+                  filename: displayName,
+                  downloadUrl: urlData.signedUrl,
+                  type: 'document',
+                  description: doc.document_name || 'Property Supporting Document',
+                  size: 'Unknown' // Size not stored in property_documents table
+                });
+                
+                console.log('Added property document:', displayName);
+              } catch (error) {
+                console.error(`Failed to create download link for ${doc.document_name}:`, error);
+              }
+            }
+          } else {
+            console.log('No property documents found (excluding Public Offering Statement)');
+          }
+        }
+      } catch (error) {
+        console.error('Error adding property documents for NC settlement:', error);
+        // Don't fail the email if property documents can't be added
+      }
+    }
+
     // Send the settlement form email with PDF download link
     const result = await sendSettlementFormEmail({
       to,

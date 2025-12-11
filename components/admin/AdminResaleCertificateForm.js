@@ -530,10 +530,14 @@ const AdminResaleCertificateForm = ({
     switch (currentSection) {
       case 1:
         return (
-          <div className="space-y-6">
-            <h3 className="text-xl font-semibold text-gray-800 mb-6">Certificate Header Information</h3>
-            
-            <div className="grid md:grid-cols-2 gap-6">
+          <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+            <div className="px-5 py-3 bg-gray-50 border-b border-gray-200">
+              <h3 className="text-sm font-bold text-gray-800 uppercase tracking-wider">
+                Certificate Header Information
+              </h3>
+            </div>
+            <div className="p-5">
+              <div className="grid md:grid-cols-2 gap-6">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   Name of Development: *
@@ -542,7 +546,7 @@ const AdminResaleCertificateForm = ({
                   type="text"
                   value={formData.developmentName}
                   onChange={(e) => handleInputChange('developmentName', e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                  className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-gray-400"
                 />
               </div>
               
@@ -554,7 +558,7 @@ const AdminResaleCertificateForm = ({
                   type="text"
                   value={formData.developmentLocation}
                   onChange={(e) => handleInputChange('developmentLocation', e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                  className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-gray-400"
                   placeholder="e.g., Henrico County, VA"
                 />
               </div>
@@ -567,7 +571,7 @@ const AdminResaleCertificateForm = ({
                   type="text"
                   value={formData.associationName}
                   onChange={(e) => handleInputChange('associationName', e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                  className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-gray-400"
                 />
               </div>
               
@@ -579,7 +583,7 @@ const AdminResaleCertificateForm = ({
                   type="text"
                   value={formData.associationAddress}
                   onChange={(e) => handleInputChange('associationAddress', e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                  className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-gray-400"
                 />
               </div>
               
@@ -591,7 +595,7 @@ const AdminResaleCertificateForm = ({
                   type="text"
                   value={formData.lotAddress}
                   onChange={(e) => handleInputChange('lotAddress', e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                  className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-gray-400"
                 />
               </div>
               
@@ -603,10 +607,11 @@ const AdminResaleCertificateForm = ({
                   type="date"
                   value={formData.datePrepared}
                   onChange={(e) => handleInputChange('datePrepared', e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                  className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-gray-400"
                 />
               </div>
             </div>
+          </div>
           </div>
         );
         
@@ -616,7 +621,7 @@ const AdminResaleCertificateForm = ({
             <h3 className="text-xl font-semibold text-gray-800 mb-6">Contact Information (Appendix 1)</h3>
             
             {/* Section 1: Contact Information Checkbox */}
-            <div className="bg-blue-50 p-4 rounded-lg border">
+            <div className="bg-blue-50 p-5 rounded-xl border border-blue-100">
               <h4 className="font-semibold text-blue-900 mb-4">1. Contact Information</h4>
               <label className="flex items-center">
                 <input
@@ -630,16 +635,19 @@ const AdminResaleCertificateForm = ({
             </div>
 
             {/* Preparer Information */}
-            <div className="bg-white border rounded-lg p-6">
-              <h4 className="font-semibold text-gray-800 mb-4">Preparer of the Resale Certificate</h4>
-              <div className="grid md:grid-cols-2 gap-4">
+            <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
+              <div className="px-5 py-3 bg-gray-50 border-b border-gray-200">
+                <h4 className="text-sm font-bold text-gray-800 uppercase tracking-wider">Preparer of the Resale Certificate</h4>
+              </div>
+              <div className="p-5">
+                <div className="grid md:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">Name: *</label>
                   <input
                     type="text"
                     value={formData.preparer.name}
                     onChange={(e) => handleInputChange('preparer.name', e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-gray-400"
                   />
                 </div>
                 <div>
@@ -648,7 +656,7 @@ const AdminResaleCertificateForm = ({
                     type="text"
                     value={formData.preparer.company}
                     onChange={(e) => handleInputChange('preparer.company', e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-gray-400"
                   />
                 </div>
                 <div className="md:col-span-2">
@@ -657,7 +665,7 @@ const AdminResaleCertificateForm = ({
                     value={formData.preparer.address}
                     onChange={(e) => handleInputChange('preparer.address', e.target.value)}
                     rows={2}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-gray-400"
                   />
                 </div>
                 <div>
@@ -666,7 +674,7 @@ const AdminResaleCertificateForm = ({
                     type="tel"
                     value={formData.preparer.phone}
                     onChange={(e) => handleInputChange('preparer.phone', e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-gray-400"
                   />
                 </div>
                 <div>
@@ -675,16 +683,17 @@ const AdminResaleCertificateForm = ({
                     type="email"
                     value={formData.preparer.email}
                     onChange={(e) => handleInputChange('preparer.email', e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-gray-400"
                   />
                 </div>
               </div>
             </div>
+          </div>
             
             {/* Managing Agent Information */}
-            <div className="bg-white border rounded-lg p-6">
-              <div className="flex items-center justify-between mb-4">
-                <h4 className="font-semibold text-gray-800">Managing Agent</h4>
+            <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
+              <div className="px-5 py-3 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
+                <h4 className="text-sm font-bold text-gray-800 uppercase tracking-wider">Managing Agent</h4>
                 <label className="flex items-center">
                   <input
                     type="checkbox"
@@ -696,6 +705,7 @@ const AdminResaleCertificateForm = ({
                 </label>
               </div>
               
+              <div className="p-5">
               {formData.managingAgent.exists && (
                 <div className="grid md:grid-cols-2 gap-4">
                   <div>
@@ -704,7 +714,7 @@ const AdminResaleCertificateForm = ({
                       type="text"
                       value={formData.managingAgent.name}
                       onChange={(e) => handleInputChange('managingAgent.name', e.target.value)}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                      className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-gray-400"
                     />
                   </div>
                   <div>
@@ -713,7 +723,7 @@ const AdminResaleCertificateForm = ({
                       type="text"
                       value={formData.managingAgent.company}
                       onChange={(e) => handleInputChange('managingAgent.company', e.target.value)}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                      className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-gray-400"
                     />
                   </div>
                   <div>
@@ -722,7 +732,7 @@ const AdminResaleCertificateForm = ({
                       type="text"
                       value={formData.managingAgent.licenseNumber}
                       onChange={(e) => handleInputChange('managingAgent.licenseNumber', e.target.value)}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                      className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-gray-400"
                     />
                   </div>
                   <div>
@@ -731,7 +741,7 @@ const AdminResaleCertificateForm = ({
                       type="tel"
                       value={formData.managingAgent.phone}
                       onChange={(e) => handleInputChange('managingAgent.phone', e.target.value)}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                      className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-gray-400"
                     />
                   </div>
                   <div className="md:col-span-2">
@@ -740,7 +750,7 @@ const AdminResaleCertificateForm = ({
                       value={formData.managingAgent.address}
                       onChange={(e) => handleInputChange('managingAgent.address', e.target.value)}
                       rows={2}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                      className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-gray-400"
                     />
                   </div>
                   <div>
@@ -749,11 +759,12 @@ const AdminResaleCertificateForm = ({
                       type="email"
                       value={formData.managingAgent.email}
                       onChange={(e) => handleInputChange('managingAgent.email', e.target.value)}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                      className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-gray-400"
                     />
                   </div>
                 </div>
               )}
+              </div>
             </div>
           </div>
         );
@@ -764,7 +775,7 @@ const AdminResaleCertificateForm = ({
             <h3 className="text-xl font-semibold text-gray-800 mb-6">Governing Documents & Restraints (Sections 2-3)</h3>
             
             {/* Section 2: Governing Documents (Appendix 2) */}
-            <div className="bg-white border rounded-lg p-6">
+            <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6">
               <h4 className="font-semibold text-gray-800 mb-4">2. Governing Documents and Rules and Regulations (Appendix 2)</h4>
               <div className="space-y-3">
                 <label className="flex items-center">
@@ -802,7 +813,7 @@ const AdminResaleCertificateForm = ({
             </div>
 
             {/* Section 3: Restraints on Alienation (Appendix 3) */}
-            <div className="bg-white border rounded-lg p-6">
+            <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6">
               <h4 className="font-semibold text-gray-800 mb-4">3. Restraints on Alienation (Appendix 3)</h4>
               <div className="space-y-4">
                 <div>
@@ -830,14 +841,14 @@ const AdminResaleCertificateForm = ({
                 </div>
                 
                 {formData.disclosures.restraintsExist && (
-                  <div className="pl-6 space-y-4 bg-yellow-50 p-4 rounded-lg">
+                  <div className="pl-6 space-y-4 bg-yellow-50 p-5 rounded-xl border border-yellow-100">
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-2">Article/Section _______ creates a right(s) of first refusal or other restraint(s) on free alienability of the unit:</label>
                       <input
                         type="text"
                         value={formData.disclosures.restraintsArticleSection}
                         onChange={(e) => handleInputChange('disclosures.restraintsArticleSection', e.target.value)}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-gray-400"
                         placeholder="e.g., Article 5, Section 2"
                       />
                     </div>
@@ -847,7 +858,7 @@ const AdminResaleCertificateForm = ({
                         value={formData.disclosures.restraintsDescription}
                         onChange={(e) => handleInputChange('disclosures.restraintsDescription', e.target.value)}
                         rows={3}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-gray-400"
                         placeholder="Describe the restraint on alienability..."
                       />
                     </div>
@@ -864,7 +875,7 @@ const AdminResaleCertificateForm = ({
             <h3 className="text-xl font-semibold text-gray-800 mb-6">Financial Disclosures (Sections 4-12)</h3>
             
             {/* Section 4: Association Assessments (Appendix 4) */}
-            <div className="bg-white border rounded-lg p-6">
+            <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6">
               <h4 className="font-semibold text-gray-800 mb-4 flex items-center gap-2">
                 <DollarSign className="w-5 h-5 text-green-600" />
                 4. Association Assessments (Appendix 4) *
@@ -903,7 +914,7 @@ const AdminResaleCertificateForm = ({
                               step="0.01"
                               value={formData.disclosures.assessmentSchedule.monthlyAmount}
                               onChange={(e) => handleInputChange('disclosures.assessmentSchedule.monthlyAmount', e.target.value)}
-                              className="flex-1 px-3 py-2 border border-gray-300 rounded-r-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                              className="flex-1 px-3 py-2 border border-gray-300 rounded-r-md focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
                             />
                           </div>
                         )}
@@ -927,7 +938,7 @@ const AdminResaleCertificateForm = ({
                               step="0.01"
                               value={formData.disclosures.assessmentSchedule.quarterlyAmount}
                               onChange={(e) => handleInputChange('disclosures.assessmentSchedule.quarterlyAmount', e.target.value)}
-                              className="flex-1 px-3 py-2 border border-gray-300 rounded-r-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                              className="flex-1 px-3 py-2 border border-gray-300 rounded-r-md focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
                             />
                           </div>
                         )}
@@ -950,7 +961,7 @@ const AdminResaleCertificateForm = ({
                               placeholder="Describe interval"
                               value={formData.disclosures.assessmentSchedule.periodicInterval}
                               onChange={(e) => handleInputChange('disclosures.assessmentSchedule.periodicInterval', e.target.value)}
-                              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                              className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-gray-400"
                             />
                             <div className="flex">
                               <span className="inline-flex items-center px-3 py-2 border border-r-0 border-gray-300 bg-gray-50 text-gray-500 text-sm">$</span>
@@ -959,7 +970,7 @@ const AdminResaleCertificateForm = ({
                                 step="0.01"
                                 value={formData.disclosures.assessmentSchedule.periodicAmount}
                                 onChange={(e) => handleInputChange('disclosures.assessmentSchedule.periodicAmount', e.target.value)}
-                                className="flex-1 px-3 py-2 border border-gray-300 rounded-r-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                                className="flex-1 px-3 py-2 border border-gray-300 rounded-r-md focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
                               />
                             </div>
                           </div>
@@ -978,7 +989,7 @@ const AdminResaleCertificateForm = ({
                           step="0.01"
                           value={formData.disclosures.assessmentSchedule.currentAssessmentDue}
                           onChange={(e) => handleInputChange('disclosures.assessmentSchedule.currentAssessmentDue', e.target.value)}
-                          className="flex-1 px-3 py-2 border border-gray-300 rounded-r-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                          className="flex-1 px-3 py-2 border border-gray-300 rounded-r-md focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
                         />
                       </div>
                     </div>
@@ -988,7 +999,7 @@ const AdminResaleCertificateForm = ({
                         type="date"
                         value={formData.disclosures.assessmentSchedule.currentAssessmentDueDate}
                         onChange={(e) => handleInputChange('disclosures.assessmentSchedule.currentAssessmentDueDate', e.target.value)}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-gray-400"
                       />
                     </div>
                     <div>
@@ -1000,7 +1011,7 @@ const AdminResaleCertificateForm = ({
                           step="0.01"
                           value={formData.disclosures.assessmentSchedule.unpaidAssessments}
                           onChange={(e) => handleInputChange('disclosures.assessmentSchedule.unpaidAssessments', e.target.value)}
-                          className="flex-1 px-3 py-2 border border-gray-300 rounded-r-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                          className="flex-1 px-3 py-2 border border-gray-300 rounded-r-md focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
                           placeholder="0.00"
                         />
                       </div>
@@ -1026,7 +1037,7 @@ const AdminResaleCertificateForm = ({
                             step="0.01"
                             value={formData.disclosures.assessmentSchedule.transferAssessmentAmount}
                             onChange={(e) => handleInputChange('disclosures.assessmentSchedule.transferAssessmentAmount', e.target.value)}
-                            className="flex-1 px-3 py-2 border border-gray-300 rounded-r-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                            className="flex-1 px-3 py-2 border border-gray-300 rounded-r-md focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
                           />
                         </div>
                       </div>
@@ -1037,7 +1048,7 @@ const AdminResaleCertificateForm = ({
             </div>
 
             {/* Section 5: Association Fees (Appendix 5) */}
-            <div className="bg-white border rounded-lg p-6">
+            <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6">
               <h4 className="font-semibold text-gray-800 mb-4">5. Association Fees (Appendix 5)</h4>
               <div className="space-y-4">
                 <div>
@@ -1076,7 +1087,7 @@ const AdminResaleCertificateForm = ({
                             step="0.01"
                             value={formData.disclosures.fees.otherFeesAmount}
                             onChange={(e) => handleInputChange('disclosures.fees.otherFeesAmount', e.target.value)}
-                            className="flex-1 px-3 py-2 border border-gray-300 rounded-r-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                            className="flex-1 px-3 py-2 border border-gray-300 rounded-r-md focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
                           />
                         </div>
                       </div>
@@ -1089,7 +1100,7 @@ const AdminResaleCertificateForm = ({
                             step="0.01"
                             value={formData.disclosures.fees.unpaidFeesAmount}
                             onChange={(e) => handleInputChange('disclosures.fees.unpaidFeesAmount', e.target.value)}
-                            className="flex-1 px-3 py-2 border border-gray-300 rounded-r-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                            className="flex-1 px-3 py-2 border border-gray-300 rounded-r-md focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
                           />
                         </div>
                       </div>
@@ -1100,7 +1111,7 @@ const AdminResaleCertificateForm = ({
                         value={formData.disclosures.fees.otherFeesDescription}
                         onChange={(e) => handleInputChange('disclosures.fees.otherFeesDescription', e.target.value)}
                         rows={2}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-gray-400"
                       />
                     </div>
                     <div>
@@ -1109,7 +1120,7 @@ const AdminResaleCertificateForm = ({
                         value={formData.disclosures.fees.unpaidFeesDescription}
                         onChange={(e) => handleInputChange('disclosures.fees.unpaidFeesDescription', e.target.value)}
                         rows={2}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-gray-400"
                       />
                     </div>
                   </div>
@@ -1118,7 +1129,7 @@ const AdminResaleCertificateForm = ({
             </div>
 
             {/* Section 6: Other Entity Assessments (Appendix 6) */}
-            <div className="bg-white border rounded-lg p-6">
+            <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6">
               <h4 className="font-semibold text-gray-800 mb-4">6. Other Entity or Facility Assessments, Fees, or Charges (Appendix 6)</h4>
               <div className="space-y-4">
                 <div>
@@ -1147,7 +1158,7 @@ const AdminResaleCertificateForm = ({
                 
                 {formData.disclosures.otherEntity.isLiable && (
                   <div className="pl-6">
-                    <div className="bg-yellow-50 p-4 rounded-lg">
+                    <div className="bg-yellow-50 p-5 rounded-xl border border-yellow-100">
                       <div className="flex items-center justify-between mb-4">
                         <h5 className="font-medium">Entity/Facility Name and Amount Due</h5>
                         <button
@@ -1168,7 +1179,7 @@ const AdminResaleCertificateForm = ({
                               placeholder="Entity/Facility Name"
                               value={entity.name}
                               onChange={(e) => updateArrayItem('disclosures.otherEntity.entities', index, {...entity, name: e.target.value})}
-                              className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                              className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
                             />
                             <div className="flex">
                               <span className="inline-flex items-center px-3 py-2 border border-r-0 border-gray-300 bg-gray-50 text-gray-500 text-sm">$</span>
@@ -1178,7 +1189,7 @@ const AdminResaleCertificateForm = ({
                                 placeholder="Amount Due"
                                 value={entity.amountDue}
                                 onChange={(e) => updateArrayItem('disclosures.otherEntity.entities', index, {...entity, amountDue: e.target.value})}
-                                className="w-32 px-3 py-2 border border-gray-300 rounded-r-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                                className="w-32 px-3 py-2 border border-gray-300 rounded-r-md focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
                               />
                             </div>
                             <button
@@ -1198,7 +1209,7 @@ const AdminResaleCertificateForm = ({
             </div>
 
             {/* Section 7: Special Assessments (Appendix 7) */}
-            <div className="bg-white border rounded-lg p-6">
+            <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6">
               <h4 className="font-semibold text-gray-800 mb-4">7. Association Approved Additional or Special Assessments (Appendix 7)</h4>
               <div className="space-y-4">
                 <div>
@@ -1226,7 +1237,7 @@ const AdminResaleCertificateForm = ({
                 </div>
                 
                 {formData.disclosures.specialAssessments.hasApproved && (
-                  <div className="pl-6 space-y-4 bg-red-50 p-4 rounded-lg">
+                  <div className="pl-6 space-y-4 bg-red-50 p-5 rounded-xl border border-red-100">
                     <div className="grid md:grid-cols-2 gap-4">
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-2">Additional or special assessment due:</label>
@@ -1237,7 +1248,7 @@ const AdminResaleCertificateForm = ({
                             step="0.01"
                             value={formData.disclosures.specialAssessments.approvedAmount}
                             onChange={(e) => handleInputChange('disclosures.specialAssessments.approvedAmount', e.target.value)}
-                            className="flex-1 px-3 py-2 border border-gray-300 rounded-r-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                            className="flex-1 px-3 py-2 border border-gray-300 rounded-r-md focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
                           />
                         </div>
                       </div>
@@ -1247,7 +1258,7 @@ const AdminResaleCertificateForm = ({
                           type="date"
                           value={formData.disclosures.specialAssessments.approvedDueDate}
                           onChange={(e) => handleInputChange('disclosures.specialAssessments.approvedDueDate', e.target.value)}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                          className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-gray-400"
                         />
                       </div>
                       <div>
@@ -1259,7 +1270,7 @@ const AdminResaleCertificateForm = ({
                             step="0.01"
                             value={formData.disclosures.specialAssessments.unpaidAmount}
                             onChange={(e) => handleInputChange('disclosures.specialAssessments.unpaidAmount', e.target.value)}
-                            className="flex-1 px-3 py-2 border border-gray-300 rounded-r-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                            className="flex-1 px-3 py-2 border border-gray-300 rounded-r-md focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
                           />
                         </div>
                       </div>
@@ -1270,7 +1281,7 @@ const AdminResaleCertificateForm = ({
             </div>
 
             {/* Section 8: Capital Expenditures (Appendix 8) */}
-            <div className="bg-white border rounded-lg p-6">
+            <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6">
               <h4 className="font-semibold text-gray-800 mb-4">8. Capital Expenditures Approved by the Association (Appendix 8)</h4>
               <div className="space-y-4">
                 <div>
@@ -1304,7 +1315,7 @@ const AdminResaleCertificateForm = ({
                       value={formData.disclosures.capitalExpenditures.details}
                       onChange={(e) => handleInputChange('disclosures.capitalExpenditures.details', e.target.value)}
                       rows={4}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                      className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-gray-400"
                       placeholder="Describe approved capital expenditures..."
                     />
                   </div>
@@ -1313,7 +1324,7 @@ const AdminResaleCertificateForm = ({
             </div>
 
            {/* Section 9: Reserves (Appendix 9) */}
-            <div className="bg-white border rounded-lg p-6">
+            <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6">
               <h4 className="font-semibold text-gray-800 mb-4">9. Reserves for Capital Expenditures (Appendix 9)</h4>
               <div className="space-y-4">
                 <div>
@@ -1341,7 +1352,7 @@ const AdminResaleCertificateForm = ({
                 </div>
                 
                 {formData.disclosures.reserves.hasReserves && (
-                  <div className="pl-6 space-y-4 bg-green-50 p-4 rounded-lg">
+                  <div className="pl-6 space-y-4 bg-green-50 p-5 rounded-xl border border-green-100">
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-2">Total amount of association reserves:</label>
                       <div className="flex max-w-xs">
@@ -1351,7 +1362,7 @@ const AdminResaleCertificateForm = ({
                           step="0.01"
                           value={formData.disclosures.reserves.totalAmount}
                           onChange={(e) => handleInputChange('disclosures.reserves.totalAmount', e.target.value)}
-                          className="flex-1 px-3 py-2 border border-gray-300 rounded-r-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                          className="flex-1 px-3 py-2 border border-gray-300 rounded-r-md focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
                         />
                       </div>
                     </div>
@@ -1389,7 +1400,7 @@ const AdminResaleCertificateForm = ({
                                   placeholder="Specific Project"
                                   value={project.project}
                                   onChange={(e) => updateArrayItem('disclosures.reserves.designatedProjects', index, {...project, project: e.target.value})}
-                                  className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                                  className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
                                 />
                                 <div className="flex">
                                   <span className="inline-flex items-center px-3 py-2 border border-r-0 border-gray-300 bg-gray-50 text-gray-500 text-sm">$</span>
@@ -1399,7 +1410,7 @@ const AdminResaleCertificateForm = ({
                                     placeholder="Amount Designated"
                                     value={project.amount}
                                     onChange={(e) => updateArrayItem('disclosures.reserves.designatedProjects', index, {...project, amount: e.target.value})}
-                                    className="w-32 px-3 py-2 border border-gray-300 rounded-r-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                                    className="w-32 px-3 py-2 border border-gray-300 rounded-r-md focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
                                   />
                                 </div>
                                 <button
@@ -1422,7 +1433,7 @@ const AdminResaleCertificateForm = ({
             </div>
 
             {/* Section 10: Financial Statements (Appendix 10) */}
-            <div className="bg-white border rounded-lg p-6">
+            <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6">
               <h4 className="font-semibold text-gray-800 mb-4">10. Balance Sheet and Income and Expense Statement (Appendix 10)</h4>
               <div className="space-y-3">
                 <div>
@@ -1476,7 +1487,7 @@ const AdminResaleCertificateForm = ({
             </div>
 
             {/* Section 11: Operating Budget (Appendix 11) */}
-            <div className="bg-white border rounded-lg p-6">
+            <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6">
               <h4 className="font-semibold text-gray-800 mb-4">11. Current Operating Budget of the Association (Appendix 11)</h4>
               <label className="flex items-center">
                 <input
@@ -1490,7 +1501,7 @@ const AdminResaleCertificateForm = ({
             </div>
 
             {/* Section 12: Reserve Study (Appendix 12) */}
-            <div className="bg-white border rounded-lg p-6">
+            <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6">
               <h4 className="font-semibold text-gray-800 mb-4">12. Reserve Study (Appendix 12)</h4>
               <div className="space-y-3">
                 <div>
@@ -1543,7 +1554,7 @@ const AdminResaleCertificateForm = ({
             <h3 className="text-xl font-semibold text-gray-800 mb-6">Legal & Insurance (Sections 13-16)</h3>
             
             {/* Section 13: Legal Issues (Appendix 13) */}
-            <div className="bg-white border rounded-lg p-6">
+            <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6">
               <h4 className="font-semibold text-gray-800 mb-4 flex items-center gap-2">
                 <AlertTriangle className="w-5 h-5 text-red-600" />
                 13. Unsatisfied Judgments and Pending Actions (Appendix 13)
@@ -1580,7 +1591,7 @@ const AdminResaleCertificateForm = ({
                       value={formData.disclosures.legalIssues.details}
                       onChange={(e) => handleInputChange('disclosures.legalIssues.details', e.target.value)}
                       rows={4}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                      className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-gray-400"
                       placeholder="Describe any unsatisfied judgments or pending actions that could have material impact..."
                     />
                   </div>
@@ -1589,7 +1600,7 @@ const AdminResaleCertificateForm = ({
             </div>
 
             {/* Section 14: Insurance (Appendix 14) */}
-            <div className="bg-white border rounded-lg p-6">
+            <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6">
               <h4 className="font-semibold text-gray-800 mb-4">14. Insurance Coverage (Appendix 14)</h4>
               <div className="space-y-6">
                 <div>
@@ -1644,7 +1655,7 @@ const AdminResaleCertificateForm = ({
                               value={coverage.description}
                               onChange={(e) => updateArrayItem('disclosures.insurance.coverageDetails', index, {...coverage, description: e.target.value})}
                               rows={2}
-                              className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                              className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
                             />
                             <button
                               type="button"
@@ -1671,7 +1682,7 @@ const AdminResaleCertificateForm = ({
                               placeholder="See Article/Section ___________"
                               value={coverage.articleSection}
                               onChange={(e) => updateArrayItem('disclosures.insurance.coverageDetails', index, {...coverage, articleSection: e.target.value})}
-                              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                              className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-gray-400"
                             />
                           </div>
                         </div>
@@ -1711,7 +1722,7 @@ const AdminResaleCertificateForm = ({
                       type="text"
                       value={formData.disclosures.insurance.ownerRequirements}
                       onChange={(e) => handleInputChange('disclosures.insurance.ownerRequirements', e.target.value)}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                      className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-gray-400"
                       placeholder="Article/Section reference"
                     />
                   </div>
@@ -1720,7 +1731,7 @@ const AdminResaleCertificateForm = ({
             </div>
 
             {/* Section 15: Association Violations (Appendix 15) */}
-            <div className="bg-white border rounded-lg p-6">
+            <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6">
               <h4 className="font-semibold text-gray-800 mb-4">15. Written Notice from the Association (Appendix 15)</h4>
               <div className="space-y-4">
                 <div>
@@ -1764,7 +1775,7 @@ const AdminResaleCertificateForm = ({
             </div>
 
             {/* Section 16: Government Violations (Appendix 16) */}
-            <div className="bg-white border rounded-lg p-6">
+            <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6">
               <h4 className="font-semibold text-gray-800 mb-4">16. Written Notice from a Governmental Agency (Appendix 16)</h4>
               <div className="space-y-4">
                 <div>
@@ -1818,7 +1829,7 @@ const AdminResaleCertificateForm = ({
             </h3>
             
             {/* Section 17: Board Minutes (Appendix 17) */}
-            <div className="bg-white border rounded-lg p-6">
+            <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6">
               <h4 className="font-semibold text-gray-800 mb-4">17. Board Meeting Minutes (Appendix 17)</h4>
               <div className="space-y-3">
                 <label className="flex items-center">
@@ -1844,7 +1855,7 @@ const AdminResaleCertificateForm = ({
             </div>
 
             {/* Section 18: Association Minutes (Appendix 18) */}
-            <div className="bg-white border rounded-lg p-6">
+            <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6">
               <h4 className="font-semibold text-gray-800 mb-4">18. Association Meeting Minutes (Appendix 18)</h4>
               <div className="space-y-3">
                 <div>
@@ -1884,7 +1895,7 @@ const AdminResaleCertificateForm = ({
             </h3>
             
             {/* Section 19: Leasehold Estates (Appendix 19) */}
-            <div className="bg-white border rounded-lg p-6">
+            <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6">
               <h4 className="font-semibold text-gray-800 mb-4">19. Leasehold Estates (Appendix 19)</h4>
               <div className="space-y-4">
                 <div>
@@ -1912,14 +1923,14 @@ const AdminResaleCertificateForm = ({
                 </div>
                 
                 {formData.disclosures.leaseholdEstates.exists && (
-                  <div className="pl-6 space-y-3 bg-yellow-50 p-4 rounded-lg">
+                  <div className="pl-6 space-y-3 bg-yellow-50 p-5 rounded-xl border border-yellow-100">
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-2">The remaining term of the leasehold estate established in the attached document(s) is:</label>
                       <input
                         type="text"
                         value={formData.disclosures.leaseholdEstates.remainingTerm}
                         onChange={(e) => handleInputChange('disclosures.leaseholdEstates.remainingTerm', e.target.value)}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-gray-400"
                         placeholder="e.g., 25 years"
                       />
                     </div>
@@ -1929,7 +1940,7 @@ const AdminResaleCertificateForm = ({
             </div>
 
             {/* Section 20: Occupancy Limitations (Appendix 20) */}
-            <div className="bg-white border rounded-lg p-6">
+            <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6">
               <h4 className="font-semibold text-gray-800 mb-4 flex items-center gap-2">
                 <Users className="w-5 h-5 text-blue-600" />
                 20. Occupancy Limitations (Appendix 20)
@@ -1967,7 +1978,7 @@ const AdminResaleCertificateForm = ({
                         type="text"
                         value={formData.disclosures.occupancyLimitations.articleSection}
                         onChange={(e) => handleInputChange('disclosures.occupancyLimitations.articleSection', e.target.value)}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-gray-400"
                         placeholder="Article/Section reference"
                       />
                     </div>
@@ -1977,7 +1988,7 @@ const AdminResaleCertificateForm = ({
                         type="text"
                         value={formData.disclosures.occupancyLimitations.documentReference}
                         onChange={(e) => handleInputChange('disclosures.occupancyLimitations.documentReference', e.target.value)}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-gray-400"
                         placeholder="governing documents, rules, regulations, resolutions, architectural guidelines"
                       />
                       <p className="text-xs text-gray-500 mt-1">* Include applicable reference, i.e., governing documents, rules, regulations, resolutions, architectural guidelines</p>
@@ -1988,7 +1999,7 @@ const AdminResaleCertificateForm = ({
             </div>
 
             {/* Section 21: Flag Restrictions (Appendix 21) */}
-            <div className="bg-white border rounded-lg p-6">
+            <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6">
               <h4 className="font-semibold text-gray-800 mb-4 flex items-center gap-2">
                 <Flag className="w-5 h-5 text-red-600" />
                 21. United States Flag Restrictions (Appendix 21)
@@ -2026,7 +2037,7 @@ const AdminResaleCertificateForm = ({
                         type="text"
                         value={formData.disclosures.flagRestrictions.articleSection}
                         onChange={(e) => handleInputChange('disclosures.flagRestrictions.articleSection', e.target.value)}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-gray-400"
                       />
                     </div>
                     <div>
@@ -2035,7 +2046,7 @@ const AdminResaleCertificateForm = ({
                         type="text"
                         value={formData.disclosures.flagRestrictions.documentReference}
                         onChange={(e) => handleInputChange('disclosures.flagRestrictions.documentReference', e.target.value)}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-gray-400"
                         placeholder="governing documents, rules, regulations, resolutions, architectural guidelines"
                       />
                       <p className="text-xs text-gray-500 mt-1">* Include applicable reference, i.e., governing documents, rules, regulations, resolutions, architectural guidelines</p>
@@ -2046,7 +2057,7 @@ const AdminResaleCertificateForm = ({
             </div>
 
             {/* Section 22: Solar Restrictions (Appendix 22) */}
-            <div className="bg-white border rounded-lg p-6">
+            <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6">
               <h4 className="font-semibold text-gray-800 mb-4 flex items-center gap-2">
                 <Sun className="w-5 h-5 text-yellow-600" />
                 22. Solar Energy Restrictions (Appendix 22)
@@ -2084,7 +2095,7 @@ const AdminResaleCertificateForm = ({
                         type="text"
                         value={formData.disclosures.solarRestrictions.articleSection}
                         onChange={(e) => handleInputChange('disclosures.solarRestrictions.articleSection', e.target.value)}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-gray-400"
                       />
                     </div>
                     <div>
@@ -2093,7 +2104,7 @@ const AdminResaleCertificateForm = ({
                         type="text"
                         value={formData.disclosures.solarRestrictions.documentReference}
                         onChange={(e) => handleInputChange('disclosures.solarRestrictions.documentReference', e.target.value)}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-gray-400"
                         placeholder="governing documents, rules, regulations, resolutions, architectural guidelines"
                       />
                       <p className="text-xs text-gray-500 mt-1">* Include applicable reference, i.e., governing documents, rules, regulations, resolutions, architectural guidelines</p>
@@ -2104,9 +2115,9 @@ const AdminResaleCertificateForm = ({
             </div>
 
             {/* Section 23: Sign Restrictions (Appendix 23) */}
-            <div className="bg-white border rounded-lg p-6">
+            <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6">
               <h4 className="font-semibold text-gray-800 mb-4 flex items-center gap-2">
-                <MessageSquare className="w-5 h-5 text-purple-600" />
+                <MessageSquare className="w-5 h-5 text-blue-600" />
                 23. Sign Restrictions (Appendix 23)
               </h4>
               <div className="space-y-4">
@@ -2142,7 +2153,7 @@ const AdminResaleCertificateForm = ({
                         type="text"
                         value={formData.disclosures.signRestrictions.articleSection}
                         onChange={(e) => handleInputChange('disclosures.signRestrictions.articleSection', e.target.value)}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-gray-400"
                       />
                     </div>
                     <div>
@@ -2151,7 +2162,7 @@ const AdminResaleCertificateForm = ({
                         type="text"
                         value={formData.disclosures.signRestrictions.documentReference}
                         onChange={(e) => handleInputChange('disclosures.signRestrictions.documentReference', e.target.value)}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-gray-400"
                         placeholder="governing documents, rules, regulations, resolutions, architectural guidelines"
                       />
                       <p className="text-xs text-gray-500 mt-1">* Include applicable reference, i.e., governing documents, rules, regulations, resolutions, architectural guidelines</p>
@@ -2162,7 +2173,7 @@ const AdminResaleCertificateForm = ({
             </div>
 
             {/* Section 24: Parking Restrictions (Appendix 24) */}
-            <div className="bg-white border rounded-lg p-6">
+            <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6">
               <h4 className="font-semibold text-gray-800 mb-4 flex items-center gap-2">
                 <Car className="w-5 h-5 text-gray-600" />
                 24. Parking or Vehicle Restrictions (Appendix 24)
@@ -2200,7 +2211,7 @@ const AdminResaleCertificateForm = ({
                         type="text"
                         value={formData.disclosures.parkingRestrictions.articleSection}
                         onChange={(e) => handleInputChange('disclosures.parkingRestrictions.articleSection', e.target.value)}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-gray-400"
                       />
                     </div>
                     <div>
@@ -2209,7 +2220,7 @@ const AdminResaleCertificateForm = ({
                         type="text"
                         value={formData.disclosures.parkingRestrictions.documentReference}
                         onChange={(e) => handleInputChange('disclosures.parkingRestrictions.documentReference', e.target.value)}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-gray-400"
                         placeholder="governing documents, rules, regulations, resolutions, architectural guidelines"
                       />
                       <p className="text-xs text-gray-500 mt-1">* Include applicable reference, i.e., governing documents, rules, regulations, resolutions, architectural guidelines</p>
@@ -2220,7 +2231,7 @@ const AdminResaleCertificateForm = ({
             </div>
 
             {/* Section 25: Business Restrictions (Appendix 25) */}
-            <div className="bg-white border rounded-lg p-6">
+            <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6">
               <h4 className="font-semibold text-gray-800 mb-4 flex items-center gap-2">
                 <Briefcase className="w-5 h-5 text-indigo-600" />
                 25. Home-Based Business Restrictions (Appendix 25)
@@ -2258,7 +2269,7 @@ const AdminResaleCertificateForm = ({
                         type="text"
                         value={formData.disclosures.businessRestrictions.articleSection}
                         onChange={(e) => handleInputChange('disclosures.businessRestrictions.articleSection', e.target.value)}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-gray-400"
                       />
                     </div>
                     <div>
@@ -2267,7 +2278,7 @@ const AdminResaleCertificateForm = ({
                         type="text"
                         value={formData.disclosures.businessRestrictions.documentReference}
                         onChange={(e) => handleInputChange('disclosures.businessRestrictions.documentReference', e.target.value)}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-gray-400"
                         placeholder="governing documents, rules, regulations, resolutions, architectural guidelines"
                       />
                       <p className="text-xs text-gray-500 mt-1">* Include applicable reference, i.e., governing documents, rules, regulations, resolutions, architectural guidelines</p>
@@ -2278,7 +2289,7 @@ const AdminResaleCertificateForm = ({
             </div>
 
             {/* Section 26: Rental Restrictions (Appendix 26) */}
-            <div className="bg-white border rounded-lg p-6">
+            <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6">
               <h4 className="font-semibold text-gray-800 mb-4">26. Rental Restrictions (Appendix 26)</h4>
               <div className="space-y-4">
                 <div>
@@ -2313,7 +2324,7 @@ const AdminResaleCertificateForm = ({
                         type="text"
                         value={formData.disclosures.rentalRestrictions.articleSection}
                         onChange={(e) => handleInputChange('disclosures.rentalRestrictions.articleSection', e.target.value)}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-gray-400"
                       />
                     </div>
                     <div>
@@ -2322,7 +2333,7 @@ const AdminResaleCertificateForm = ({
                         type="text"
                         value={formData.disclosures.rentalRestrictions.documentReference}
                         onChange={(e) => handleInputChange('disclosures.rentalRestrictions.documentReference', e.target.value)}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-gray-400"
                         placeholder="governing documents, rules, regulations, resolutions, architectural guidelines"
                       />
                       <p className="text-xs text-gray-500 mt-1">* Include applicable reference, i.e., governing documents, rules, regulations, resolutions, architectural guidelines</p>
@@ -2343,9 +2354,9 @@ const AdminResaleCertificateForm = ({
             </h3>
             
             {/* Section 27: Tax Deductibility (Appendix 27) - Real Estate Cooperatives Only */}
-            <div className="bg-white border rounded-lg p-6">
+            <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6">
               <h4 className="font-semibold text-gray-800 mb-4">27. Tax Deductibility Statement - Real Estate Cooperatives Only (Appendix 27)</h4>
-              <div className="bg-yellow-50 p-4 rounded-lg border border-yellow-200 mb-4">
+              <div className="bg-yellow-50 p-5 rounded-xl border border-yellow-100 border border-yellow-200 mb-4">
                 <p className="text-sm text-yellow-800">
                   <strong>REAL ESTATE COOPERATIVES ONLY:</strong> In a Real Estate Cooperative, a statement setting forth whether the cooperative association is aware of any statute, regulation, or rule applicable to the cooperative that would affect an owner's ability to deduct real estate taxes and interest paid by the cooperative association for federal income tax purposes is required under § 55.1-2310.A.27.
                 </p>
@@ -2374,7 +2385,7 @@ const AdminResaleCertificateForm = ({
             </div>
 
             {/* Section 28: Pending Sales (Appendix 28) */}
-            <div className="bg-white border rounded-lg p-6">
+            <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6">
               <h4 className="font-semibold text-gray-800 mb-4">28. Pending Sales or Encumbrances (Appendix 28)</h4>
               <div className="space-y-4">
                 <div>
@@ -2418,7 +2429,7 @@ const AdminResaleCertificateForm = ({
             </div>
 
             {/* Section 29: Mortgage Approvals (Appendix 29) */}
-            <div className="bg-white border rounded-lg p-6">
+            <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6">
               <h4 className="font-semibold text-gray-800 mb-4">29. Secondary Mortgage Market Agency Approvals (Appendix 29)</h4>
               <div className="space-y-4">
                 <div>
@@ -2485,7 +2496,7 @@ const AdminResaleCertificateForm = ({
                         <input
                           type="text"
                           placeholder="Specify other agency"
-                          className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                          className="mt-1 w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-gray-400"
                           value={formData.disclosures.mortgageApprovals.otherAgencyName || ''}
                           onChange={e => handleInputChange('disclosures.mortgageApprovals.otherAgencyName', e.target.value)}
                         />
@@ -2497,7 +2508,7 @@ const AdminResaleCertificateForm = ({
             </div>
 
             {/* Section 30: CIC Board Certification (Appendix 30) */}
-            <div className="bg-white border rounded-lg p-6">
+            <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6">
               <h4 className="font-semibold text-gray-800 mb-4">30. Common Interest Community Board Certification (Appendix 30) *</h4>
               <div className="space-y-4">
                 <label className="flex items-center mb-4">
@@ -2519,7 +2530,7 @@ const AdminResaleCertificateForm = ({
                       type="text"
                       value={formData.disclosures.cicCertification.registrationNumber}
                       onChange={(e) => handleInputChange('disclosures.cicCertification.registrationNumber', e.target.value)}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                      className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-gray-400"
                       placeholder="CIC Board registration number"
                     />
                   </div>
@@ -2531,7 +2542,7 @@ const AdminResaleCertificateForm = ({
                       type="date"
                       value={formData.disclosures.cicCertification.expirationDate}
                       onChange={(e) => handleInputChange('disclosures.cicCertification.expirationDate', e.target.value)}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                      className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-gray-400"
                     />
                   </div>
                 </div>
@@ -2540,8 +2551,8 @@ const AdminResaleCertificateForm = ({
             </div>
 
             {/* Final Certification Statement */}
-            <div className="bg-purple-50 border border-purple-200 rounded-lg p-6">
-              <h4 className="font-semibold text-purple-900 mb-4">Final Certification</h4>
+            <div className="bg-blue-50 border border-blue-200 rounded-xl p-6">
+              <h4 className="font-semibold text-blue-900 mb-4">Final Certification</h4>
               <div className="bg-white p-4 rounded-lg border mb-4">
                 <p className="text-sm text-gray-700 leading-relaxed">
                   <strong>CERTIFICATION:</strong> I hereby certify that the information contained in this Common Interest 
@@ -2564,7 +2575,7 @@ const AdminResaleCertificateForm = ({
                   <input
                     type="text"
                     value={formData.preparer.name}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md bg-gray-50"
+                    className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 disabled:opacity-60 disabled:cursor-not-allowed"
                     disabled
                   />
                 </div>
@@ -2575,7 +2586,7 @@ const AdminResaleCertificateForm = ({
                   <input
                     type="date"
                     value={formData.datePrepared}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md bg-gray-50"
+                    className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 disabled:opacity-60 disabled:cursor-not-allowed"
                     disabled
                   />
                 </div>
@@ -2590,205 +2601,218 @@ const AdminResaleCertificateForm = ({
   };
 
   return (
-    <div className={`${isModal ? 'p-6' : 'max-w-6xl mx-auto p-6'} bg-white ${isModal ? '' : 'min-h-screen'}`}>
-      {/* Admin Header */}
-      <div className="bg-purple-50 p-6 rounded-lg mb-8 border border-purple-200">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-3">
-            <FileText className="w-8 h-8 text-purple-600" />
-            <div>
-              <h1 className="text-2xl font-bold text-gray-900">Admin: Virginia Resale Certificate</h1>
-              <p className="text-gray-600">Official State Form A492-05RESALE-v4 - Application #{applicationData?.id}</p>
-            </div>
+    <div className={`${isModal ? 'p-0 h-full flex flex-col' : 'max-w-6xl mx-auto p-6'} bg-gray-50/50 ${isModal ? '' : 'min-h-screen'}`}>
+      {/* Admin Header - Sticky */}
+      <div className={`${isModal ? 'sticky top-0 z-10' : 'mb-8'} bg-white px-6 py-4 border-b border-gray-200 flex items-center justify-between border-t-4 border-t-blue-500`}>
+        <div className="flex items-center gap-3">
+          <div className="h-10 w-10 rounded-full bg-blue-50 flex items-center justify-center">
+            <FileText className="w-5 h-5 text-blue-600" />
           </div>
-          {!isModal && (
-            <button
-              onClick={() => router.push('/admin/dashboard')}
-              className="flex items-center gap-2 px-4 py-2 text-purple-600 border border-purple-600 rounded-md hover:bg-purple-50"
-            >
-              <ArrowLeft className="w-4 h-4" />
-              Back to Dashboard
-            </button>
-          )}
+          <div>
+            <h1 className="text-lg font-bold text-gray-900">Admin: Virginia Resale Certificate</h1>
+            <p className="text-xs text-gray-500">Official State Form A492-05RESALE-v4 • Application #{applicationData?.id}</p>
+          </div>
         </div>
         
-        <div className="bg-white p-4 rounded-lg border">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-lg font-semibold text-gray-800 flex items-center gap-2">
-              <Building className="w-5 h-5 text-purple-600" />
-              Application Details
-            </h2>
+        {!isModal && (
+          <button
+            onClick={() => router.push('/admin/dashboard')}
+            className="flex items-center gap-2 px-4 py-2 text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors text-sm font-medium"
+          >
+            <ArrowLeft className="w-4 h-4" />
+            Back to Dashboard
+          </button>
+        )}
+      </div>
+
+      {/* Scrollable Content */}
+      <div className={`flex-1 overflow-y-auto custom-scrollbar p-6 space-y-6 ${!isModal ? 'pt-0' : ''}`}>
+        
+        {/* Application Details Card */}
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+          <div className="px-5 py-3 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <div className="bg-purple-100 px-3 py-1 rounded-full text-sm font-medium text-purple-700">
-                {getCompletionPercentage()}% Complete
+              <Building className="w-4 h-4 text-gray-500" />
+              <h2 className="text-sm font-semibold text-gray-700 uppercase tracking-wider">
+                Application Details
+              </h2>
+            </div>
+            <div className="bg-blue-100 px-2.5 py-0.5 rounded-full text-xs font-semibold text-blue-700 border border-blue-200">
+              {getCompletionPercentage()}% Complete
+            </div>
+          </div>
+          <div className="p-5">
+            <div className="grid md:grid-cols-2 gap-y-4 gap-x-8 text-sm">
+              <div>
+                <div className="mb-3">
+                  <span className="block text-xs font-medium text-gray-500 mb-1">Property Address</span>
+                  <span className="font-medium text-gray-900">{applicationData?.property_address} {applicationData?.unit_number}</span>
+                </div>
+                <div className="mb-3">
+                  <span className="block text-xs font-medium text-gray-500 mb-1">HOA</span>
+                  <span className="font-medium text-gray-900">{applicationData?.hoa_properties?.name}</span>
+                </div>
+                <div>
+                  <span className="block text-xs font-medium text-gray-500 mb-1">Submitter</span>
+                  <span className="font-medium text-gray-900">{applicationData?.submitter_name}</span>
+                </div>
+              </div>
+              <div>
+                <div className="mb-3">
+                  <span className="block text-xs font-medium text-gray-500 mb-1">Buyer</span>
+                  <span className="font-medium text-gray-900">{applicationData?.buyer_name}</span>
+                </div>
+                <div className="mb-3">
+                  <span className="block text-xs font-medium text-gray-500 mb-1">Seller</span>
+                  <span className="font-medium text-gray-900">{applicationData?.seller_name}</span>
+                </div>
+                <div>
+                  <span className="block text-xs font-medium text-gray-500 mb-1">Sale Price</span>
+                  <span className="font-medium text-gray-900">${applicationData?.sale_price?.toLocaleString()}</span>
+                </div>
               </div>
             </div>
           </div>
-          <div className="grid md:grid-cols-2 gap-4 text-sm">
-            <div>
-              <strong>Property:</strong> {applicationData?.property_address} {applicationData?.unit_number}
-              <br />
-              <strong>HOA:</strong> {applicationData?.hoa_properties?.name}
-              <br />
-              <strong>Submitter:</strong> {applicationData?.submitter_name}
-            </div>
-            <div>
-              <strong>Buyer:</strong> {applicationData?.buyer_name}
-              <br />
-              <strong>Seller:</strong> {applicationData?.seller_name}
-              <br />
-              <strong>Sale Price:</strong> ${applicationData?.sale_price?.toLocaleString()}
-            </div>
+        </div>
+
+        {/* Error/Success Messages */}
+        {error && (
+          <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-start gap-3">
+            <div className="text-red-600 mt-0.5">⚠️</div>
+            <p className="text-sm text-red-800 font-medium">{error}</p>
           </div>
-        </div>
-      </div>
+        )}
 
-      {/* Error/Success Messages */}
-      {error && (
-        <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-6">
-          <p className="text-red-800">{error}</p>
-        </div>
-      )}
-
-      {success && (
-        <div className="bg-green-50 border border-green-200 rounded-lg p-4 mb-6">
-          <p className="text-green-800">{success}</p>
-        </div>
-      )}
-
-      {/* Section Navigation */}
-      <div className="mb-8">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-xl font-semibold text-gray-800">Virginia State Resale Certificate Form - All 170+ Questions</h2>
-          <div className="text-sm text-gray-500">
-            Section {currentSection} of {sections.length}
+        {success && (
+          <div className="bg-green-50 border border-green-200 rounded-xl p-4 flex items-start gap-3">
+            <CheckCircle className="w-5 h-5 text-green-600 mt-0.5" />
+            <p className="text-sm text-green-800 font-medium">{success}</p>
           </div>
-        </div>
-        
-        <div className="flex items-center justify-between overflow-x-auto pb-2">
-          {sections.map((section, index) => {
-            const SectionIcon = section.icon;
-            const isActive = currentSection === section.id;
-            const isCompleted = currentSection > section.id;
-            
-            return (
-              <div key={section.id} className="flex items-center flex-shrink-0">
+        )}
+
+        {/* Section Navigation */}
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 sticky top-0 z-0">
+          <div className="flex items-center justify-between mb-4 px-2">
+            <h2 className="text-sm font-bold text-gray-900 uppercase tracking-wider">Form Sections</h2>
+            <span className="text-xs font-medium text-gray-500">
+              Section {currentSection} of {sections.length}
+            </span>
+          </div>
+          
+          <div className="flex items-center gap-2 overflow-x-auto pb-2 custom-scrollbar">
+            {sections.map((section, index) => {
+              const SectionIcon = section.icon;
+              const isActive = currentSection === section.id;
+              const isCompleted = currentSection > section.id;
+              
+              return (
                 <button
+                  key={section.id}
                   onClick={() => setCurrentSection(section.id)}
-                  className={`flex items-center justify-center w-12 h-12 rounded-full border-2 ${
-                    isActive ? 'border-purple-600 bg-purple-600 text-white' :
-                    isCompleted ? 'border-purple-600 bg-purple-600 text-white' :
-                    'border-gray-300 bg-white text-gray-500'
+                  className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium whitespace-nowrap transition-all ${
+                    isActive 
+                      ? 'bg-blue-50 text-blue-700 border border-blue-200 shadow-sm' 
+                      : isCompleted
+                        ? 'bg-white text-blue-600 border border-blue-100 hover:bg-blue-50'
+                        : 'bg-white text-gray-500 border border-gray-200 hover:bg-gray-50 hover:text-gray-700'
                   }`}
                 >
-                  <SectionIcon className="h-6 w-6" />
+                  <SectionIcon className={`w-3.5 h-3.5 ${isActive || isCompleted ? 'text-blue-600' : 'text-gray-400'}`} />
+                  {section.title.split('(')[0].trim()}
                 </button>
-                <div className="ml-3 min-w-0">
-                  <span className={`text-sm font-medium block ${
-                    isActive ? 'text-purple-600' :
-                    isCompleted ? 'text-purple-600' :
-                    'text-gray-500'
-                  }`}>
-                    {section.title}
-                  </span>
-                </div>
-                {index < sections.length - 1 && (
-                  <div className={`flex-1 h-px mx-6 min-w-8 ${
-                    currentSection > section.id ? 'bg-purple-600' : 'bg-gray-300'
-                  }`} />
-                )}
-              </div>
-            );
-          })}
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Form Content */}
+        <div className="min-h-[400px]">
+          {renderSection()}
+        </div>
+
+        {/* Completion Requirements */}
+        {!isComplete && currentSection === sections.length && (
+          <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-4 flex gap-3">
+            <AlertTriangle className="w-5 h-5 text-yellow-600 mt-0.5" />
+            <div>
+              <h4 className="text-sm font-bold text-yellow-800 mb-1">Required fields missing</h4>
+              <p className="text-xs text-yellow-700">
+                Please complete all required fields including development information, preparer details, and CIC Board registration information before submission.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Form Summary */}
+        <div className="bg-gray-50 border border-gray-200 rounded-xl p-5">
+          <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-3">Form Overview</h3>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-xs text-gray-600">
+            <div>
+              <span className="font-semibold text-gray-900 block mb-1">General</span>
+              Header, Contact Info, Documents
+            </div>
+            <div>
+              <span className="font-semibold text-gray-900 block mb-1">Financial</span>
+              Assessments, Fees, Reserves
+            </div>
+            <div>
+              <span className="font-semibold text-gray-900 block mb-1">Legal</span>
+              Insurance, Violations, Restrictions
+            </div>
+            <div>
+              <span className="font-semibold text-gray-900 block mb-1">Status</span>
+              <span className="inline-flex items-center gap-1.5">
+                <div className="w-1.5 h-1.5 rounded-full bg-blue-500"></div>
+                170+ Questions Total
+              </span>
+            </div>
+          </div>
         </div>
       </div>
 
-      {/* Form Content */}
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-8 mb-6">
-        {renderSection()}
-      </div>
-
-      {/* Navigation Buttons */}
-      <div className="flex justify-between items-center pt-6 border-t">
-        <div className="text-sm text-gray-500">
-          Completing as: <span className="font-medium">GMG Admin</span>
-          <br />
-          Form Progress: <span className="font-medium">{getCompletionPercentage()}% Complete</span>
+      {/* Navigation Buttons - Sticky Bottom */}
+      <div className="bg-white border-t border-gray-200 px-6 py-4 flex items-center justify-between z-10 sticky bottom-0">
+        <div className="text-xs text-gray-500 hidden sm:block">
+          Completing as: <span className="font-medium text-gray-900">GMG Admin</span>
         </div>
         
-        <div className="flex gap-3">
+        <div className="flex gap-3 w-full sm:w-auto justify-between sm:justify-end">
           {currentSection > 1 && (
             <button
               onClick={() => setCurrentSection(currentSection - 1)}
-              className="px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50"
+              className="px-4 py-2.5 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 text-sm font-medium transition-colors"
             >
               Previous
             </button>
           )}
           
-          <button
-            onClick={handleSave}
-            disabled={isSaving}
-            className="flex items-center gap-2 px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50 disabled:opacity-50"
-          >
-            <Save className="w-4 h-4" />
-            {isSaving ? 'Saving...' : 'Save Progress'}
-          </button>
-          
-          {currentSection < sections.length ? (
+          <div className="flex gap-3">
             <button
-              onClick={() => setCurrentSection(currentSection + 1)}
-              className="px-6 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700"
+              onClick={handleSave}
+              disabled={isSaving}
+              className="flex items-center gap-2 px-4 py-2.5 bg-white border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 text-sm font-medium transition-colors disabled:opacity-50"
             >
-              Next Section
+              <Save className="w-4 h-4" />
+              <span className="hidden sm:inline">Save Progress</span>
             </button>
-          ) : (
-            <button
-              onClick={handleSubmit}
-              disabled={!isComplete || isSubmitting}
-              className="flex items-center gap-2 px-6 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <Send className="w-4 h-4" />
-              {isSubmitting ? 'Completing...' : 'Complete Certificate'}
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* Completion Requirements */}
-      {!isComplete && currentSection === sections.length && (
-        <div className="mt-4 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
-          <p className="text-yellow-800 text-sm">
-            <strong>Required fields missing:</strong> Please complete all required fields including development information, 
-            preparer details, and CIC Board registration information before submission.
-          </p>
-        </div>
-      )}
-
-      {/* Form Summary */}
-      <div className="mt-6 p-4 bg-gray-50 border border-gray-200 rounded-lg">
-        <h3 className="font-semibold text-gray-800 mb-2">Form Summary</h3>
-        <div className="grid md:grid-cols-3 gap-4 text-sm">
-          <div>
-            <strong>Header Information:</strong> 6 fields
-            <br />
-            <strong>Contact Info (App. 1):</strong> 12+ fields
-            <br />
-            <strong>Documents (App. 2-3):</strong> 8+ fields
-          </div>
-          <div>
-            <strong>Financial (App. 4-12):</strong> 50+ fields
-            <br />
-            <strong>Legal/Insurance (App. 13-16):</strong> 20+ fields
-            <br />
-            <strong>Minutes (App. 17-18):</strong> 4 fields
-          </div>
-          <div>
-            <strong>Restrictions (App. 19-26):</strong> 32+ fields
-            <br />
-            <strong>Final Certs (App. 27-30):</strong> 15+ fields
-            <br />
-            <strong>Total Questions:</strong> 170+ comprehensive fields
+            
+            {currentSection < sections.length ? (
+              <button
+                onClick={() => setCurrentSection(currentSection + 1)}
+                className="flex items-center gap-2 px-6 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium transition-colors shadow-sm"
+              >
+                Next <ArrowLeft className="w-4 h-4 rotate-180" />
+              </button>
+            ) : (
+              <button
+                onClick={handleSubmit}
+                disabled={!isComplete || isSubmitting}
+                className="flex items-center gap-2 px-6 py-2.5 bg-green-600 text-white rounded-lg hover:bg-green-700 text-sm font-medium transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <Send className="w-4 h-4" />
+                Complete Certificate
+              </button>
+            )}
           </div>
         </div>
       </div>

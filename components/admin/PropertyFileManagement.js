@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
 import { formatDate } from '../../lib/timeUtils';
+import { sortDocumentsByOrder } from '../../lib/documentOrder';
 import {
   Upload,
   FileText,
@@ -15,7 +16,8 @@ import {
   X,
   Image as ImageIcon,
   File,
-  FileCheck
+  FileCheck,
+  GripVertical
 } from 'lucide-react';
 
 // Predefined document types for all properties
@@ -47,6 +49,9 @@ const PropertyFileManagement = ({ propertyId, propertyName, initialDocumentKey }
   const [expandedSections, setExpandedSections] = useState({});
   const [pendingDates, setPendingDates] = useState({}); // Track pending date values per document
   const hasExpandedInitialSection = useRef(false); // Track if we've already expanded the initial section
+  const [documentOrder, setDocumentOrder] = useState([]); // Custom order for document types
+  const [draggedIndex, setDraggedIndex] = useState(null); // Index of document being dragged
+  const [savingOrder, setSavingOrder] = useState(false); // Track if order is being saved
   
   // Modal state
   const [showModal, setShowModal] = useState(false);
@@ -67,8 +72,60 @@ const PropertyFileManagement = ({ propertyId, propertyName, initialDocumentKey }
   useEffect(() => {
     if (propertyId) {
       loadPropertyDocuments();
+      loadDocumentOrder();
     }
   }, [propertyId]);
+
+  // Load custom document order from property
+  const loadDocumentOrder = async () => {
+    if (!propertyId) return;
+    
+    try {
+      const { data: property, error } = await supabase
+        .from('hoa_properties')
+        .select('document_order')
+        .eq('id', propertyId)
+        .single();
+
+      if (error && error.code !== 'PGRST116') throw error; // PGRST116 = no rows returned
+
+      if (property?.document_order && Array.isArray(property.document_order)) {
+        setDocumentOrder(property.document_order);
+      } else {
+        // Use default order from DOCUMENT_TYPES
+        setDocumentOrder(DOCUMENT_TYPES.map(doc => doc.key));
+      }
+    } catch (error) {
+      console.error('Error loading document order:', error);
+      // Fallback to default order
+      setDocumentOrder(DOCUMENT_TYPES.map(doc => doc.key));
+    }
+  };
+
+  // Save document order to property
+  const saveDocumentOrder = async (newOrder) => {
+    if (!propertyId) return;
+    
+    setSavingOrder(true);
+    try {
+      const { error } = await supabase
+        .from('hoa_properties')
+        .update({ 
+          document_order: newOrder,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', propertyId);
+
+      if (error) throw error;
+      
+      setDocumentOrder(newOrder);
+    } catch (error) {
+      console.error('Error saving document order:', error);
+      alert('Failed to save document order: ' + error.message);
+    } finally {
+      setSavingOrder(false);
+    }
+  };
 
   // Auto-expand the section for the initial document key after documents are loaded
   useEffect(() => {
@@ -156,18 +213,22 @@ const PropertyFileManagement = ({ propertyId, propertyName, initialDocumentKey }
 
       if (error) throw error;
 
+      // Sort all documents by the defined order (property-specific order takes priority)
+      let sortedDocuments = [];
+      if (documents && documents.length > 0) {
+        sortedDocuments = await sortDocumentsByOrder(documents.filter(doc => doc.file_path), propertyId, supabase);
+      }
+
       const grouped = {};
       
-      if (documents && documents.length > 0) {
-        documents.forEach(doc => {
+      if (sortedDocuments.length > 0) {
+        sortedDocuments.forEach(doc => {
           if (!grouped[doc.document_key]) {
             grouped[doc.document_key] = [];
           }
           
           // Include all documents with files
-          if (doc.file_path) {
-            grouped[doc.document_key].push(doc);
-          }
+          grouped[doc.document_key].push(doc);
         });
       }
       
@@ -431,6 +492,59 @@ const PropertyFileManagement = ({ propertyId, propertyName, initialDocumentKey }
     }));
   };
 
+  // Handle document section drag start
+  const handleDocumentDragStart = (index) => {
+    setDraggedIndex(index);
+  };
+
+  // Handle document section drag over
+  const handleDocumentDragOver = (e, index) => {
+    e.preventDefault();
+    if (draggedIndex === null || draggedIndex === index) return;
+
+    const newOrder = [...documentOrder];
+    const draggedItem = newOrder[draggedIndex];
+    
+    newOrder.splice(draggedIndex, 1);
+    newOrder.splice(index, 0, draggedItem);
+    
+    setDocumentOrder(newOrder);
+    setDraggedIndex(index);
+  };
+
+  // Handle document section drag end
+  const handleDocumentDragEnd = () => {
+    if (draggedIndex !== null) {
+      // Save the new order
+      saveDocumentOrder(documentOrder);
+    }
+    setDraggedIndex(null);
+  };
+
+  // Get ordered document types based on custom order
+  const getOrderedDocumentTypes = () => {
+    if (documentOrder.length === 0) {
+      return DOCUMENT_TYPES;
+    }
+
+    // Create a map for quick lookup
+    const docTypeMap = new Map(DOCUMENT_TYPES.map(doc => [doc.key, doc]));
+    
+    // Order by documentOrder, then add any missing types at the end
+    const ordered = documentOrder
+      .map(key => docTypeMap.get(key))
+      .filter(Boolean);
+    
+    // Add any document types not in the custom order
+    DOCUMENT_TYPES.forEach(doc => {
+      if (!documentOrder.includes(doc.key)) {
+        ordered.push(doc);
+      }
+    });
+    
+    return ordered;
+  };
+
   const isExpiringSoon = (date, isNA) => {
     if (!date || isNA) return false;
     const expDate = new Date(date);
@@ -475,20 +589,36 @@ const PropertyFileManagement = ({ propertyId, propertyName, initialDocumentKey }
     <>
       <div className="space-y-6">
         <div className="bg-gradient-to-br from-white to-gray-50 rounded-xl shadow-lg border border-gray-100 p-8">
-          <div className="flex items-center gap-3 mb-8">
-            <div className="p-3 bg-gradient-to-br from-green-500 to-green-600 rounded-lg shadow-md">
-              <FileText className="h-6 w-6 text-white" />
+          <div className="flex items-center justify-between mb-8">
+            <div className="flex items-center gap-3">
+              <div className="p-3 bg-gradient-to-br from-green-500 to-green-600 rounded-lg shadow-md">
+                <FileText className="h-6 w-6 text-white" />
+              </div>
+              <div>
+                <h3 className="text-2xl font-bold text-gray-900">
+                  Property Documents
+                </h3>
+                <p className="text-sm text-gray-500 mt-1">{propertyName}</p>
+              </div>
             </div>
-            <div>
-              <h3 className="text-2xl font-bold text-gray-900">
-                Property Documents
-              </h3>
-              <p className="text-sm text-gray-500 mt-1">{propertyName}</p>
-            </div>
+            {savingOrder && (
+              <div className="flex items-center gap-2 text-sm text-gray-600">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                <span>Saving order...</span>
+              </div>
+            )}
           </div>
+          {documentOrder.length > 0 && (
+            <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+            <p className="text-xs text-blue-700 flex items-center gap-2">
+              <GripVertical className="h-3 w-3" />
+              <span>Drag document sections to reorder them. This order will be used when sending emails.</span>
+            </p>
+          </div>
+          )}
           
           <div className="space-y-5">
-            {DOCUMENT_TYPES.map((docType) => {
+            {getOrderedDocumentTypes().map((docType, index) => {
               const documents = documentsByKey[docType.key] || [];
               const isExpanded = expandedSections[docType.key];
               const hasDocuments = documents.length > 0;
@@ -501,13 +631,27 @@ const PropertyFileManagement = ({ propertyId, propertyName, initialDocumentKey }
                 <div
                   key={docType.key}
                   data-document-key={docType.key}
-                  className="bg-white border border-gray-200 rounded-xl overflow-hidden transition-all duration-200 hover:shadow-lg hover:border-green-200"
+                  draggable
+                  onDragStart={() => handleDocumentDragStart(index)}
+                  onDragOver={(e) => handleDocumentDragOver(e, index)}
+                  onDragEnd={handleDocumentDragEnd}
+                  className={`
+                    bg-white border border-gray-200 rounded-xl overflow-hidden transition-all duration-200 hover:shadow-lg hover:border-green-200
+                    ${draggedIndex === index ? 'opacity-50 border-blue-500 shadow-lg' : ''}
+                    ${draggedIndex !== null && draggedIndex !== index ? 'cursor-move' : ''}
+                  `}
                 >
                   {/* Section Header */}
                   <div className="p-5 bg-gradient-to-r from-gray-50 to-white">
                     <div className="flex items-start justify-between">
                       <div className="flex-1">
                         <div className="flex items-center gap-3 flex-wrap">
+                          <div 
+                            className="p-2 bg-blue-50 rounded-lg cursor-move hover:bg-blue-100 transition-colors"
+                            title="Drag to reorder"
+                          >
+                            <GripVertical className="h-5 w-5 text-blue-600 flex-shrink-0" />
+                          </div>
                           <div className="p-2 bg-blue-50 rounded-lg">
                             <FileText className="h-5 w-5 text-blue-600 flex-shrink-0" />
                           </div>

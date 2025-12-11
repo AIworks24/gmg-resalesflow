@@ -301,42 +301,40 @@ const AdminReports = () => {
     <AdminLayout>
       <div className="max-w-7xl mx-auto p-6">
         {/* Header */}
-        <div className='mb-8'>
-          <div className='flex items-center justify-between'>
-            <div>
-              <h1 className='text-3xl font-bold text-gray-900 mb-2'>
-                Reports & Analytics
-              </h1>
-              <p className='text-gray-600'>
-                View performance metrics and generate detailed reports
-              </p>
-            </div>
-            <button
-              onClick={() => {
-                if (activeTab === 'reports') {
-                  refetch();
-                } else {
-                  refetchExpiringDocs();
-                }
-              }}
-              disabled={activeTab === 'reports' ? isFetching : isLoadingExpiringDocs}
-              className='flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50'
-            >
-              <RefreshCw className={`w-4 h-4 ${(activeTab === 'reports' ? isFetching : isLoadingExpiringDocs) ? 'animate-spin' : ''}`} />
-              {(activeTab === 'reports' ? isFetching : isLoadingExpiringDocs) ? 'Refreshing...' : 'Refresh'}
-            </button>
+        <div className='mb-8 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4'>
+          <div>
+            <h1 className='text-2xl font-bold text-gray-900 tracking-tight'>
+              Reports & Analytics
+            </h1>
+            <p className='text-sm text-gray-500 mt-1'>
+              View performance metrics and generate detailed reports
+            </p>
           </div>
+          <button
+            onClick={() => {
+              if (activeTab === 'reports') {
+                refetch();
+              } else {
+                refetchExpiringDocs();
+              }
+            }}
+            disabled={activeTab === 'reports' ? isFetching : isLoadingExpiringDocs}
+            className='inline-flex items-center justify-center gap-2 px-4 py-2 bg-white border border-gray-200 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 hover:text-gray-900 transition-all focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-200 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm'
+          >
+            <RefreshCw className={`w-4 h-4 ${(activeTab === 'reports' ? isFetching : isLoadingExpiringDocs) ? 'animate-spin' : ''}`} />
+            {(activeTab === 'reports' ? isFetching : isLoadingExpiringDocs) ? 'Refreshing...' : 'Refresh Data'}
+          </button>
         </div>
 
         {/* Tabs - Admin only for Expiring Documents */}
         {role === 'admin' && (
           <div className="mb-6 border-b border-gray-200">
-            <nav className="flex space-x-8">
+            <nav className="-mb-px flex space-x-8">
               <button
                 onClick={() => {
                   setActiveTab('reports');
                 }}
-                className={`py-4 px-1 border-b-2 font-medium text-sm ${
+                className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
                   activeTab === 'reports'
                     ? 'border-blue-500 text-blue-600'
                     : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
@@ -350,7 +348,7 @@ const AdminReports = () => {
                   // Refresh data when switching to this tab
                   refetchExpiringDocs();
                 }}
-                className={`py-4 px-1 border-b-2 font-medium text-sm ${
+                className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
                   activeTab === 'expiring-documents'
                     ? 'border-blue-500 text-blue-600'
                     : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
@@ -358,7 +356,9 @@ const AdminReports = () => {
               >
                 Expiring Documents
                 {expiringDocuments.length > 0 && (
-                  <span className="ml-2 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">
+                  <span className={`ml-2 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                    activeTab === 'expiring-documents' ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-800'
+                  }`}>
                     {expiringDocuments.length}
                   </span>
                 )}
@@ -369,10 +369,10 @@ const AdminReports = () => {
 
         {/* Expiring Documents Tab Content */}
         {activeTab === 'expiring-documents' && role === 'admin' && (
-          <div className="bg-white rounded-lg shadow-md border overflow-hidden">
-            <div className="px-6 py-4 border-b">
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+            <div className="px-6 py-4 border-b border-gray-100 bg-gray-50/50">
               <h2 className="text-lg font-semibold text-gray-900">Documents by Expiration</h2>
-              <p className="text-sm text-gray-600 mt-1">
+              <p className="text-sm text-gray-500 mt-1">
                 Documents expiring within 30 days or already expired, across all properties, ordered by expiration date (soonest first)
               </p>
             </div>
@@ -396,34 +396,34 @@ const AdminReports = () => {
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full">
-                  <thead className="bg-gray-50 border-b">
+                  <thead className="bg-gray-50/80 border-b border-gray-100">
                     <tr>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      <th className="px-6 py-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
                         Expiration Date
                       </th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      <th className="px-6 py-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
                         Status
                       </th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      <th className="px-6 py-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
                         Document Name
                       </th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      <th className="px-6 py-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
                         Property
                       </th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      <th className="px-6 py-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
                         Property Owner
                       </th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      <th className="px-6 py-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
                         Location
                       </th>
                     </tr>
                   </thead>
-                  <tbody className="bg-white divide-y divide-gray-200">
+                  <tbody className="divide-y divide-gray-50">
                     {expiringDocuments.map((doc) => (
                       <tr
                         key={doc.id}
                         onClick={() => handleDocumentClick(doc.property_id)}
-                        className="hover:bg-blue-50 cursor-pointer transition-colors"
+                        className="hover:bg-blue-50/30 cursor-pointer transition-colors"
                       >
                         <td className="px-6 py-4 whitespace-nowrap">
                           <div className="text-sm font-medium text-gray-900">
@@ -441,16 +441,16 @@ const AdminReports = () => {
                           </div>
                         </td>
                         <td className="px-6 py-4">
-                          <div className="text-sm font-medium text-gray-900">
+                          <div className="text-sm text-gray-600">
                             {doc.property_name || 'N/A'}
                           </div>
                         </td>
                         <td className="px-6 py-4">
-                          <div className="text-sm text-gray-900">
+                          <div className="text-sm font-medium text-gray-900">
                             {doc.property_owner_name || 'N/A'}
                           </div>
                           {doc.property_owner_email && (
-                            <div className="text-sm text-gray-500">{doc.property_owner_email}</div>
+                            <div className="text-xs text-gray-500 mt-0.5">{doc.property_owner_email}</div>
                           )}
                         </td>
                         <td className="px-6 py-4">
@@ -472,7 +472,7 @@ const AdminReports = () => {
           <>
 
             {/* Date Filter Controls */}
-            <div className="bg-white p-6 rounded-lg shadow-md border mb-8">
+            <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-200 mb-8">
               <div className="flex items-center gap-4 flex-wrap">
                 <div className="flex items-center gap-2">
                   <Calendar className="w-4 h-4 text-gray-500" />
@@ -481,7 +481,7 @@ const AdminReports = () => {
                 <select
                   value={dateFilter}
                   onChange={(e) => setDateFilter(e.target.value)}
-                  className="px-3 py-1 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
                 >
                   <option value="all">All Time</option>
                   <option value="today">Today</option>
@@ -497,14 +497,14 @@ const AdminReports = () => {
                       type="date"
                       value={customDateRange.startDate}
                       onChange={(e) => setCustomDateRange({...customDateRange, startDate: e.target.value})}
-                      className="px-3 py-1 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      className="px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
                     />
-                    <span className="text-gray-500">to</span>
+                    <span className="text-gray-500 text-sm">to</span>
                     <input
                       type="date"
                       value={customDateRange.endDate}
                       onChange={(e) => setCustomDateRange({...customDateRange, endDate: e.target.value})}
-                      className="px-3 py-1 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      className="px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
                     />
                   </div>
                 )}
@@ -512,71 +512,79 @@ const AdminReports = () => {
                 <button
                   onClick={() => refetch()}
                   disabled={isFetching}
-                  className="flex items-center gap-2 px-3 py-1 bg-blue-600 text-white rounded-md hover:bg-blue-700 text-sm disabled:opacity-50"
+                  className="ml-auto flex items-center gap-2 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors shadow-sm disabled:opacity-50"
                 >
                   <RefreshCw className={`w-4 h-4 ${isFetching ? 'animate-spin' : ''}`} />
-                  Refresh
+                  Apply Filters
                 </button>
               </div>
             </div>
 
             {/* Statistics Cards */}
             <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
-              <div className="bg-white p-6 rounded-lg shadow-md border">
-                <div className="flex items-center gap-3">
-                  <FileText className="w-8 h-8 text-blue-600" />
+              <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 hover:border-blue-200 transition-colors">
+                <div className="flex items-start justify-between">
                   <div>
-                    <p className="text-sm text-gray-600">Total Applications</p>
+                    <p className="text-sm font-medium text-gray-500 mb-1">Total Applications</p>
                     <p className="text-2xl font-bold text-gray-900">{stats.totalApplications}</p>
                   </div>
+                  <div className="p-2 bg-blue-50 rounded-lg">
+                    <FileText className="w-5 h-5 text-blue-600" />
+                  </div>
                 </div>
               </div>
               
-              <div className="bg-white p-6 rounded-lg shadow-md border">
-                <div className="flex items-center gap-3">
-                  <Calendar className="w-8 h-8 text-green-600" />
+              <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 hover:border-green-200 transition-colors">
+                <div className="flex items-start justify-between">
                   <div>
-                    <p className="text-sm text-gray-600">This Month</p>
+                    <p className="text-sm font-medium text-gray-500 mb-1">This Month</p>
                     <p className="text-2xl font-bold text-gray-900">{stats.thisMonthApplications}</p>
                   </div>
-                </div>
-              </div>
-              
-              <div className="bg-white p-6 rounded-lg shadow-md border">
-                <div className="flex items-center gap-3">
-                  <DollarSign className="w-8 h-8 text-yellow-600" />
-                  <div>
-                    <p className="text-sm text-gray-600">Total Revenue</p>
-                    <p className="text-2xl font-bold text-gray-900">{formatCurrency(stats.totalRevenue)}</p>
+                  <div className="p-2 bg-green-50 rounded-lg">
+                    <Calendar className="w-5 h-5 text-green-600" />
                   </div>
                 </div>
               </div>
               
-              <div className="bg-white p-6 rounded-lg shadow-md border">
-                <div className="flex items-center gap-3">
-                  <Clock className="w-8 h-8 text-orange-600" />
+              <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 hover:border-yellow-200 transition-colors">
+                <div className="flex items-start justify-between">
                   <div>
-                    <p className="text-sm text-gray-600">Pending Applications</p>
+                    <p className="text-sm font-medium text-gray-500 mb-1">Total Revenue</p>
+                    <p className="text-2xl font-bold text-gray-900">{formatCurrency(stats.totalRevenue)}</p>
+                  </div>
+                  <div className="p-2 bg-yellow-50 rounded-lg">
+                    <DollarSign className="w-5 h-5 text-yellow-600" />
+                  </div>
+                </div>
+              </div>
+              
+              <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 hover:border-orange-200 transition-colors">
+                <div className="flex items-start justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-gray-500 mb-1">Pending Applications</p>
                     <p className="text-2xl font-bold text-gray-900">{stats.pendingApplications}</p>
+                  </div>
+                  <div className="p-2 bg-orange-50 rounded-lg">
+                    <Clock className="w-5 h-5 text-orange-600" />
                   </div>
                 </div>
               </div>
             </div>
 
             {/* Export Buttons */}
-            <div className="bg-white p-6 rounded-lg shadow-md border mb-8">
-              <h2 className="text-lg font-semibold text-gray-900 mb-4">Export Data</h2>
-              <div className="flex gap-4">
+            <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 mb-8">
+              <h2 className="text-lg font-bold text-gray-900 mb-4">Export Data</h2>
+              <div className="flex flex-wrap gap-4">
                 <button
                   onClick={handleExportApplications}
-                  className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700"
+                  className="flex items-center gap-2 px-4 py-2.5 bg-green-600 text-white text-sm font-medium rounded-lg hover:bg-green-700 transition-colors shadow-sm"
                 >
                   <Download className="w-4 h-4" />
                   Export Applications CSV
                 </button>
                 <button
                   onClick={handleExportProperties}
-                  className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
+                  className="flex items-center gap-2 px-4 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors shadow-sm"
                 >
                   <Download className="w-4 h-4" />
                   Export Properties CSV
@@ -585,44 +593,44 @@ const AdminReports = () => {
             </div>
 
             {/* Recent Applications Table */}
-            <div className="bg-white rounded-lg shadow-md border overflow-hidden">
-              <div className="px-6 py-4 border-b">
-                <h2 className="text-lg font-semibold text-gray-900">Recent Applications</h2>
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+              <div className="px-6 py-4 border-b border-gray-100 bg-gray-50/50">
+                <h2 className="text-lg font-bold text-gray-900">Recent Applications</h2>
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full">
-                  <thead className="bg-gray-50 border-b">
+                  <thead className="bg-gray-50/80 border-b border-gray-100">
                     <tr>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      <th className="px-6 py-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
                         Date
                       </th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      <th className="px-6 py-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
                         Property
                       </th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      <th className="px-6 py-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
                         Submitter
                       </th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      <th className="px-6 py-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
                         Status
                       </th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      <th className="px-6 py-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
                         Amount
                       </th>
                     </tr>
                   </thead>
-                  <tbody className="bg-white divide-y divide-gray-200">
+                  <tbody className="divide-y divide-gray-50">
                     {applications.slice(0, 20).map((app) => (
-                      <tr key={app.id} className="hover:bg-gray-50">
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                      <tr key={app.id} className="hover:bg-blue-50/30 transition-colors">
+                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
                           {new Date(app.created_at).toLocaleDateString()}
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
                           <div>
-                            <div className="text-sm font-medium text-gray-900">
+                            <div className="text-sm font-semibold text-gray-900">
                               {app.property_address}
                             </div>
                             {app.unit_number && (
-                              <div className="text-sm text-gray-500">Unit {app.unit_number}</div>
+                              <div className="text-xs text-gray-500 mt-0.5">Unit {app.unit_number}</div>
                             )}
                           </div>
                         </td>
@@ -631,7 +639,7 @@ const AdminReports = () => {
                             <div className="text-sm font-medium text-gray-900">
                               {app.submitter_name}
                             </div>
-                            <div className="text-sm text-gray-500">{app.submitter_email}</div>
+                            <div className="text-xs text-gray-500 mt-0.5">{app.submitter_email}</div>
                           </div>
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
@@ -639,7 +647,7 @@ const AdminReports = () => {
                             {getStatusLabel(app.status)}
                           </span>
                         </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
                           {formatCurrency(app.total_amount || 0)}
                         </td>
                       </tr>

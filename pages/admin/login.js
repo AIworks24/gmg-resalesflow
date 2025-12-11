@@ -20,10 +20,15 @@ export default function AdminLogin() {
       const result = await signIn(email, password);
       
       if (result.success) {
-        // Check if there's an applicationId in query params for redirect
+        // Check for redirect param first, then applicationId, then default
+        const redirect = router.query.redirect;
         const applicationId = router.query.applicationId;
-        if (applicationId) {
-          // Redirect to applications page with applicationId to open modal
+        
+        if (redirect) {
+          // Decode and redirect to the preserved URL
+          router.push(decodeURIComponent(redirect));
+        } else if (applicationId) {
+          // Legacy support for applicationId
           router.push(`/admin/applications?applicationId=${applicationId}`);
         } else {
           // Default redirect to dashboard
