@@ -1,6 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import { sendPropertyManagerNotificationEmail } from '../../../lib/emailService';
-import { parseEmails } from '../../../lib/emailUtils';
+import { parseEmails, normalizeEmail } from '../../../lib/emailUtils';
 
 /**
  * Format application type for display in notifications
@@ -215,6 +215,11 @@ export async function createNotifications(applicationId, supabaseClient) {
             propertyOwnerEmail = ownerProfile.email;
           }
 
+          // Normalize email to lowercase for consistent storage and delivery
+          // Email addresses are case-insensitive per RFC, but normalizing prevents delivery issues
+          const normalizedPropertyOwnerEmail = normalizeEmail(propertyOwnerEmail);
+          console.log(`[Notifications] Normalized property owner email: ${propertyOwnerEmail} -> ${normalizedPropertyOwnerEmail}`);
+
           // Format application type for display
           const appTypeDisplay = formatApplicationType(application.application_type);
           const packageDisplay = application.package_type === 'rush' ? 'Rush' : 'Standard';
@@ -224,7 +229,7 @@ export async function createNotifications(applicationId, supabaseClient) {
           
           const notification = {
             application_id: applicationId,
-            recipient_email: propertyOwnerEmail, // Already cleaned (owner. prefix removed above)
+            recipient_email: normalizedPropertyOwnerEmail, // Normalized to lowercase for consistent delivery
             recipient_name: application.hoa_properties.property_owner_name || 'Property Owner',
             recipient_user_id: ownerProfile?.id || null,
             notification_type: 'new_application',
@@ -247,7 +252,7 @@ export async function createNotifications(applicationId, supabaseClient) {
           };
 
           notifications.push(notification);
-          console.log(`[Notifications] Added notification for property owner: ${propertyOwnerEmail} (original: ${originalEmail}, hasOwnerPrefix: ${hasOwnerPrefix})`);
+          console.log(`[Notifications] Added notification for property owner: ${normalizedPropertyOwnerEmail} (original: ${originalEmail}, hasOwnerPrefix: ${hasOwnerPrefix})`);
         }
       }
     } else {
@@ -286,24 +291,28 @@ export async function createNotifications(applicationId, supabaseClient) {
             continue;
           }
           
+          // Normalize accounting user email to lowercase for consistent storage and delivery
+          const normalizedAccountingEmail = normalizeEmail(accountingUser.email);
+          console.log(`[Notifications] Normalized accounting user email: ${accountingUser.email} -> ${normalizedAccountingEmail}`);
+          
           // Skip if this accounting user is already being notified as a property owner
           const isAlreadyNotified = notifications.some(n => 
-            n.recipient_email?.toLowerCase() === accountingUser.email.toLowerCase()
+            normalizeEmail(n.recipient_email) === normalizedAccountingEmail
           );
           
           if (isAlreadyNotified) {
-            console.log(`[Notifications] Accounting user ${accountingUser.email} already notified as property owner, skipping duplicate`);
+            console.log(`[Notifications] Accounting user ${normalizedAccountingEmail} already notified as property owner, skipping duplicate`);
             continue;
           }
           
           const notification = {
             application_id: applicationId,
-            recipient_email: accountingUser.email,
+            recipient_email: normalizedAccountingEmail, // Normalized to lowercase for consistent delivery
             recipient_name: accountingUser.email.split('@')[0] || 'Accounting Staff',
             recipient_user_id: accountingUser.id,
             notification_type: 'new_application',
-            subject: `🔴 Settlement Request - ${application.property_address} | ${application.hoa_properties?.name || 'Unknown Property'}`,
-            message: `New ${appTypeDisplay.toLowerCase()} request received for ${application.property_address} in ${application.hoa_properties?.name || 'Unknown Property'}. Package: ${packageDisplay}. Submitter: ${application.submitter_name || 'Unknown'} (${application.submitter_email || 'Unknown'}).`,
+            subject: `${appTypeDisplay} Application - ${application.property_address} | ${application.hoa_properties?.name || 'Unknown Property'}`,
+            message: `New ${appTypeDisplay.toLowerCase()} application received for ${application.property_address} in ${application.hoa_properties?.name || 'Unknown Property'}. Package: ${packageDisplay}. Submitter: ${application.submitter_name || 'Unknown'} (${application.submitter_email || 'Unknown'}).`,
             status: 'unread',
             is_read: false,
             sent_at: now,
@@ -321,7 +330,7 @@ export async function createNotifications(applicationId, supabaseClient) {
           };
           
           notifications.push(notification);
-          console.log(`[Notifications] Added notification for accounting user: ${accountingUser.email}`);
+          console.log(`[Notifications] Added notification for accounting user: ${normalizedAccountingEmail}`);
         }
       } else {
         console.log(`[Notifications] No accounting users found for settlement request ${applicationId}`);
@@ -392,10 +401,10 @@ export async function createNotifications(applicationId, supabaseClient) {
             // Compare emails (handle owner. prefix and case sensitivity)
             // Support multiple property owner emails
             const propertyOwnerEmails = parseEmails(application.hoa_properties?.property_owner_email || '');
-            const notificationEmail = notification.recipient_email?.replace(/^owner\./, '') || '';
+            const notificationEmail = normalizeEmail(notification.recipient_email?.replace(/^owner\./, '') || '');
             const isPropertyOwner = propertyOwnerEmails.some(email => {
-              const cleanEmail = email.replace(/^owner\./, '');
-              return cleanEmail.toLowerCase() === notificationEmail.toLowerCase();
+              const cleanEmail = normalizeEmail(email.replace(/^owner\./, ''));
+              return cleanEmail === notificationEmail;
             });
             
             console.log(`[Notifications] Checking email: ${notificationEmail}, isPropertyOwner: ${isPropertyOwner}`);
@@ -408,10 +417,14 @@ export async function createNotifications(applicationId, supabaseClient) {
             // 2. Accounting users (for settlement requests only)
             // Staff/admin (non-accounting) will still receive in-app notifications, but no emails
             if ((isPropertyOwner && application.hoa_properties) || isAccountingNotification) {
+              // Normalize email before sending to ensure consistent delivery
+              const emailToSend = normalizeEmail(notification.recipient_email);
+              console.log(`[Notifications] Sending email to: ${emailToSend} (original: ${notification.recipient_email})`);
+              
               // Send notification email
               emailPromises.push(
                 sendPropertyManagerNotificationEmail({
-                  to: notification.recipient_email,
+                  to: emailToSend,
                   applicationId: applicationId,
                   propertyName: application.hoa_properties?.name || 'Unknown Property',
                   propertyAddress: application.property_address,
@@ -423,14 +436,16 @@ export async function createNotifications(applicationId, supabaseClient) {
                   linkedProperties: linkedProperties,
                   applicationType: application.application_type,
                 }).catch(emailError => {
-                  console.error(`Failed to send email to ${notification.recipient_email}:`, emailError);
+                  console.error(`[Notifications] Failed to send email to ${emailToSend}:`, emailError);
                   // Don't throw - continue with other emails
                   return { success: false, error: emailError.message };
                 })
               );
               
               if (isAccountingNotification) {
-                console.log(`[Notifications] Queued email for accounting user: ${notification.recipient_email}`);
+                console.log(`[Notifications] Queued email for accounting user: ${emailToSend}`);
+              } else {
+                console.log(`[Notifications] Queued email for property owner: ${emailToSend}`);
               }
             } else {
               // Staff/admin (non-accounting): Skip email, they only get in-app notifications

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
 import { formatDate } from '../../lib/timeUtils';
-import { sortDocumentsByOrder } from '../../lib/documentOrder';
+import { sortDocumentsByDisplayOrder } from '../../lib/documentOrder';
 import {
   Upload,
   FileText,
@@ -213,10 +213,10 @@ const PropertyFileManagement = ({ propertyId, propertyName, initialDocumentKey }
 
       if (error) throw error;
 
-      // Sort all documents by the defined order (property-specific order takes priority)
+      // Sort all documents by the display order (property-specific order for UI display)
       let sortedDocuments = [];
       if (documents && documents.length > 0) {
-        sortedDocuments = await sortDocumentsByOrder(documents.filter(doc => doc.file_path), propertyId, supabase);
+        sortedDocuments = await sortDocumentsByDisplayOrder(documents.filter(doc => doc.file_path), propertyId, supabase);
       }
 
       const grouped = {};
@@ -612,7 +612,7 @@ const PropertyFileManagement = ({ propertyId, propertyName, initialDocumentKey }
             <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
             <p className="text-xs text-blue-700 flex items-center gap-2">
               <GripVertical className="h-3 w-3" />
-              <span>Drag document sections to reorder them. This order will be used when sending emails.</span>
+              <span>Drag document sections to reorder them for display. Email sending order uses the default configuration.</span>
             </p>
           </div>
           )}

@@ -72,9 +72,9 @@ export default async function handler(req, res) {
         if (docsError) {
           console.error('Error fetching property documents:', docsError);
         } else if (propertyDocuments && propertyDocuments.length > 0) {
-          // Sort documents by defined order (property-specific order takes priority)
-          const { sortDocumentsByOrder } = await import('../../lib/documentOrder');
-          const sortedDocuments = await sortDocumentsByOrder(propertyDocuments, application.hoa_property_id, supabase);
+          // Sort documents by email order (default order, ignores property-specific order)
+          const { sortDocumentsByEmailOrder } = await import('../../lib/documentOrder');
+          const sortedDocuments = sortDocumentsByEmailOrder(propertyDocuments);
           
           console.log('Found', sortedDocuments.length, 'property documents to include');
           
@@ -118,19 +118,27 @@ export default async function handler(req, res) {
     // Use sendApprovalEmail from emailService for consistent email formatting
     const { sendApprovalEmail } = await import('../../lib/emailService');
     
-    await sendApprovalEmail({
-      to: application.submitter_email,
-      submitterName: application.submitter_name || 'Valued Customer',
-      propertyAddress: application.property_address,
-      hoaName: application.hoa_properties?.name || 'HOA',
-      pdfUrl: signedUrlData.signedUrl,
-      applicationId: applicationId,
-      downloadLinks: downloadLinks,
-      customSubject: `Lender Questionnaire Ready - ${application.property_address}`,
-      customTitle: 'Lender Questionnaire Ready',
-      customMessage: `Your lender questionnaire for <strong>${application.property_address}</strong> has been completed and is ready for download.`,
-      comments: application.comments || null
-    });
+    // Wrap email sending in try-catch so errors don't interrupt the process
+    try {
+      await sendApprovalEmail({
+        to: application.submitter_email,
+        submitterName: application.submitter_name || 'Valued Customer',
+        propertyAddress: application.property_address,
+        hoaName: application.hoa_properties?.name || 'HOA',
+        pdfUrl: signedUrlData.signedUrl,
+        applicationId: applicationId,
+        downloadLinks: downloadLinks,
+        customSubject: `Lender Questionnaire Ready - ${application.property_address}`,
+        customTitle: 'Lender Questionnaire Ready',
+        customMessage: `Your lender questionnaire for <strong>${application.property_address}</strong> has been completed and is ready for download.`,
+        comments: application.comments || null
+      });
+      console.log('Lender questionnaire email sent successfully');
+    } catch (emailError) {
+      console.error('Failed to send lender questionnaire email:', emailError);
+      // Don't throw - continue with status updates even if email fails
+      // The process should complete successfully even if email delivery fails
+    }
 
     // Notification creation removed - no longer needed
 

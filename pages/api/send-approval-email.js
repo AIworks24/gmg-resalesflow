@@ -206,9 +206,9 @@ export default async function handler(req, res) {
         if (docsError) {
           console.error('Error fetching property documents:', docsError);
         } else if (propertyDocuments && propertyDocuments.length > 0) {
-          // Sort documents by defined order (property-specific order takes priority)
-          const { sortDocumentsByOrder } = await import('../../lib/documentOrder');
-          const sortedDocuments = await sortDocumentsByOrder(propertyDocuments, application.hoa_property_id, supabase);
+          // Sort documents by email order (default order, ignores property-specific order)
+          const { sortDocumentsByEmailOrder } = await import('../../lib/documentOrder');
+          const sortedDocuments = sortDocumentsByEmailOrder(propertyDocuments);
           
           console.log('Found', sortedDocuments.length, 'property documents (excluding Public Offering Statement)');
           

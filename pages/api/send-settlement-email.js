@@ -224,9 +224,9 @@ export default async function handler(req, res) {
           if (docsError) {
             console.error('Error fetching property documents:', docsError);
           } else if (propertyDocuments && propertyDocuments.length > 0) {
-            // Sort documents by defined order (property-specific order takes priority)
-            const { sortDocumentsByOrder } = await import('../../lib/documentOrder');
-            const sortedDocuments = await sortDocumentsByOrder(propertyDocuments, fullApplication.hoa_property_id, supabase);
+            // Sort documents by email order (default order, ignores property-specific order)
+            const { sortDocumentsByEmailOrder } = await import('../../lib/documentOrder');
+            const sortedDocuments = sortDocumentsByEmailOrder(propertyDocuments);
             
             console.log('Found', sortedDocuments.length, 'property documents to include');
             
@@ -271,32 +271,45 @@ export default async function handler(req, res) {
     }
 
     // Send the settlement form email with PDF download link
-    const result = await sendSettlementFormEmail({
-      to,
-      applicationId,
-      settlementAgentName,
-      propertyAddress,
-      propertyState,
-      documentType,
-      formData,
-      managerName,
-      managerEmail,
-      managerPhone,
-      downloadLinks, // Pass PDF download links
-      comments: application?.comments || null
-    });
+    // Wrap email sending in try-catch so errors don't interrupt the process
+    let emailResult = null;
+    let emailError = null;
+    
+    try {
+      emailResult = await sendSettlementFormEmail({
+        to,
+        applicationId,
+        settlementAgentName,
+        propertyAddress,
+        propertyState,
+        documentType,
+        formData,
+        managerName,
+        managerEmail,
+        managerPhone,
+        downloadLinks, // Pass PDF download links
+        comments: application?.comments || null
+      });
 
-    console.log('Settlement email sent successfully:', {
-      applicationId,
-      to,
-      propertyState,
-      documentType
-    });
+      console.log('Settlement email sent successfully:', {
+        applicationId,
+        to,
+        propertyState,
+        documentType
+      });
+    } catch (error) {
+      emailError = error;
+      console.error('Failed to send settlement form email:', error);
+      // Don't throw - continue with response even if email fails
+      // The process should complete successfully even if email delivery fails
+    }
 
+    // Return success even if email failed - the form was processed successfully
     return res.status(200).json({ 
       success: true, 
-      message: 'Settlement form email sent successfully',
-      result 
+      message: emailError ? 'Settlement form processed successfully, but email delivery failed' : 'Settlement form email sent successfully',
+      result: emailResult,
+      emailError: emailError ? emailError.message : null
     });
 
   } catch (error) {

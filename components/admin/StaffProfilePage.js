@@ -19,6 +19,7 @@ import {
 import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
 import useAdminAuthStore from '../../stores/adminAuthStore';
 import { useUpdateUser } from '../../hooks/useUsers';
+import { parseEmails } from '../../lib/emailUtils';
 
 const StaffProfilePage = () => {
   const [showPassword, setShowPassword] = useState(false);
@@ -62,26 +63,27 @@ const StaffProfilePage = () => {
         const supabase = createClientComponentClient();
         
         // Query properties where property_owner_email contains user's email
-        // Support multiple emails (comma-separated)
+        // Support multiple emails (comma-separated or array)
         const normalizedEmail = userEmail.toLowerCase().trim();
         
-        // Query properties - use ilike to match any email in the comma-separated list
+        // Fetch all properties and filter client-side for accurate multi-email matching
+        // This ensures we properly handle comma-separated emails and arrays
         const { data, error } = await supabase
           .from('hoa_properties')
           .select('*')
-          .or(`property_owner_email.ilike.%${normalizedEmail}%,property_owner_email.ilike.%owner.${normalizedEmail}%`)
+          .is('deleted_at', null) // Only get non-deleted properties
           .order('name', { ascending: true });
 
         if (error) {
           console.error('Error fetching user properties:', error);
           setUserProperties([]);
         } else {
-          // Additional client-side filtering to ensure exact match
-          // Parse emails and check if user's email is in the list
+          // Client-side filtering to check if user's email is in the property owner email list
+          // This properly handles multi-email support (comma-separated strings or arrays)
           const matchingProperties = (data || []).filter(property => {
             if (!property.property_owner_email) return false;
             
-            // Parse emails from property (handles comma-separated)
+            // Parse emails from property (handles comma-separated strings and arrays)
             const propertyEmails = parseEmails(property.property_owner_email);
             
             // Check if user's email matches any of the property owner emails
@@ -333,7 +335,7 @@ const StaffProfilePage = () => {
               <Home className="w-6 h-6 text-blue-600" />
               <h2 className="text-2xl font-bold text-gray-900">My Properties</h2>
             </div>
-            <p className="text-gray-600">Properties owned by you</p>
+            <p className="text-gray-600">Properties managed by you</p>
           </div>
 
           {loadingProperties ? (

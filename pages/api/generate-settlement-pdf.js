@@ -283,7 +283,7 @@ export default async function handler(req, res) {
         <div class="company-info">
             <h2>Goodman Management Group</h2>
             <p>Professional HOA Management & Settlement Services</p>
-            <p>Phone: (804) 360-2115</p>
+            <p>Phone: (804) 404-8012</p>
             <p>Email: resales@gmgva.com</p>
         </div>
     </div>
@@ -302,7 +302,7 @@ export default async function handler(req, res) {
     <div class="footer">
         <p><strong>Goodman Management Group</strong></p>
         <p>This document was generated on ${new Date().toLocaleString()}</p>
-        <p>For questions or concerns, please contact GMG ResaleFlow at resales@gmgva.com or (804) 360-2115</p>
+        <p>For questions or concerns, please contact GMG ResaleFlow at resales@gmgva.com or (804) 404-8012</p>
     </div>
 </body>
 </html>`;

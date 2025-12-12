@@ -125,8 +125,9 @@ export default async function handler(req, res) {
       
       if (!groupError && propertyGroup) {
         propertyGroupData = propertyGroup;
-        // Use property group's property name and HOA name
-        propertyAddress = propertyGroup.property_name || propertyGroup.hoa_properties?.name || application.property_address;
+        // For multi-community: property address should remain the same for all properties
+        // DO NOT override propertyAddress - it should be the same across all property groups
+        // Only update the association name (hoaName) with the property group's property name
         hoaName = propertyGroup.hoa_properties?.name || propertyGroup.property_name || application.hoa_properties?.name || 'HOA';
         propertyLocation = propertyGroup.property_location || propertyGroup.hoa_properties?.location || application.hoa_properties?.location;
       }
@@ -187,10 +188,9 @@ export default async function handler(req, res) {
         if (docsError) {
           console.error('Error fetching property documents:', docsError);
         } else if (propertyDocuments && propertyDocuments.length > 0) {
-          // Sort documents by defined order (property-specific order takes priority)
-          const { sortDocumentsByOrder } = await import('../../lib/documentOrder');
-          // Use propertyIdForDocs which may be from property group or application
-          const sortedDocuments = await sortDocumentsByOrder(propertyDocuments, propertyIdForDocs, supabase);
+          // Sort documents by email order (default order, ignores property-specific order)
+          const { sortDocumentsByEmailOrder } = await import('../../lib/documentOrder');
+          const sortedDocuments = sortDocumentsByEmailOrder(propertyDocuments);
           
           console.log('Found', sortedDocuments.length, 'property documents to include');
           
@@ -237,21 +237,29 @@ export default async function handler(req, res) {
     // Use property group data if available (already loaded above)
     const { sendApprovalEmail } = await import('../../lib/emailService');
     
-    await sendApprovalEmail({
-      to: application.submitter_email,
-      applicationId: applicationId,
-      propertyAddress: propertyAddress,
-      pdfUrl: publicUrl,
-      submitterName: application.submitter_name || 'Valued Customer',
-      hoaName: hoaName,
-      downloadLinks: downloadLinks,
-      // Custom settlement-specific email content
-      isSettlement: true,
-      customSubject: `Thank You Submitting Your Request For ${propertyAddress}`,
-      customTitle: 'Thank you for submitting in your request',
-      customMessage: `Your document(s) for <strong>${propertyAddress}</strong> in <strong>${hoaName}</strong> are now ready for download.`,
-      comments: application.comments || null
-    });
+    // Wrap email sending in try-catch so errors don't interrupt the process
+    try {
+      await sendApprovalEmail({
+        to: application.submitter_email,
+        applicationId: applicationId,
+        propertyAddress: propertyAddress,
+        pdfUrl: publicUrl,
+        submitterName: application.submitter_name || 'Valued Customer',
+        hoaName: hoaName,
+        downloadLinks: downloadLinks,
+        // Custom settlement-specific email content
+        isSettlement: true,
+        customSubject: `Thank You Submitting Your Request For ${propertyAddress}`,
+        customTitle: 'Thank you for submitting in your request',
+        customMessage: `Your document(s) for <strong>${propertyAddress}</strong> in <strong>${hoaName}</strong> are now ready for download.`,
+        comments: application.comments || null
+      });
+      console.log('Settlement approval email sent successfully');
+    } catch (emailError) {
+      console.error('Failed to send settlement approval email:', emailError);
+      // Don't throw - continue with status updates even if email fails
+      // The process should complete successfully even if email delivery fails
+    }
 
     // Notification creation removed - no longer needed
 

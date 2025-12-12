@@ -265,14 +265,13 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
           // Override application's hoa_properties with the property group's property
           if (propertyData) {
             appData.hoa_properties = propertyData;
-            // Also override property_name and property_location from the group
-            if (groupData.property_name) {
-              appData.property_address = groupData.property_name;
-            }
+            // For multi-community: property address should remain the same for all properties
+            // DO NOT override property_address - it should be the same across all property groups
+            // Only update property location if available
             if (groupData.property_location) {
               propertyData.location = groupData.property_location;
             }
-            // Override HOA name with the property group's property name
+            // Override HOA name (association name) with the property group's property name
             if (groupData.property_name) {
               appData.hoa_properties.name = groupData.property_name;
             }
@@ -284,16 +283,8 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
               ...(appData.hoa_properties || {})
             };
             appData.hoa_properties = propertyData;
-            appData.property_address = groupData.property_name;
-          } else if (groupData.property_name) {
-            // If no hoa_properties in group, create a minimal property object from group data
-            propertyData = {
-              name: groupData.property_name,
-              location: groupData.property_location || appData.hoa_properties?.location,
-              ...appData.hoa_properties
-            };
-            appData.hoa_properties = propertyData;
-            appData.property_address = groupData.property_name;
+            // For multi-community: property address should remain the same for all properties
+            // DO NOT override property_address
           }
         }
       }
@@ -415,10 +406,8 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
     // Use provided state or fallback to component state
     const effectiveState = stateToUse || propertyState || 'VA';
     
-    // Get HOA properties name from nested object or fallback
-    const hoaName = appData.hoa_properties?.name || propertyData?.name || appData.property_address || 'N/A';
-    const unitNumber = appData.unit_number ? ` ${appData.unit_number}` : '';
-    const fullPropertyAddress = `${appData.property_address || ''}${unitNumber}`;
+    // Get property address (without unit number concatenation)
+    const propertyAddress = (appData.property_address || '').trim();
     
     // Get property manager details from propertyData (preferred) or hoa_properties nested object
     const propertyManager = propertyData || appData.hoa_properties || {};
@@ -426,8 +415,9 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
     // Prepare application data for auto-filling based on new JSON structure
     const applicationData = {
       // Property Information
-      propertyAddress: fullPropertyAddress.trim(),
-      associationName: hoaName,
+      propertyAddress: propertyAddress,
+      // Association Name should be the same as Property Address in settlement form
+      associationName: propertyAddress,
       // Only include parcelId for NC forms (don't set to undefined, just omit for VA)
       ...(effectiveState === 'NC' && { parcelId: propertyManager.parcel_id || '' }),
       

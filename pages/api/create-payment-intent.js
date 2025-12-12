@@ -11,7 +11,7 @@ export default async function handler(req, res) {
     const useTestMode = getTestModeFromRequest(req);
     const stripe = getServerStripe(req);
     
-    const { packageType, paymentMethod, applicationId, formData, paymentMethodId, amount, testMode } = req.body;
+    const { packageType, paymentMethod, applicationId, formData, paymentMethodId, amount, testMode, propertyCount } = req.body;
 
     // Also check testMode from body
     const finalTestMode = useTestMode || testMode === true;
@@ -31,6 +31,88 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Invalid amount' });
     }
 
+    // Determine property item count for transfer calculation
+    // Priority: 1) propertyCount from request body, 2) fetch from database, 3) default to 1
+    let propertyItemCount = 1; // Default to 1 for single property
+    
+    if (propertyCount && typeof propertyCount === 'number' && propertyCount > 0) {
+      // Use propertyCount from request body if provided
+      propertyItemCount = propertyCount;
+    } else if (applicationId) {
+      // Try to fetch property information from database
+      try {
+        const { createClient } = require('@supabase/supabase-js');
+        const supabase = createClient(
+          process.env.NEXT_PUBLIC_SUPABASE_URL,
+          process.env.SUPABASE_SERVICE_ROLE_KEY
+        );
+        
+        // Fetch application with property information
+        const { data: application, error: appError } = await supabase
+          .from('applications')
+          .select(`
+            hoa_property_id,
+            hoa_properties (
+              id,
+              is_multi_community
+            )
+          `)
+          .eq('id', applicationId)
+          .single();
+        
+        if (!appError && application?.hoa_properties) {
+          const hoaProperty = application.hoa_properties;
+          
+          if (hoaProperty.is_multi_community) {
+            // For multi-community, calculate pricing to get accurate property item count
+            // Only count properties that actually have a charge (total > 0)
+            try {
+              const { calculateMultiCommunityPricing } = require('../../lib/multiCommunityUtils');
+              const { determineApplicationType } = require('../../lib/applicationTypes');
+              
+              // Determine application type (need submitterType and publicOffering from formData)
+              const applicationType = determineApplicationType(
+                formData?.submitterType || 'standard',
+                hoaProperty,
+                formData?.publicOffering || false
+              );
+              
+              // Calculate multi-community pricing to get accurate association count
+              const multiCommunityPricing = await calculateMultiCommunityPricing(
+                hoaProperty.id,
+                packageType,
+                applicationType,
+                supabase,
+                formData?.submitterType,
+                formData?.publicOffering
+              );
+              
+              // Count only associations that have a charge (total > 0)
+              if (multiCommunityPricing?.associations) {
+                propertyItemCount = multiCommunityPricing.associations.filter(assoc => assoc.total > 0).length;
+              } else {
+                // Fallback: count all properties if pricing calculation fails
+                const { getAllPropertiesForTransaction } = require('../../lib/multiCommunityUtils');
+                const allProperties = await getAllPropertiesForTransaction(hoaProperty.id, supabase);
+                propertyItemCount = allProperties.length;
+              }
+            } catch (pricingError) {
+              // Fallback: count all properties if pricing calculation fails
+              console.warn(`[Stripe Connect] Could not calculate multi-community pricing, using property count:`, pricingError.message);
+              const { getAllPropertiesForTransaction } = require('../../lib/multiCommunityUtils');
+              const allProperties = await getAllPropertiesForTransaction(hoaProperty.id, supabase);
+              propertyItemCount = allProperties.length;
+            }
+          } else {
+            propertyItemCount = 1;
+          }
+        }
+      } catch (error) {
+        console.warn(`[Stripe Connect] Could not determine property count from database, defaulting to 1:`, error.message);
+        // Default to 1 if we can't determine
+      }
+    }
+
     // Create payment intent
     const paymentIntentData = {
       amount: totalAmount,
@@ -46,14 +128,18 @@ export default async function handler(req, res) {
         buyerName: formData?.buyerName || '',
         sellerName: formData?.sellerName || '',
         salePrice: formData?.salePrice || '',
-        closingDate: formData?.closingDate || ''
+        closingDate: formData?.closingDate || '',
+        propertyCount: propertyItemCount.toString()
       },
     };
 
     // Add Stripe Connect transfer for transactions >= $200
-    // Transfer $21 to connected account, platform keeps the rest
+    // Transfer $21 per property item to connected account, platform keeps the rest
     const TRANSFER_THRESHOLD_CENTS = 20000; // $200.00
-    const TRANSFER_AMOUNT_CENTS = 2100; // $21.00
+    const TRANSFER_AMOUNT_PER_ITEM_CENTS = 2100; // $21.00 per property item
+    
+    // Calculate total transfer amount: $21 × number of property items
+    const totalTransferAmountCents = TRANSFER_AMOUNT_PER_ITEM_CENTS * propertyItemCount;
     
     if (totalAmount >= TRANSFER_THRESHOLD_CENTS) {
       const connectedAccountId = getConnectedAccountId(finalTestMode);
@@ -62,11 +148,11 @@ export default async function handler(req, res) {
         // Add transfer_data to payment intent
         paymentIntentData.transfer_data = {
           destination: connectedAccountId,
-          amount: TRANSFER_AMOUNT_CENTS, // $21 to connected account
+          amount: totalTransferAmountCents, // $21 × propertyItemCount to connected account
         };
         
-        console.log(`[Stripe Connect] PaymentIntent - Transfer enabled: $${(TRANSFER_AMOUNT_CENTS / 100).toFixed(2)} to connected account ${connectedAccountId}`);
-        console.log(`[Stripe Connect] PaymentIntent - Total amount: $${(totalAmount / 100).toFixed(2)}, Platform keeps: $${((totalAmount - TRANSFER_AMOUNT_CENTS) / 100).toFixed(2)}`);
+        console.log(`[Stripe Connect] PaymentIntent - Transfer enabled: $${(totalTransferAmountCents / 100).toFixed(2)} ($${(TRANSFER_AMOUNT_PER_ITEM_CENTS / 100).toFixed(2)} × ${propertyItemCount} property items) to connected account ${connectedAccountId}`);
+        console.log(`[Stripe Connect] PaymentIntent - Total amount: $${(totalAmount / 100).toFixed(2)}, Platform keeps: $${((totalAmount - totalTransferAmountCents) / 100).toFixed(2)}`);
       } else {
         console.warn(`[Stripe Connect] PaymentIntent - Transfer threshold met ($${(totalAmount / 100).toFixed(2)} >= $${(TRANSFER_THRESHOLD_CENTS / 100).toFixed(2)}), but connected account ID not configured`);
       }

@@ -521,9 +521,6 @@ const NotificationBell = ({ user, userEmail }) => {
                             }`}>
                               {notification.subject}
                             </p>
-                            {!notification.is_read && (
-                              <span className="flex-shrink-0 w-2 h-2 bg-blue-600 rounded-full mt-1.5" />
-                            )}
                           </div>
                           <p className="text-sm text-gray-600 mt-1 line-clamp-2">
                             {notification.message}

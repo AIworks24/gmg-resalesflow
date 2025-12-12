@@ -36,17 +36,24 @@ export default async function handler(req, res) {
           });
         }
 
-        result = await sendApplicationSubmissionEmail({
-          to: customerEmail, // Use the submitter email from application data
-          applicationId,
-          customerName,
-          propertyAddress,
-          packageType,
-          totalAmount,
-          hoaName,
-          submitterType,
-          applicationType,
-        });
+        // Wrap email sending in try-catch so errors don't interrupt the process
+        try {
+          result = await sendApplicationSubmissionEmail({
+            to: customerEmail, // Use the submitter email from application data
+            applicationId,
+            customerName,
+            propertyAddress,
+            packageType,
+            totalAmount,
+            hoaName,
+            submitterType,
+            applicationType,
+          });
+        } catch (emailError) {
+          console.error('Failed to send application submission email:', emailError);
+          // Don't throw - set result to indicate email failure but continue
+          result = { success: false, error: emailError.message };
+        }
         break;
 
       case 'payment_confirmation':
@@ -70,7 +77,14 @@ export default async function handler(req, res) {
           return res.status(403).json({ error: 'Forbidden - Admin access required for payment confirmations' });
         }
 
-        result = await sendPaymentConfirmationEmail(emailData);
+        // Wrap email sending in try-catch so errors don't interrupt the process
+        try {
+          result = await sendPaymentConfirmationEmail(emailData);
+        } catch (emailError) {
+          console.error('Failed to send payment confirmation email:', emailError);
+          // Don't throw - set result to indicate email failure but continue
+          result = { success: false, error: emailError.message };
+        }
         break;
 
       case 'approval':
@@ -83,10 +97,15 @@ export default async function handler(req, res) {
         return res.status(400).json({ error: 'Invalid email type' });
     }
 
+    // Return success even if email failed - the process completed
+    const emailSucceeded = result?.success !== false;
     return res.status(200).json({ 
       success: true, 
-      message: `${emailType} email sent successfully`,
-      result 
+      message: emailSucceeded 
+        ? `${emailType} email sent successfully`
+        : `Process completed, but ${emailType} email delivery failed`,
+      result,
+      emailSent: emailSucceeded
     });
 
   } catch (error) {

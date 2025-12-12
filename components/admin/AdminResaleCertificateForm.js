@@ -24,7 +24,7 @@ const AdminResaleCertificateForm = ({
       name: '',
       company: 'Goodman Management Group',
       address: '',
-      phone: '(804) 360-2115',
+      phone: '(804) 404-8012',
       email: 'resales@gmgva.com'
     },
     managingAgent: {

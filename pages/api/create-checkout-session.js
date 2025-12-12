@@ -168,8 +168,11 @@ export default async function handler(req, res) {
       };
 
       // Add Stripe Connect transfer for transactions >= $200
+      // Public offering is always a single property item, so $21 per item = $21 total
       const TRANSFER_THRESHOLD_CENTS = 20000; // $200.00
-      const TRANSFER_AMOUNT_CENTS = 2100; // $21.00
+      const TRANSFER_AMOUNT_PER_ITEM_CENTS = 2100; // $21.00 per property item
+      const publicOfferingPropertyItemCount = 1; // Public offering is always 1 property item
+      const totalTransferAmountCents = TRANSFER_AMOUNT_PER_ITEM_CENTS * publicOfferingPropertyItemCount;
       
       if (publicOfferingTotalCents >= TRANSFER_THRESHOLD_CENTS) {
         const connectedAccountId = getConnectedAccountId(finalTestMode);
@@ -178,12 +181,12 @@ export default async function handler(req, res) {
           publicOfferingSessionData.payment_intent_data = {
             transfer_data: {
               destination: connectedAccountId,
-              amount: TRANSFER_AMOUNT_CENTS, // $21 to connected account
+              amount: totalTransferAmountCents, // $21 × 1 property item to connected account
             },
           };
           
-          console.log(`[Stripe Connect] Public Offering - Transfer enabled: $${(TRANSFER_AMOUNT_CENTS / 100).toFixed(2)} to connected account ${connectedAccountId}`);
-          console.log(`[Stripe Connect] Public Offering - Total amount: $${(publicOfferingTotalCents / 100).toFixed(2)}, Platform keeps: $${((publicOfferingTotalCents - TRANSFER_AMOUNT_CENTS) / 100).toFixed(2)}`);
+          console.log(`[Stripe Connect] Public Offering - Transfer enabled: $${(totalTransferAmountCents / 100).toFixed(2)} ($${(TRANSFER_AMOUNT_PER_ITEM_CENTS / 100).toFixed(2)} × ${publicOfferingPropertyItemCount} property item) to connected account ${connectedAccountId}`);
+          console.log(`[Stripe Connect] Public Offering - Total amount: $${(publicOfferingTotalCents / 100).toFixed(2)}, Platform keeps: $${((publicOfferingTotalCents - totalTransferAmountCents) / 100).toFixed(2)}`);
         } else {
           console.warn(`[Stripe Connect] Public Offering - Transfer threshold met, but connected account ID not configured`);
         }
@@ -565,9 +568,21 @@ export default async function handler(req, res) {
     };
 
     // Add Stripe Connect transfer for transactions >= $200
-    // Transfer $21 to connected account, platform keeps the rest
+    // Transfer $21 per property item to connected account, platform keeps the rest
     const TRANSFER_THRESHOLD_CENTS = 20000; // $200.00
-    const TRANSFER_AMOUNT_CENTS = 2100; // $21.00
+    const TRANSFER_AMOUNT_PER_ITEM_CENTS = 2100; // $21.00 per property item
+    
+    // Calculate number of property items in this transaction
+    // For multi-community: count all properties (associations)
+    // For single property: count as 1 property item
+    let propertyItemCount = 1; // Default to 1 for single property
+    if (isMultiCommunity && multiCommunityPricing) {
+      // Count only associations that have a charge (total > 0)
+      propertyItemCount = multiCommunityPricing.associations.filter(assoc => assoc.total > 0).length;
+    }
+    
+    // Calculate total transfer amount: $21 × number of property items
+    const totalTransferAmountCents = TRANSFER_AMOUNT_PER_ITEM_CENTS * propertyItemCount;
     
     if (totalAmountCents >= TRANSFER_THRESHOLD_CENTS) {
       const connectedAccountId = getConnectedAccountId(finalTestMode);
@@ -577,12 +592,12 @@ export default async function handler(req, res) {
         sessionData.payment_intent_data = {
           transfer_data: {
             destination: connectedAccountId,
-            amount: TRANSFER_AMOUNT_CENTS, // $21 to connected account
+            amount: totalTransferAmountCents, // $21 × propertyItemCount to connected account
           },
         };
         
-        console.log(`[Stripe Connect] Transfer enabled: $${(TRANSFER_AMOUNT_CENTS / 100).toFixed(2)} to connected account ${connectedAccountId}`);
-        console.log(`[Stripe Connect] Total amount: $${(totalAmountCents / 100).toFixed(2)}, Platform keeps: $${((totalAmountCents - TRANSFER_AMOUNT_CENTS) / 100).toFixed(2)}`);
+        console.log(`[Stripe Connect] Transfer enabled: $${(totalTransferAmountCents / 100).toFixed(2)} ($${(TRANSFER_AMOUNT_PER_ITEM_CENTS / 100).toFixed(2)} × ${propertyItemCount} property items) to connected account ${connectedAccountId}`);
+        console.log(`[Stripe Connect] Total amount: $${(totalAmountCents / 100).toFixed(2)}, Platform keeps: $${((totalAmountCents - totalTransferAmountCents) / 100).toFixed(2)}`);
       } else {
         console.warn(`[Stripe Connect] Transfer threshold met ($${(totalAmountCents / 100).toFixed(2)} >= $${(TRANSFER_THRESHOLD_CENTS / 100).toFixed(2)}), but connected account ID not configured`);
       }
