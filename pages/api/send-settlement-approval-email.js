@@ -125,9 +125,8 @@ export default async function handler(req, res) {
       
       if (!groupError && propertyGroup) {
         propertyGroupData = propertyGroup;
-        // For multi-community: property address should remain the same for all properties
-        // DO NOT override propertyAddress - it should be the same across all property groups
-        // Only update the association name (hoaName) with the property group's property name
+        // Use property group's property name and HOA name
+        propertyAddress = propertyGroup.property_name || propertyGroup.hoa_properties?.name || application.property_address;
         hoaName = propertyGroup.hoa_properties?.name || propertyGroup.property_name || application.hoa_properties?.name || 'HOA';
         propertyLocation = propertyGroup.property_location || propertyGroup.hoa_properties?.location || application.hoa_properties?.location;
       }

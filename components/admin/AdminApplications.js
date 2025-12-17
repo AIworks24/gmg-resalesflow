@@ -2675,25 +2675,25 @@ const AdminApplications = ({ userRole }) => {
         {/* Applications Table (Desktop) */}
         <div className='hidden sm:block bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden'>
           <div className='overflow-x-auto'>
-            <table className='w-full'>
+            <table className='w-full table-fixed'>
               <thead className='bg-gray-50/80 border-b border-gray-100'>
                 <tr>
-                  <th className='px-6 py-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider'>
+                  <th className='w-[30%] px-6 py-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider'>
                     Property / Applicant
                   </th>
-                  <th className='px-6 py-4 text-center text-xs font-semibold text-gray-500 uppercase tracking-wider'>
+                  <th className='w-[15%] px-6 py-4 text-center text-xs font-semibold text-gray-500 uppercase tracking-wider'>
                     Type
                   </th>
-                  <th className='px-6 py-4 text-center text-xs font-semibold text-gray-500 uppercase tracking-wider'>
+                  <th className='w-[15%] px-6 py-4 text-center text-xs font-semibold text-gray-500 uppercase tracking-wider'>
                     Status
                   </th>
-                  <th className='px-6 py-4 text-center text-xs font-semibold text-gray-500 uppercase tracking-wider'>
+                  <th className='w-[15%] px-6 py-4 text-center text-xs font-semibold text-gray-500 uppercase tracking-wider'>
                     Date Submitted
                   </th>
-                  <th className='px-6 py-4 text-center text-xs font-semibold text-gray-500 uppercase tracking-wider'>
+                  <th className='w-[15%] px-6 py-4 text-center text-xs font-semibold text-gray-500 uppercase tracking-wider'>
                     Assignee
                   </th>
-                  <th className='px-6 py-4 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider'>
+                  <th className='w-[10%] px-6 py-4 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider'>
                     Actions
                   </th>
                 </tr>
@@ -2703,7 +2703,7 @@ const AdminApplications = ({ userRole }) => {
                   const workflowStep = getWorkflowStep(app);
                   return (
                     <tr key={app.id} className='hover:bg-blue-50/30 transition-colors'>
-                      <td className='px-6 py-4 whitespace-nowrap'>
+                      <td className='px-6 py-4'>
                         <div className='flex items-center gap-3'>
                           <Building className='w-5 h-5 text-gray-400' />
                           <div>
@@ -2719,7 +2719,7 @@ const AdminApplications = ({ userRole }) => {
                         </div>
                       </td>
 
-                      <td className='px-6 py-4 whitespace-nowrap text-center'>
+                      <td className='px-6 py-4 text-center'>
                         <div className='flex justify-center'>
                           {(() => {
                             const appType = app.application_type || 'single_property';
@@ -2767,13 +2767,13 @@ const AdminApplications = ({ userRole }) => {
                         </div>
                       </td>
 
-                      <td className='px-6 py-4 whitespace-nowrap text-center'>
+                      <td className='px-6 py-4 text-center'>
                         <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${workflowStep.color}`}>
                           Step {workflowStep.step}: {workflowStep.text}
                         </span>
                       </td>
 
-                      <td className='px-6 py-4 whitespace-nowrap text-sm text-gray-900'>
+                      <td className='px-6 py-4 text-sm text-gray-900'>
                         {app.submitted_at ? (
                           <div className='space-y-1 text-center'>
                             <div className='flex items-center justify-center gap-1'>
@@ -2799,7 +2799,7 @@ const AdminApplications = ({ userRole }) => {
                         )}
                       </td>
 
-                      <td className='px-6 py-4 whitespace-nowrap text-sm text-gray-900'>
+                      <td className='px-6 py-4 text-sm text-gray-900'>
                         {app.assigned_to ? (
                           <div className='flex items-center justify-center gap-1'>
                             <User className='w-3 h-3 text-gray-400' />
@@ -2817,7 +2817,7 @@ const AdminApplications = ({ userRole }) => {
                         )}
                       </td>
 
-                      <td className='px-6 py-4 whitespace-nowrap text-sm font-medium text-right'>
+                      <td className='px-6 py-4 text-sm font-medium text-right'>
                         <button
                           onClick={() => handleApplicationClick(app)}
                           className='inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 transition-colors'
@@ -4091,7 +4091,7 @@ const AdminApplications = ({ userRole }) => {
                     onClick={handleCloseModal}
                     className='px-8 py-2.5 bg-white border border-gray-300 rounded-xl text-gray-700 hover:bg-gray-50 font-semibold shadow-sm transition-all'
                   >
-                    Close Modal
+                    Close
                   </button>
                 </div>
               </div>

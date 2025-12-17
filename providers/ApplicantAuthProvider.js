@@ -11,7 +11,8 @@ export function ApplicantAuthProvider({ children }) {
     isLoading, 
     isInitialized, 
     isAuthenticated, 
-    user, 
+    user,
+    profile,
     applications 
   } = useApplicantAuthStore();
 
@@ -26,20 +27,27 @@ export function ApplicantAuthProvider({ children }) {
     if (!isInitialized || isLoading) return;
 
     const currentPath = router.pathname;
-    const isPublicRoute = ['/', '/login', '/signup', '/about', '/contact', '/reset-password', '/auth/callback'].includes(currentPath);
+    // Home page and auth pages are public - allow unverified users
+    const isPublicRoute = ['/', '/signup', '/about', '/contact', '/reset-password', '/auth/callback', '/auth/confirm-email', '/auth/verification-pending', '/auth/auto-login'].includes(currentPath);
     const isAdminRoute = currentPath.startsWith('/admin');
     
     // Don't handle auth for admin routes (handled by AdminAuthProvider)
     if (isAdminRoute) return;
 
-    // Don't redirect from auth callback - it handles its own flow
-    if (currentPath === '/auth/callback') return;
+    // Don't redirect from auth callback, confirm-email, or verification-pending - they handle their own flow
+    if (currentPath === '/auth/callback' || currentPath === '/auth/confirm-email' || currentPath === '/auth/verification-pending' || currentPath === '/auth/auto-login') return;
 
-    // For protected applicant routes, redirect to login if not authenticated
-    if (!isPublicRoute && !isAuthenticated()) {
-      router.push('/login');
+    const isAuthenticatedUser = isAuthenticated();
+
+    // For protected applicant routes (not home page), redirect to root if not authenticated
+    // User can sign in from the modal on the home page
+    if (!isPublicRoute && !isAuthenticatedUser) {
+      router.push('/');
     }
-  }, [router, isInitialized, isLoading, isAuthenticated]);
+
+    // NOTE: Email verification is now handled per-feature using useRequireVerifiedEmail hook
+    // This allows unverified users to browse the site but blocks specific actions
+  }, [router, isInitialized, isLoading, isAuthenticated, profile]);
 
   // Show loading spinner while initializing (only for non-admin routes)
   if ((!isInitialized || isLoading) && !router.pathname.startsWith('/admin')) {
@@ -83,7 +91,7 @@ export function withApplicantAuth(Component) {
 
     useEffect(() => {
       if (!isLoading && !isAuthenticated) {
-        router.push('/login');
+        router.push('/');
       }
     }, [isAuthenticated, isLoading, router]);
 

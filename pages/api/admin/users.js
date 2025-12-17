@@ -55,14 +55,12 @@ export default async function handler(req, res) {
     const from = (pageNum - 1) * limitNum;
     const to = from + limitNum - 1;
 
-    // Build query - exclude soft-deleted users
-    // Professional approach: Check both active flag and deleted_at for efficiency
-    // The active boolean is faster for filtering, deleted_at provides audit trail
+    // Build query - get all users
+    // Note: Simplified to show all users regardless of active/deleted_at status
+    // This ensures compatibility with various profile table schemas
     let query = supabase
       .from('profiles')
-      .select('*', { count: 'exact' })
-      .eq('active', true) // Only get active users (faster than checking deleted_at)
-      .is('deleted_at', null); // Double-check: also ensure deleted_at is null
+      .select('*', { count: 'exact' });
 
     // Apply search filter if provided
     if (searchTerm) {

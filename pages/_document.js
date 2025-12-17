@@ -19,11 +19,13 @@ export default function Document() {
         {/* Web Manifest */}
         <link rel="manifest" href="/site.webmanifest" />
       </Head>
-      <body>
+      <body suppressHydrationWarning>
         <Main />
         <NextScript />
       </body>
     </Html>
   )
 }
+
+
 

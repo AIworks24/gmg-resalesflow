@@ -3,12 +3,9 @@ import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
 
 // Helper function to determine user role based on email domain
 const determineUserRole = (email) => {
-  if (!email) return 'user';
-  const emailLower = email.toLowerCase();
-  if (emailLower.endsWith('@resales.gmgva.com') || emailLower.endsWith('@gmgva.com')) {
-    return 'external';
-  }
-  return 'user';
+  if (!email) return 'requester';
+  // All users are now 'requester' regardless of email domain
+  return 'requester';
 };
 
 const useApplicantAuthStore = create((set, get) => ({
@@ -31,7 +28,7 @@ const useApplicantAuthStore = create((set, get) => ({
         // Get user profile
         let { data: profile, error: profileError } = await supabase
           .from('profiles')
-          .select('id, email, first_name, last_name, role, created_at, updated_at')
+          .select('id, email, first_name, last_name, role, email_confirmed_at, created_at, updated_at')
           .eq('id', user.id)
           .single();
         
@@ -44,10 +41,11 @@ const useApplicantAuthStore = create((set, get) => ({
               id: user.id,
               email: user.email,
               role: userRole,
+              email_confirmed_at: null, // New users need to confirm email
               created_at: new Date().toISOString(),
               updated_at: new Date().toISOString()
             }])
-            .select('id, email, first_name, last_name, role, created_at, updated_at')
+            .select('id, email, first_name, last_name, role, email_confirmed_at, created_at, updated_at')
             .single();
           
           if (createError) {
@@ -59,8 +57,41 @@ const useApplicantAuthStore = create((set, get) => ({
           console.error('Error loading profile:', profileError);
         }
         
-        // Allow applicant roles: external, realtor, user, or no role
-        if (!profile?.role || ['user', 'external', 'realtor'].includes(profile.role)) {
+        // Check if email is confirmed (for custom confirmation process)
+        // Handle existing users: auto-confirm if created > 1 day ago (backward compatibility)
+        if (profile && profile.email_confirmed_at === null) {
+          // Check if this is an existing account (created before confirmation system was implemented)
+          const createdAt = profile.created_at ? new Date(profile.created_at) : null;
+          const oneDayAgo = new Date();
+          oneDayAgo.setDate(oneDayAgo.getDate() - 1);
+          
+          if (createdAt && createdAt < oneDayAgo) {
+            // Existing user - auto-confirm their email with their creation date
+            const { error: confirmError } = await supabase
+              .from('profiles')
+              .update({ email_confirmed_at: profile.created_at })
+              .eq('id', profile.id);
+            
+            if (!confirmError) {
+              // Update profile in state
+              profile.email_confirmed_at = profile.created_at;
+            }
+          } else {
+            // New user without email confirmation - redirect to verification pending
+            // Don't sign out - just let the provider redirect them
+            set({
+              user,
+              profile,
+              isLoading: false,
+              isInitialized: true,
+            });
+            return;
+          }
+        }
+        // If email_confirmed_at is not null, allow access
+        
+        // Allow applicant roles: requester, realtor, or no role
+        if (!profile?.role || ['requester', 'realtor'].includes(profile.role)) {
           set({
             user,
             profile,
@@ -99,78 +130,75 @@ const useApplicantAuthStore = create((set, get) => ({
   },
 
   signUp: async (email, password, userData) => {
-    const supabase = createClientComponentClient();
-    
     try {
-      // Get the base URL for email confirmation redirect
-      const baseUrl = typeof window !== 'undefined' 
-        ? window.location.origin 
-        : process.env.NEXT_PUBLIC_SITE_URL || process.env.NEXT_PUBLIC_APP_URL || '';
-      
-      // Add timeout wrapper (30 seconds for signup with email sending)
-      const signUpPromise = supabase.auth.signUp({
-        email,
-        password,
-        options: {
-          data: userData,
-          emailRedirectTo: `${baseUrl}/auth/callback`,
+      // Use our custom signup API endpoint that prevents Supabase from sending emails
+      // and uses our own custom email template instead
+      const response = await fetch('/api/auth/custom-signup', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
         },
+        body: JSON.stringify({
+          email,
+          password,
+          first_name: userData?.first_name || '',
+          last_name: userData?.last_name || '',
+        }),
       });
 
-      const timeoutPromise = new Promise((_, reject) => 
-        setTimeout(() => reject(new Error('Request timeout - The signup request took too long. This may be due to email service delays. Please try again in a moment.')), 30000)
-      );
+      const data = await response.json();
 
-      const { data, error } = await Promise.race([signUpPromise, timeoutPromise]);
-
-      if (error) {
+      if (!response.ok) {
         // Improve error messages
-        let errorMessage = error.message;
-        if (error.message.includes('already registered') || error.message.includes('already exists') || error.message.includes('User already registered')) {
+        let errorMessage = data.error || 'Sign up failed. Please try again.';
+        if (errorMessage.includes('already registered') || errorMessage.includes('already exists')) {
           errorMessage = 'This email is already registered. Please sign in instead.';
-        } else if (error.message.includes('invalid email') || error.message.includes('Invalid email')) {
+        } else if (errorMessage.includes('invalid email')) {
           errorMessage = 'Please enter a valid email address.';
-        } else if (error.message.includes('Password')) {
+        } else if (errorMessage.includes('Password')) {
           errorMessage = 'Password must be at least 6 characters long.';
-        } else if (error.message.includes('network') || error.message.includes('fetch') || error.message.includes('timeout') || error.message.includes('upstream')) {
-          errorMessage = 'The signup request timed out. This may be due to email service delays. Please wait a moment and try again.';
-        } else if (error.message.includes('rate limit') || error.message.includes('over_email_send_rate_limit')) {
-          errorMessage = 'Email sending rate limit exceeded. Please wait a few minutes and try again, or contact support if this persists.';
+        } else if (errorMessage.includes('network') || errorMessage.includes('fetch') || errorMessage.includes('timeout')) {
+          errorMessage = 'Network error. Please check your connection and try again.';
         }
-        throw new Error(errorMessage);
+        return { success: false, error: errorMessage };
       }
 
-      if (data.user) {
-        // Determine role based on email domain
-        const userRole = determineUserRole(data.user.email);
-        // Create profile for applicant
-        const { error: profileError } = await supabase
-          .from('profiles')
-          .insert({
-            id: data.user.id,
-            email: data.user.email,
-            role: userRole,
-            ...userData,
+      if (data.success) {
+        // User is created and logged in, but needs to verify email to access full features
+        if (data.session) {
+          // Set the session in Supabase client
+          const supabase = createClientComponentClient();
+          await supabase.auth.setSession({
+            access_token: data.session.access_token,
+            refresh_token: data.session.refresh_token,
           });
-
-        if (profileError) {
-          console.error('Profile creation error:', profileError);
-          // Don't fail signup if profile creation fails - user can still sign in
+          
+          // Set user and profile in store
+          set({
+            user: data.session.user,
+            profile: {
+              id: data.user.id,
+              email: data.user.email,
+              email_confirmed_at: null, // Not confirmed yet
+            },
+            isLoading: false,
+          });
         }
-
-        set({
-          user: data.user,
-          isLoading: false,
-        });
         
-        return { success: true, user: data.user };
+        return { 
+          success: true, 
+          user: data.session?.user || null,
+          userId: data.user?.id, 
+          requiresEmailVerification: data.requiresEmailVerification,
+          message: data.message 
+        };
       }
+
+      return { success: false, error: data.error || 'Sign up failed. Please try again.' };
     } catch (error) {
-      // Handle timeout and network errors specifically
-      let errorMessage = error.message;
-      if (error.message.includes('timeout') || error.message.includes('upstream') || error.message.includes('Request timeout')) {
-        errorMessage = 'The signup request timed out. This may be due to email service delays. Please wait a moment and try again.';
-      } else if (error.message.includes('network') || error.message.includes('fetch')) {
+      // Handle network errors
+      let errorMessage = error.message || 'An unexpected error occurred. Please try again.';
+      if (error.message.includes('network') || error.message.includes('fetch') || error.message.includes('Failed to fetch')) {
         errorMessage = 'Network error. Please check your connection and try again.';
       }
       return { success: false, error: errorMessage };
@@ -205,7 +233,7 @@ const useApplicantAuthStore = create((set, get) => ({
         // Check if user is not admin/staff
         let { data: profile, error: profileError } = await supabase
           .from('profiles')
-          .select('id, email, first_name, last_name, role, created_at, updated_at')
+          .select('id, email, first_name, last_name, role, email_confirmed_at, created_at, updated_at')
           .eq('id', data.user.id)
           .single();
         
@@ -218,10 +246,11 @@ const useApplicantAuthStore = create((set, get) => ({
               id: data.user.id,
               email: data.user.email,
               role: userRole,
+              email_confirmed_at: null, // New users need to confirm email
               created_at: new Date().toISOString(),
               updated_at: new Date().toISOString()
             }])
-            .select('id, email, first_name, last_name, role, created_at, updated_at')
+            .select('id, email, first_name, last_name, role, email_confirmed_at, created_at, updated_at')
             .single();
           
           if (createError) {
@@ -233,14 +262,44 @@ const useApplicantAuthStore = create((set, get) => ({
           console.error('Error loading profile during sign in:', profileError);
         }
 
+        // Check if email is confirmed (for custom confirmation process)
+        // Handle existing users: auto-confirm if created > 1 day ago (backward compatibility)
+        if (profile) {
+          if (profile.email_confirmed_at === null) {
+            // Check if this is an existing account (created before confirmation system was implemented)
+            // If created_at is more than 1 day ago, treat as existing user and auto-confirm
+            const createdAt = profile.created_at ? new Date(profile.created_at) : null;
+            const oneDayAgo = new Date();
+            oneDayAgo.setDate(oneDayAgo.getDate() - 1);
+            
+            if (createdAt && createdAt < oneDayAgo) {
+              // Existing user - auto-confirm their email with their creation date
+              const { error: confirmError } = await supabase
+                .from('profiles')
+                .update({ email_confirmed_at: profile.created_at })
+                .eq('id', profile.id);
+              
+              if (!confirmError) {
+                // Update profile in state
+                profile.email_confirmed_at = profile.created_at;
+              }
+            } else {
+              // New user - require email confirmation
+              await supabase.auth.signOut();
+              throw new Error('Please verify your email address before signing in. Check your inbox for the verification link, or request a new confirmation email.');
+            }
+          }
+          // If email_confirmed_at is not null, allow sign-in
+        }
+
         if (profile?.role === 'admin' || profile?.role === 'staff') {
           // Admin/staff users should use admin portal
           await supabase.auth.signOut();
           throw new Error('Please use the admin portal to sign in.');
         }
 
-        // Allow all applicant types: external, realtor, user, or no role
-        if (profile?.role && !['user', 'external', 'realtor'].includes(profile.role)) {
+        // Allow all applicant types: requester, realtor, or no role
+        if (profile?.role && !['requester', 'realtor'].includes(profile.role)) {
           await supabase.auth.signOut();
           throw new Error('Invalid user role for applicant portal.');
         }
@@ -359,6 +418,11 @@ const useApplicantAuthStore = create((set, get) => ({
     } catch (error) {
       return { success: false, error: error.message };
     }
+  },
+
+  // Set profile directly (for Realtime updates)
+  setProfile: (profileData) => {
+    set({ profile: profileData });
   },
 
   // Computed getters

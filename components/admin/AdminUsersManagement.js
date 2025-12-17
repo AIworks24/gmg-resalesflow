@@ -253,8 +253,8 @@ const AdminUsersManagement = () => {
   const handleDeleteClick = async (userItem) => {
     setUserToDelete(userItem);
     setShowDeleteConfirm(true);
-    // Check for applications if user is external
-    if (userItem.role === 'external') {
+    // Check for applications if user is requester
+    if (userItem.role === 'requester') {
       await checkUserApplications(userItem.id);
     } else {
       setUserApplicationCount(0);
@@ -271,7 +271,7 @@ const AdminUsersManagement = () => {
       setUserApplicationCount(0);
       setSnackbar({
         show: true,
-        message: `User deleted successfully! ${userToDelete.email} has been removed.${userToDelete.role === 'external' && userApplicationCount > 0 ? ` ${userApplicationCount} application(s) were also deleted.` : ''}`,
+        message: `User deleted successfully! ${userToDelete.email} has been removed.${userToDelete.role === 'requester' && userApplicationCount > 0 ? ` ${userApplicationCount} application(s) were also deleted.` : ''}`,
         type: 'success'
       });
     } catch (error) {
@@ -293,10 +293,12 @@ const AdminUsersManagement = () => {
         return 'bg-blue-100 text-blue-800';
       case 'accounting':
         return 'bg-purple-100 text-purple-800';
+      case 'requester':
+        return 'bg-green-100 text-green-800';
       case 'user':
-        return 'bg-green-100 text-green-800';
+        return 'bg-green-100 text-green-800'; // Legacy support
       case 'external':
-        return 'bg-green-100 text-green-800';
+        return 'bg-green-100 text-green-800'; // Legacy support
       default:
         return 'bg-gray-100 text-gray-800';
     }
@@ -421,7 +423,7 @@ const AdminUsersManagement = () => {
                 <User className="w-8 h-8 text-green-600" />
                 <div>
                   <p className="text-sm text-gray-600">Regular Users</p>
-                  <p className="text-2xl font-bold text-gray-900">{userStats.user + (userStats.external || 0) + userStats.null}</p>
+                  <p className="text-2xl font-bold text-gray-900">{(userStats.requester || 0) + (userStats.null || 0)}</p>
                 </div>
               </div>
             </div>
@@ -509,7 +511,7 @@ const AdminUsersManagement = () => {
                             userItem.role
                           )}`}
                         >
-                          {userItem.role || 'user'}
+                          {userItem.role || 'requester'}
                         </span>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
@@ -644,11 +646,11 @@ const AdminUsersManagement = () => {
                     value={formData.email}
                     onChange={(e) => {
                       const email = e.target.value;
-                      // Auto-assign "external" role if email ends with @resales.gmgva.com or @gmgva.com
+                      // All users are assigned "requester" role
                       let newRole = formData.role;
-                      const emailLower = email.toLowerCase();
-                      if (emailLower.endsWith('@resales.gmgva.com') || emailLower.endsWith('@gmgva.com')) {
-                        newRole = 'external';
+                      // Auto-assign "requester" role for new users
+                      if (!newRole || newRole === 'user' || newRole === 'external') {
+                        newRole = 'requester';
                       }
                       setFormData({ ...formData, email, role: newRole });
                     }}
@@ -775,7 +777,7 @@ const AdminUsersManagement = () => {
                     Are you sure you want to delete the user "{userToDelete.email}"? This action cannot be undone.
                   </p>
                   
-                  {userToDelete.role === 'external' && userApplicationCount > 0 && (
+                  {userToDelete.role === 'requester' && userApplicationCount > 0 && (
                     <div className="bg-yellow-50 border border-yellow-200 rounded-md p-4 mb-6">
                       <div className="flex items-start gap-2">
                         <AlertTriangle className="w-5 h-5 text-yellow-600 mt-0.5 flex-shrink-0" />

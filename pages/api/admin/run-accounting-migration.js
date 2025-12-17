@@ -44,7 +44,7 @@ ALTER TABLE profiles DROP CONSTRAINT IF EXISTS profiles_role_check;
 
 -- Add the new check constraint that includes 'accounting' role
 ALTER TABLE profiles ADD CONSTRAINT profiles_role_check 
-CHECK (role IN ('admin', 'staff', 'accounting', 'user', 'external', NULL));
+CHECK (role IN ('admin', 'staff', 'accounting', 'requester', NULL));
           `,
           instructions: 'Copy the SQL above and run it in your Supabase SQL editor, then try creating the accounting user again.'
         });
