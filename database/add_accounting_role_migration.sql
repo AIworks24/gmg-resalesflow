@@ -9,7 +9,7 @@ ALTER TABLE profiles DROP CONSTRAINT IF EXISTS profiles_role_check;
 
 -- Add the new check constraint that includes 'accounting' role
 ALTER TABLE profiles ADD CONSTRAINT profiles_role_check 
-CHECK (role IN ('admin', 'staff', 'accounting', 'user', 'external', NULL));
+CHECK (role IN ('admin', 'staff', 'accounting', 'requester', NULL));
 
 -- Add a comment to document the change
-COMMENT ON COLUMN profiles.role IS 'User role: admin (full access), staff (limited admin access), accounting (settlement agent forms only), user (regular user), external (external user), or NULL (unassigned)';
+COMMENT ON COLUMN profiles.role IS 'User role: admin (full access), staff (limited admin access), accounting (settlement agent forms only), requester (regular user), or NULL (unassigned)';

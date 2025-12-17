@@ -75,26 +75,14 @@ export default async function handler(req, res) {
       }
 
       // Filter notifications for this user:
-      // 1. Direct recipient match (user ID or email)
-      // 2. Property owner email match (for property owners logged in as admin/staff)
-      // 3. Application assigned_to match
+      // ONLY show notifications where user is the direct recipient
       notifications = (allNotifications || []).filter(notif => {
-        // Direct recipient match
+        // Each notification is created for a specific recipient_email
         const isDirectRecipient = 
           notif.recipient_user_id === user.id ||
           notif.recipient_email?.toLowerCase() === profile.email?.toLowerCase();
         
-        // Property owner email match (CRITICAL: works even if notification was created when user was offline)
-        const propertyOwnerEmail = notif.application?.hoa_properties?.property_owner_email;
-        const isPropertyOwner = propertyOwnerEmail && 
-          propertyOwnerEmail.toLowerCase() === profile.email?.toLowerCase();
-        
-        // Application assigned to user
-        const assignedTo = notif.application?.assigned_to;
-        const isAssigned = assignedTo && 
-          assignedTo.toLowerCase() === profile.email?.toLowerCase();
-        
-        return isDirectRecipient || isPropertyOwner || isAssigned;
+        return isDirectRecipient;
       });
     } else {
       // Regular users: fetch only their direct notifications (exclude soft-deleted)

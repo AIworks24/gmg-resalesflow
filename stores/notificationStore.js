@@ -103,12 +103,24 @@ const useNotificationStore = create(
     }),
     {
       name: 'notification-store', // localStorage key
+      version: 1, // Increment this to invalidate old cache
       storage: createJSONStorage(() => localStorage),
       // Only persist unreadCount and lastFetched (not full notifications to save space)
       partialize: (state) => ({
         unreadCount: state.unreadCount,
         lastFetched: state.lastFetched,
       }),
+      migrate: (persistedState, version) => {
+        // If stored version is older than current, reset the cache
+        if (version < 1) {
+          console.log('[NotificationStore] Cache version outdated, resetting');
+          return {
+            unreadCount: 0,
+            lastFetched: null,
+          };
+        }
+        return persistedState;
+      },
     }
   )
 );

@@ -1,12 +1,14 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/router';
 import { supabase } from '../lib/supabase';
+import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
 import { loadStripe } from '@stripe/stripe-js';
 import { getStripeWithFallback } from '../lib/stripe';
 import { getTestModeFromRequest, setTestModeCookie, getTestModeFromCookie } from '../lib/stripeMode';
 import { useAppContext } from '../lib/AppContext';
 import { useApplicantAuth } from '../providers/ApplicantAuthProvider';
 import useApplicantAuthStore from '../stores/applicantAuthStore';
+import useRequireVerifiedEmail from '../hooks/useRequireVerifiedEmail';
 // Removed pricingUtils import - using database-driven pricing instead
 import { 
   determineApplicationType, 
@@ -45,6 +47,8 @@ import {
   Calendar,
   Plus,
   ArrowRight,
+  Mail,
+  Loader2,
 } from 'lucide-react';
 
 // Initialize Stripe with error handling
@@ -1116,6 +1120,7 @@ const PackagePaymentStep = ({
         if (createdApplicationId) {
           try {
             // Auto-assigning application at submission time
+            // Note: auto-assign also creates notifications, so we don't need to create them separately
             const assignResponse = await fetch('/api/auto-assign-application', {
               method: 'POST',
               headers: {
@@ -1126,37 +1131,51 @@ const PackagePaymentStep = ({
             
             const assignResult = await assignResponse.json();
             if (assignResult.success) {
-              // Application auto-assigned successfully
+              // Application auto-assigned successfully (notifications created by auto-assign)
+              console.log(`[Submission] Application ${createdApplicationId} auto-assigned and notifications created`);
             } else {
               console.warn(`[Submission] Failed to auto-assign application ${createdApplicationId}:`, assignResult.error);
+              
+              // If auto-assign failed, try to create notifications manually as fallback
+              try {
+                const notificationResponse = await fetch('/api/notifications/create', {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                  },
+                  body: JSON.stringify({ applicationId: createdApplicationId }),
+                });
+
+                if (notificationResponse.ok) {
+                  console.log(`[Submission] Fallback: Notifications created manually after auto-assign failure`);
+                } else {
+                  console.warn(`[Submission] Fallback: Failed to create notifications manually`);
+                }
+              } catch (notificationError) {
+                console.error('[Submission] Fallback: Error creating notifications manually:', notificationError);
+              }
             }
           } catch (assignError) {
             console.error('[Submission] Error calling auto-assign API:', assignError);
-            // Don't fail the submission if auto-assignment fails
-          }
+            
+            // If auto-assign API call failed entirely, try to create notifications manually as fallback
+            try {
+              const notificationResponse = await fetch('/api/notifications/create', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ applicationId: createdApplicationId }),
+              });
 
-          // ALWAYS create notifications, even if auto-assign failed
-          // (auto-assign creates notifications, but we want to ensure they're created)
-          try {
-            // Creating notifications for application
-            const notificationResponse = await fetch('/api/notifications/create', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-              },
-              body: JSON.stringify({ applicationId: createdApplicationId }),
-            });
-
-            if (notificationResponse.ok) {
-              const notificationResult = await notificationResponse.json();
-              // Notifications created successfully
-            } else {
-              const errorText = await notificationResponse.text();
-              console.warn(`[Submission] Failed to create notifications:`, errorText);
+              if (notificationResponse.ok) {
+                console.log(`[Submission] Fallback: Notifications created manually after auto-assign error`);
+              } else {
+                console.warn(`[Submission] Fallback: Failed to create notifications manually`);
+              }
+            } catch (notificationError) {
+              console.error('[Submission] Fallback: Error creating notifications manually:', notificationError);
             }
-          } catch (notificationError) {
-            console.error('[Submission] Error creating notifications:', notificationError);
-            // Don't fail the submission if notification creation fails
           }
         }
 
@@ -2260,6 +2279,7 @@ const AdBlockerWarningModal = ({ isOpen, onClose }) => {
 
 // Authentication Modal Component
 const AuthModal = ({ authMode, setAuthMode, setShowAuthModal, handleAuth, resetPassword }) => {
+  const supabase = createClientComponentClient();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [firstName, setFirstName] = useState('');
@@ -2269,6 +2289,16 @@ const AuthModal = ({ authMode, setAuthMode, setShowAuthModal, handleAuth, resetP
   const [isResetting, setIsResetting] = useState(false);
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [authError, setAuthError] = useState('');
+  
+  // New: verification waiting state
+  const [showVerificationWaiting, setShowVerificationWaiting] = useState(false);
+  const [registeredUserId, setRegisteredUserId] = useState(null);
+  const [registeredEmail, setRegisteredEmail] = useState('');
+  const [verificationStatus, setVerificationStatus] = useState('waiting'); // 'waiting', 'verified', 'error'
+
+  // Cleanup function for Realtime subscription
+  const channelRef = React.useRef(null);
+  const timeoutRef = React.useRef(null);
 
   // Clear error when switching modes or closing
   const handleModeSwitch = (newMode) => {
@@ -2278,10 +2308,254 @@ const AuthModal = ({ authMode, setAuthMode, setShowAuthModal, handleAuth, resetP
   };
 
   const handleClose = () => {
+    // Cleanup Realtime subscription
+    if (channelRef.current) {
+      supabase.removeChannel(channelRef.current);
+      channelRef.current = null;
+    }
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+    }
+    
     setAuthError('');
     setResetMessage('');
+    setShowVerificationWaiting(false);
+    setRegisteredUserId(null);
+    setRegisteredEmail('');
+    setVerificationStatus('waiting');
     setShowAuthModal(false);
   };
+
+  // Setup Realtime subscription for email verification
+  React.useEffect(() => {
+    if (!showVerificationWaiting || !registeredUserId) return;
+
+    console.log('[AuthModal] Setting up Realtime subscription for user:', registeredUserId);
+
+    // Subscribe to profile changes
+    const channel = supabase
+      .channel(`profile-verification-${registeredUserId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'profiles',
+          filter: `id=eq.${registeredUserId}`,
+        },
+        async (payload) => {
+          console.log('[AuthModal] Profile updated:', payload);
+          
+          // Check if email was confirmed
+          if (payload.new.email_confirmed_at) {
+            console.log('[AuthModal] Email verified! Creating session on this device...');
+            setVerificationStatus('verified');
+            
+            // Give user a moment to see the success message
+            setTimeout(async () => {
+              try {
+                // Call create-session endpoint to check verification status
+                const response = await fetch('/api/auth/create-session', {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                  },
+                  body: JSON.stringify({ userId: registeredUserId }),
+                });
+
+                const data = await response.json();
+
+                if (response.ok && data.success) {
+                  console.log('[AuthModal] Email verified! Auto-logging in...', data);
+                  
+                  // Show success message briefly
+                  setVerificationStatus('verified');
+                  
+                  // Wait a moment to show success, then redirect to auto-login
+                  setTimeout(() => {
+                    if (data.autoLoginUrl) {
+                      console.log('[AuthModal] Redirecting to auto-login endpoint...');
+                      window.location.href = data.autoLoginUrl;
+                    } else {
+                      // Fallback: just reload the page
+                      window.location.reload();
+                    }
+                  }, 1500);
+                } else {
+                  console.error('[AuthModal] Verification check failed:', data);
+                  setVerificationStatus('error');
+                }
+              } catch (error) {
+                console.error('[AuthModal] Error during session creation:', error);
+                setVerificationStatus('error');
+              }
+            }, 2000);
+          }
+        }
+      )
+      .subscribe();
+
+    channelRef.current = channel;
+
+    // Auto-cleanup after 5 minutes
+    timeoutRef.current = setTimeout(() => {
+      console.log('[AuthModal] Realtime subscription timeout (5 minutes)');
+      if (channelRef.current) {
+        supabase.removeChannel(channelRef.current);
+        channelRef.current = null;
+      }
+    }, 5 * 60 * 1000);
+
+    return () => {
+      if (channelRef.current) {
+        supabase.removeChannel(channelRef.current);
+        channelRef.current = null;
+      }
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+        timeoutRef.current = null;
+      }
+    };
+  }, [showVerificationWaiting, registeredUserId, supabase]);
+
+  // Show verification waiting screen if user just signed up
+  if (showVerificationWaiting) {
+    return (
+      <div className='fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50'>
+        <div className='bg-white rounded-lg p-8 max-w-md w-full mx-4'>
+          <div className='flex justify-between items-center mb-6'>
+            <h2 className='text-2xl font-bold text-green-800'>
+              {verificationStatus === 'verified' ? 'Email Verified!' : 'Verify Your Email'}
+            </h2>
+            <button 
+              onClick={handleClose}
+              className='text-gray-400 hover:text-gray-600'
+            >
+              <X className='h-6 w-6' />
+            </button>
+          </div>
+
+          <div className='text-center space-y-6'>
+            {verificationStatus === 'waiting' && (
+              <>
+                {/* Email icon animation */}
+                <div className='flex justify-center'>
+                  <div className='relative'>
+                    <Mail className='h-20 w-20 text-green-600' />
+                    <div className='absolute -top-2 -right-2 w-6 h-6 bg-green-500 rounded-full flex items-center justify-center animate-pulse'>
+                      <CheckCircle className='h-4 w-4 text-white' />
+                    </div>
+                  </div>
+                </div>
+
+                <div className='space-y-3'>
+                  <h3 className='text-xl font-semibold text-gray-900'>
+                    Account created!
+                  </h3>
+                  <p className='text-gray-600'>
+                    We've sent a verification email to:
+                  </p>
+                  <p className='text-lg font-semibold text-green-700 bg-green-50 py-2 px-4 rounded-lg inline-block'>
+                    {registeredEmail}
+                  </p>
+                  <p className='text-gray-600'>
+                    Click the link in the email to activate your account.
+                  </p>
+                  <p className='text-sm text-gray-500'>
+                    You can verify on this device or any other device.
+                  </p>
+                </div>
+
+                {/* Waiting indicator */}
+                <div className='bg-blue-50 border border-blue-200 rounded-lg p-4'>
+                  <div className='flex items-center justify-center gap-2 text-blue-700'>
+                    <Loader2 className='h-5 w-5 animate-spin' />
+                    <span className='text-sm font-medium'>Waiting for verification...</span>
+                  </div>
+                  <p className='text-xs text-blue-600 mt-2'>
+                    We'll automatically log you in once you verify your email
+                  </p>
+                </div>
+
+                {/* Actions */}
+                <div className='space-y-2 pt-4'>
+                  <button
+                    onClick={() => {
+                      // Redirect to the verification pending page
+                      handleClose();
+                      window.location.href = '/auth/verification-pending';
+                    }}
+                    className='w-full py-3 px-4 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors font-medium'
+                  >
+                    Check Your Email
+                  </button>
+                  <button
+                    onClick={() => {
+                      setShowVerificationWaiting(false);
+                      setAuthMode('signin');
+                    }}
+                    className='w-full py-2 px-4 text-green-600 hover:text-green-800 text-sm font-medium'
+                  >
+                    Already verified? Sign in
+                  </button>
+                </div>
+              </>
+            )}
+
+            {verificationStatus === 'verified' && (
+              <>
+                {/* Success state */}
+                <div className='flex justify-center'>
+                  <div className='w-20 h-20 bg-green-100 rounded-full flex items-center justify-center'>
+                    <CheckCircle className='h-12 w-12 text-green-600' />
+                  </div>
+                </div>
+                <div className='space-y-3'>
+                  <h3 className='text-xl font-semibold text-green-900'>
+                    Email verified successfully!
+                  </h3>
+                  <p className='text-gray-600'>
+                    Logging you in...
+                  </p>
+                  <Loader2 className='h-6 w-6 animate-spin text-green-600 mx-auto' />
+                </div>
+              </>
+            )}
+
+            {verificationStatus === 'error' && (
+              <>
+                {/* Error state */}
+                <div className='flex justify-center'>
+                  <div className='w-20 h-20 bg-red-100 rounded-full flex items-center justify-center'>
+                    <AlertCircle className='h-12 w-12 text-red-600' />
+                  </div>
+                </div>
+                <div className='space-y-3'>
+                  <h3 className='text-xl font-semibold text-red-900'>
+                    Something went wrong
+                  </h3>
+                  <p className='text-gray-600'>
+                    Please try signing in manually.
+                  </p>
+                  <button
+                    onClick={() => {
+                      setShowVerificationWaiting(false);
+                      setAuthMode('signin');
+                      setVerificationStatus('waiting');
+                    }}
+                    className='w-full py-3 px-4 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors font-medium'
+                  >
+                    Go to Sign In
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className='fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50'>
@@ -2333,14 +2607,42 @@ const AuthModal = ({ authMode, setAuthMode, setShowAuthModal, handleAuth, resetP
                   setAuthError(result.error || 'Authentication failed. Please try again.');
                   setIsAuthenticating(false);
                 } else if (result && result.success) {
-                  // Success - modal will be closed by handleAuth
                   setIsAuthenticating(false);
-                  // Reset form fields
-                  setEmail('');
-                  setPassword('');
-                  setFirstName('');
-                  setLastName('');
-                  setAuthError('');
+                  
+                  console.log('[Registration] Auth result:', { 
+                    authMode, 
+                    userId: result.userId, 
+                    requiresEmailVerification: result.requiresEmailVerification,
+                    fullResult: result 
+                  });
+                  
+                  // Check if this was a signup (has userId and requiresEmailVerification)
+                  if (authMode === 'signup' && result.userId && result.requiresEmailVerification) {
+                    // Close modal
+                    handleClose();
+                    // Reset form fields
+                    setEmail('');
+                    setPassword('');
+                    setFirstName('');
+                    setLastName('');
+                    setAuthError('');
+                    
+                    console.log('[Registration] Redirecting to verification-pending page...');
+                    
+                    // Use window.location for reliable navigation (avoids auth provider interference)
+                    setTimeout(() => {
+                      window.location.href = '/auth/verification-pending';
+                    }, 100);
+                  } else {
+                    // Sign in success - close modal
+                    handleClose();
+                    // Reset form fields
+                    setEmail('');
+                    setPassword('');
+                    setFirstName('');
+                    setLastName('');
+                    setAuthError('');
+                  }
                 } else {
                   // No result returned, assume success (backward compatibility)
                   setIsAuthenticating(false);
@@ -3256,14 +3558,23 @@ export default function GMGResaleFlow() {
     signUp, 
     signOut, 
     resetPassword,
-    profile 
+    initialize,
+    setProfile,
+    profile,
+    isLoading: profileLoading 
   } = useApplicantAuthStore();
+  
+  // Get email verification checker
+  const { checkVerification } = useRequireVerifiedEmail();
   
   // Get userRole from profile
   const userRole = profile?.role;
   
   // Get router for navigation
   const router = useRouter();
+  
+  // Create Supabase client for Realtime subscriptions
+  const supabase = React.useMemo(() => createClientComponentClient(), []);
   
   const [applications, setApplications] = useState([]);
   const [currentStep, setCurrentStep] = useState(0);
@@ -3272,6 +3583,7 @@ export default function GMGResaleFlow() {
   const [authMode, setAuthMode] = useState('signin');
   const [isPendingPayment, setIsPendingPayment] = useState(false);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
+  const [isStartingApplication, setIsStartingApplication] = useState(false);
   const [confirmModalData, setConfirmModalData] = useState({
     title: '',
     message: '',
@@ -3314,6 +3626,91 @@ export default function GMGResaleFlow() {
   const [fieldRequirements, setFieldRequirements] = useState(null);
   const [customMessaging, setCustomMessaging] = useState(null);
   const [formSteps, setFormSteps] = useState([]);
+
+  // Setup Realtime subscription for profile changes (email verification)
+  useEffect(() => {
+    if (!user || !profile) return;
+    
+    // Only subscribe if user is unverified
+    if (profile.email_confirmed_at) return;
+    
+    const channel = supabase
+      .channel(`profile-updates-${user.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'profiles',
+          filter: `id=eq.${user.id}`,
+        },
+        (payload) => {
+          // Check if email was verified
+          if (payload.new.email_confirmed_at && !payload.old.email_confirmed_at) {
+            // Directly update the profile in the store with the new data
+            setProfile(payload.new);
+            
+            // Show success message
+            setSnackbarData({
+              message: 'Email verified successfully! You can now create applications.',
+              type: 'success'
+            });
+            setShowSnackbar(true);
+          }
+        }
+      )
+      .subscribe();
+    
+    // Cleanup on unmount
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user, profile, setProfile, supabase]);
+
+  // Handle URL query parameters for actions like opening auth modal
+  useEffect(() => {
+    if (router.isReady) {
+      const { openLogin, emailConfirmed, emailJustVerified } = router.query;
+      
+      // Handle email just verified - refresh profile
+      if (emailJustVerified === 'true') {
+        // Force refresh the profile to get updated email_confirmed_at (wait for it to complete)
+        initialize().then(() => {
+          // Show success message after profile is loaded
+          setSnackbarData({
+            message: 'Email verified successfully! You can now create applications.',
+            type: 'success'
+          });
+          setShowSnackbar(true);
+        });
+        
+        // Clean up URL parameter
+        const newQuery = { ...router.query };
+        delete newQuery.emailJustVerified;
+        router.replace({ pathname: router.pathname, query: newQuery }, undefined, { shallow: true });
+        return;
+      }
+      
+      if (openLogin === 'true' || emailConfirmed === 'true') {
+        setShowAuthModal(true);
+        setAuthMode('signin');
+        
+        if (emailConfirmed === 'true') {
+          setSnackbarData({
+            message: 'Email confirmed successfully! Please sign in.',
+            type: 'success'
+          });
+          setShowSnackbar(true);
+        }
+        
+        // Clean up URL parameters without refreshing
+        const newQuery = { ...router.query };
+        delete newQuery.openLogin;
+        delete newQuery.emailConfirmed;
+        router.replace({ pathname: router.pathname, query: newQuery }, undefined, { shallow: true });
+      }
+    }
+  }, [router.isReady, router.query, initialize]);
 
   // Load applications for the current user
   const loadApplications = React.useCallback(async () => {
@@ -3720,6 +4117,23 @@ export default function GMGResaleFlow() {
 
   // Reset form for new application
   const startNewApplication = React.useCallback(async () => {
+    setIsStartingApplication(true);
+    
+    try {
+      // First, refresh profile to ensure we have latest data
+      await initialize();
+      
+      // Get the fresh profile data
+      const freshProfile = useApplicantAuthStore.getState().profile;
+      
+      // Now check if email is verified
+      const isVerified = freshProfile?.email_confirmed_at !== null && freshProfile?.email_confirmed_at !== undefined;
+      
+      if (!isVerified) {
+        router.push('/auth/verification-pending');
+        return;
+      }
+    
     // Reset application ID first
     setApplicationId(null);
     setIsPendingPayment(false);
@@ -3762,9 +4176,12 @@ export default function GMGResaleFlow() {
       totalAmount: 317.95,
     });
     
-    // Navigate to first step
-    setCurrentStep(1);
-  }, [user, profile]);
+      // Navigate to first step
+      setCurrentStep(1);
+    } finally {
+      setIsStartingApplication(false);
+    }
+  }, [user, profile, initialize, router]);
 
   // Load applications when user or role changes
   useEffect(() => {
@@ -3859,14 +4276,12 @@ export default function GMGResaleFlow() {
         } else {
           const result = await signUp(email, password, userData);
           if (result.success) {
-            setShowAuthModal(false);
-            // Show success message
-            setSnackbarData({
-              message: 'Account created successfully! Please check your email to verify your account.',
-              type: 'success'
-            });
-            setShowSnackbar(true);
-            return { success: true };
+            // Return success with user ID for verification flow
+            return { 
+              success: true, 
+              userId: result.userId,
+              requiresEmailVerification: result.requiresEmailVerification 
+            };
           } else {
             // Return error result for modal to display
             let errorMessage = result.error || 'Sign up failed. Please try again.';
@@ -4449,11 +4864,21 @@ export default function GMGResaleFlow() {
                 {isAuthenticated ? (
                   <button
                     onClick={startNewApplication}
-                    className='group relative inline-flex items-center justify-center px-10 py-5 text-xl font-bold text-white transition-all duration-300 bg-green-600 font-pj rounded-2xl focus:outline-none focus:ring-4 focus:ring-offset-2 focus:ring-green-600 hover:bg-green-700 shadow-xl hover:shadow-2xl hover:-translate-y-1'
+                    disabled={isStartingApplication}
+                    className='group relative inline-flex items-center justify-center px-10 py-5 text-xl font-bold text-white transition-all duration-300 bg-green-600 font-pj rounded-2xl focus:outline-none focus:ring-4 focus:ring-offset-2 focus:ring-green-600 hover:bg-green-700 shadow-xl hover:shadow-2xl hover:-translate-y-1 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:translate-y-0'
                   >
                     <div className='absolute -inset-3 rounded-2xl bg-green-400 opacity-20 group-hover:opacity-40 blur transition duration-200'></div>
-                    <FileText className='w-7 h-7 mr-3' />
-                    Start New Application
+                    {isStartingApplication ? (
+                      <>
+                        <Loader2 className='w-7 h-7 mr-3 animate-spin' />
+                        Loading...
+                      </>
+                    ) : (
+                      <>
+                        <FileText className='w-7 h-7 mr-3' />
+                        Start New Application
+                      </>
+                    )}
                   </button>
                 ) : (
                   <div className='flex flex-col sm:flex-row gap-5'>
@@ -5371,12 +5796,7 @@ export default function GMGResaleFlow() {
                 {isAuthenticated ? (
                   <div className='flex items-center space-x-4'>
                     <span className='text-sm text-gray-600'>
-                      Welcome, {user?.email}
-                      {userRole && (
-                        <span className='ml-1 px-2 py-1 bg-green-100 text-green-800 text-xs rounded'>
-                          {userRole}
-                        </span>
-                      )}
+                      Welcome, {profile?.first_name || user?.email}!
                     </span>
                     <button
                       onClick={handleSignOut}

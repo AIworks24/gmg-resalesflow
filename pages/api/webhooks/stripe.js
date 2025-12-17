@@ -160,6 +160,8 @@ export default async function handler(req, res) {
           // Note: Auto-assignment now happens at submission time, not at payment time
           // This ensures applications are assigned immediately when submitted, not after payment
           // We still check here in case an application wasn't assigned at submission
+          let needsNotifications = false;
+          
           const { data: appCheck } = await supabase
             .from('applications')
             .select('assigned_to, submitted_at')
@@ -172,24 +174,35 @@ export default async function handler(req, res) {
             const assignResult = await autoAssignApplication(applicationId, supabase);
             if (assignResult && assignResult.success) {
               console.log(`[Webhook] Successfully auto-assigned application ${applicationId} to ${assignResult.assignedTo}`);
+              // Since we just assigned it here, notifications were created by auto-assign
+              needsNotifications = false;
             } else {
               console.warn(`[Webhook] Failed to auto-assign application ${applicationId}:`, assignResult?.error || 'Unknown error');
+              // Auto-assign failed, so we need to create notifications manually
+              needsNotifications = true;
             }
+          } else {
+            // Application was already assigned at submission time
+            // Notifications were already created by the submission flow, don't duplicate them
+            console.log(`[Webhook] Application ${applicationId} was already assigned at submission (assigned_to: ${appCheck?.assigned_to}), skipping notification creation`);
+            needsNotifications = false;
           }
 
-          // ALWAYS create notifications after payment, even if auto-assign failed
-          try {
-            console.log(`[Webhook] Creating notifications for application ${applicationId} after payment`);
-            const { createNotifications } = await import('../notifications/create');
-            const notificationResult = await createNotifications(applicationId, supabase);
-            if (notificationResult.success) {
-              console.log(`[Webhook] Notifications created: ${notificationResult.notificationsCreated} notifications, ${notificationResult.emailsQueued || 0} emails queued`);
-            } else {
-              console.warn(`[Webhook] Failed to create notifications:`, notificationResult.error);
+          // Only create notifications if needed (fallback for failed auto-assign)
+          if (needsNotifications) {
+            try {
+              console.log(`[Webhook] Creating notifications for application ${applicationId} (fallback after failed auto-assign)`);
+              const { createNotifications } = await import('../notifications/create');
+              const notificationResult = await createNotifications(applicationId, supabase);
+              if (notificationResult.success) {
+                console.log(`[Webhook] Fallback notifications created: ${notificationResult.notificationsCreated} notifications, ${notificationResult.emailsQueued || 0} emails queued`);
+              } else {
+                console.warn(`[Webhook] Failed to create fallback notifications:`, notificationResult.error);
+              }
+            } catch (notificationError) {
+              console.error('[Webhook] Error creating fallback notifications:', notificationError);
+              // Don't fail the webhook if notification creation fails
             }
-          } catch (notificationError) {
-            console.error('[Webhook] Error creating notifications:', notificationError);
-            // Don't fail the webhook if notification creation fails
           }
           
           // Check if this is a lender questionnaire application

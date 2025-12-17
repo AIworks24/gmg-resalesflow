@@ -69,16 +69,15 @@ function isFakeEmail(email) {
 export async function createNotifications(applicationId, supabaseClient) {
   try {
     // Check if notifications already exist for this application
-    // If they exist, update their timestamp instead of creating duplicates
+    // Get ALL existing notifications to check per-recipient
     const { data: existingNotifications } = await supabaseClient
       .from('notifications')
-      .select('id')
+      .select('id, recipient_email')
       .eq('application_id', applicationId)
-      .eq('notification_type', 'new_application')
-      .limit(1);
+      .eq('notification_type', 'new_application');
 
     if (existingNotifications && existingNotifications.length > 0) {
-      console.log(`[Notifications] Notifications already exist for application ${applicationId}, updating timestamp`);
+      console.log(`[Notifications] Notifications already exist for application ${applicationId} (${existingNotifications.length} found), updating timestamps`);
       
       // Update the existing notification's timestamp to now
       // IMPORTANT: Use a single timestamp to ensure consistency
@@ -108,8 +107,7 @@ export async function createNotifications(applicationId, supabaseClient) {
       
       console.log(`[Notifications] Updated ${updatedNotifications?.length || 0} notification(s) timestamp:`, {
         notificationIds: updatedNotifications?.map(n => n.id),
-        newSentAt: updatedNotifications?.[0]?.sent_at,
-        newCreatedAt: updatedNotifications?.[0]?.created_at,
+        recipients: updatedNotifications?.map(n => n.recipient_email),
       });
       
       return { 
@@ -341,12 +339,26 @@ export async function createNotifications(applicationId, supabaseClient) {
     // Only the property owner for the specific application receives notifications (in-app + email)
     // For settlement requests, accounting users are notified above
 
-    // Insert all notifications
-    if (notifications.length > 0) {
-      console.log(`[Notifications] Inserting ${notifications.length} notifications into database`);
+    // Deduplicate notifications by recipient_email (in case of logic errors)
+    const uniqueNotifications = [];
+    const seenEmails = new Set();
+    
+    for (const notification of notifications) {
+      const normalizedEmail = normalizeEmail(notification.recipient_email);
+      if (!seenEmails.has(normalizedEmail)) {
+        seenEmails.add(normalizedEmail);
+        uniqueNotifications.push(notification);
+      } else {
+        console.log(`[Notifications] Skipping duplicate notification for ${notification.recipient_email} in same batch`);
+      }
+    }
+
+    // Insert all unique notifications
+    if (uniqueNotifications.length > 0) {
+      console.log(`[Notifications] Inserting ${uniqueNotifications.length} unique notifications into database`);
       const { data, error } = await supabaseClient
         .from('notifications')
-        .insert(notifications)
+        .insert(uniqueNotifications)
         .select();
 
       if (error) {
@@ -377,13 +389,18 @@ export async function createNotifications(applicationId, supabaseClient) {
 
       // Send emails to all notification recipients (with error handling)
       try {
+        console.log(`[EMAIL_TRACE] App ${applicationId}: Starting email dispatch for ${data.length} notification(s)`);
+        
         for (const notification of data) {
           // Skip if no email address
-          if (!notification.recipient_email) continue;
+          if (!notification.recipient_email) {
+            console.log(`[EMAIL_TRACE] App ${applicationId}: Skipped - no email address`);
+            continue;
+          }
           
           // Skip fake/placeholder emails - don't send emails to them
           if (isFakeEmail(notification.recipient_email)) {
-            console.log(`[Notifications] Skipping email send to fake/placeholder email: ${notification.recipient_email}`);
+            console.log(`[EMAIL_TRACE] App ${applicationId}: Skipped fake/placeholder email: ${notification.recipient_email}`);
             continue;
           }
 
@@ -393,7 +410,7 @@ export async function createNotifications(applicationId, supabaseClient) {
             const shouldSkipEmail = notification.metadata?.skip_email === true;
             
             if (shouldSkipEmail) {
-              console.log(`[Notifications] Skipping email for property owner with 'owner.' prefix: ${notification.recipient_email} (staff/admin account - in-app notification only)`);
+              console.log(`[EMAIL_TRACE] App ${applicationId}: Skipped owner. prefix (in-app only): ${notification.recipient_email}`);
               continue;
             }
             
@@ -407,7 +424,7 @@ export async function createNotifications(applicationId, supabaseClient) {
               return cleanEmail === notificationEmail;
             });
             
-            console.log(`[Notifications] Checking email: ${notificationEmail}, isPropertyOwner: ${isPropertyOwner}`);
+            console.log(`[EMAIL_TRACE] App ${applicationId}: Email check - ${notificationEmail}, isPropertyOwner: ${isPropertyOwner}, hoa_properties exists: ${!!application.hoa_properties}`);
             
             // Check if this is an accounting notification for settlement request
             const isAccountingNotification = notification.metadata?.is_accounting_notification === true;
@@ -419,7 +436,9 @@ export async function createNotifications(applicationId, supabaseClient) {
             if ((isPropertyOwner && application.hoa_properties) || isAccountingNotification) {
               // Normalize email before sending to ensure consistent delivery
               const emailToSend = normalizeEmail(notification.recipient_email);
-              console.log(`[Notifications] Sending email to: ${emailToSend} (original: ${notification.recipient_email})`);
+              const emailType = isAccountingNotification ? 'accounting' : 'property_owner';
+              
+              console.log(`[EMAIL_ATTEMPT] App ${applicationId}: Attempting send to ${emailToSend} (type: ${emailType})`);
               
               // Send notification email
               emailPromises.push(
@@ -435,40 +454,55 @@ export async function createNotifications(applicationId, supabaseClient) {
                   isMultiCommunity: isMultiCommunity,
                   linkedProperties: linkedProperties,
                   applicationType: application.application_type,
+                }).then(result => {
+                  console.log(`[EMAIL_SUCCESS] App ${applicationId}: ✓ Sent to ${emailToSend}`);
+                  return result;
                 }).catch(emailError => {
-                  console.error(`[Notifications] Failed to send email to ${emailToSend}:`, emailError);
+                  console.error(`[EMAIL_FAILURE] App ${applicationId}: ✗ Failed to ${emailToSend}`, {
+                    error: emailError.message,
+                    stack: emailError.stack,
+                    recipient: emailToSend,
+                    type: emailType
+                  });
                   // Don't throw - continue with other emails
-                  return { success: false, error: emailError.message };
+                  return { success: false, error: emailError.message, recipient: emailToSend };
                 })
               );
-              
-              if (isAccountingNotification) {
-                console.log(`[Notifications] Queued email for accounting user: ${emailToSend}`);
-              } else {
-                console.log(`[Notifications] Queued email for property owner: ${emailToSend}`);
-              }
             } else {
               // Staff/admin (non-accounting): Skip email, they only get in-app notifications
-              console.log(`[Notifications] Skipping email for staff/admin: ${notificationEmail} (in-app notification only)`);
+              console.log(`[EMAIL_TRACE] App ${applicationId}: Skipped staff/admin (in-app only): ${notificationEmail}`);
             }
           } catch (emailError) {
-            console.error(`Error preparing email for ${notification.recipient_email}:`, emailError);
+            console.error(`[EMAIL_ERROR] App ${applicationId}: Error preparing email for ${notification.recipient_email}:`, emailError);
             // Continue with other emails
           }
         }
       } catch (emailLoopError) {
-        console.error('Error in email sending loop:', emailLoopError);
+        console.error(`[EMAIL_ERROR] App ${applicationId}: Error in email sending loop:`, emailLoopError);
         // Don't fail notification creation if email loop fails
       }
 
       // Send all emails (don't wait for them to complete - fire and forget)
-      console.log(`[Notifications] Queued ${emailPromises.length} emails to send`);
+      console.log(`[EMAIL_DISPATCH] App ${applicationId}: Dispatched ${emailPromises.length} email(s) for async sending`);
+      
       Promise.allSettled(emailPromises).then(results => {
-        const successful = results.filter(r => r.status === 'fulfilled').length;
-        const failed = results.filter(r => r.status === 'rejected').length;
-        console.log(`[Notifications] Email notifications sent: ${successful} successful, ${failed} failed`);
+        const successful = results.filter(r => r.status === 'fulfilled' && r.value?.success !== false);
+        const failed = results.filter(r => r.status === 'rejected' || r.value?.success === false);
+        
+        console.log(`[EMAIL_SUMMARY] App ${applicationId}: Complete - ${successful.length} sent, ${failed.length} failed`);
+        
+        // Log detailed failure information
+        if (failed.length > 0) {
+          failed.forEach((result, index) => {
+            const failureInfo = result.status === 'rejected' 
+              ? { reason: result.reason?.message || result.reason, recipient: 'unknown' }
+              : { reason: result.value?.error, recipient: result.value?.recipient };
+            
+            console.error(`[EMAIL_FAILURE_DETAIL] App ${applicationId}: Failed email #${index + 1}:`, failureInfo);
+          });
+        }
       }).catch(err => {
-        console.error('[Notifications] Error in email sending promise:', err);
+        console.error(`[EMAIL_ERROR] App ${applicationId}: Promise handling error:`, err);
       });
 
       return {
