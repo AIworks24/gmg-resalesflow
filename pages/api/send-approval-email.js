@@ -84,13 +84,18 @@ export default async function handler(req, res) {
       try {
         console.log('Creating download link for PDF:', publicUrl);
         
-        // Extract filename from URL and clean it up (remove timestamp prefix)
+        // Extract filename from URL and clean it up (remove timestamp prefix and query parameters)
         // This matches the logic used for property owner forms (settlement forms)
         const urlParts = publicUrl.split('/');
         let existingFilename = urlParts[urlParts.length - 1] || 
           (isPropertySpecific 
             ? `Resale_Certificate_${propertyName.replace(/[^a-zA-Z0-9]/g, '_')}.pdf`
             : `Resale_Certificate_${application.property_address.replace(/[^a-zA-Z0-9]/g, '_')}.pdf`);
+        
+        // Remove query parameters (everything after ?)
+        existingFilename = existingFilename.split('?')[0];
+        // Remove URL fragments (everything after #)
+        existingFilename = existingFilename.split('#')[0];
         
         // Remove leading timestamp pattern (e.g., "1762187746441-" from filename)
         // Pattern: digits followed by hyphen at the start

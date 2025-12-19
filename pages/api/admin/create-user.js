@@ -40,25 +40,71 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: authError.message });
     }
 
+    const userId = authData.user.id;
+    const now = new Date().toISOString();
 
-    // Supabase automatically creates a profile when auth user is created
-    // So we need to UPDATE the existing profile instead of creating a new one
-    const { error: profileError } = await supabaseAdmin
+    // Check if profile already exists
+    const { data: existingProfile, error: checkError } = await supabaseAdmin
       .from('profiles')
-      .update({
-        email,
-        first_name: first_name || '',
-        last_name: last_name || '',
-        role,
-        updated_at: new Date().toISOString()
-      })
-      .eq('id', authData.user.id);
+      .select('id')
+      .eq('id', userId)
+      .single();
+
+    // Prepare profile data
+    const profileData = {
+      id: userId,
+      email,
+      first_name: first_name || '',
+      last_name: last_name || '',
+      role,
+      updated_at: now
+    };
+
+    // Auto-verify staff, admin, and accounting users
+    if (role === 'staff' || role === 'admin' || role === 'accounting') {
+      profileData.email_confirmed_at = now;
+    }
+
+    let profileError;
+
+    // If profile doesn't exist, INSERT it; otherwise UPDATE it
+    if (checkError && checkError.code === 'PGRST116') {
+      // Profile doesn't exist, create it
+      profileData.created_at = now;
+      const { error: insertError } = await supabaseAdmin
+        .from('profiles')
+        .insert(profileData);
+
+      profileError = insertError;
+      if (insertError) {
+        console.error('Profile insert error:', insertError);
+      } else {
+        console.log('✅ Profile created for user:', userId);
+      }
+    } else if (checkError) {
+      // Some other error checking for profile
+      console.error('Error checking profile:', checkError);
+      profileError = checkError;
+    } else {
+      // Profile exists, update it
+      const { error: updateError } = await supabaseAdmin
+        .from('profiles')
+        .update(profileData)
+        .eq('id', userId);
+
+      profileError = updateError;
+      if (updateError) {
+        console.error('Profile update error:', updateError);
+      } else {
+        console.log('✅ Profile updated for user:', userId);
+      }
+    }
 
     if (profileError) {
       console.error('Profile error:', profileError);
-      // If profile creation fails, we should delete the auth user
-      await supabaseAdmin.auth.admin.deleteUser(authData.user.id);
-      return res.status(400).json({ error: profileError.message });
+      // If profile creation/update fails, we should delete the auth user
+      await supabaseAdmin.auth.admin.deleteUser(userId);
+      return res.status(400).json({ error: `Failed to create/update profile: ${profileError.message}` });
     }
 
     // Invalidate Redis cache for users to force refresh

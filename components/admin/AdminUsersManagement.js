@@ -32,9 +32,21 @@ import {
 import AdminLayout from './AdminLayout';
 
 const AdminUsersManagement = () => {
+  // Tab state - 'admin' for admin/staff/accounting, 'requester' for requesters
+  const [activeTab, setActiveTab] = useState('admin');
+  
+  // Separate search terms for each tab
+  const [adminSearchTerm, setAdminSearchTerm] = useState('');
+  const [requesterSearchTerm, setRequesterSearchTerm] = useState('');
+  const [debouncedAdminSearchTerm, setDebouncedAdminSearchTerm] = useState('');
+  const [debouncedRequesterSearchTerm, setDebouncedRequesterSearchTerm] = useState('');
+  
+  // Separate pagination for each tab
+  const [adminPage, setAdminPage] = useState(1);
+  const [requesterPage, setRequesterPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  
   // UI State
-  const [searchTerm, setSearchTerm] = useState('');
-  const [debouncedSearchTerm, setDebouncedSearchTerm] = useState('');
   const [showModal, setShowModal] = useState(false);
   const [modalMode, setModalMode] = useState('add'); // 'add' or 'edit'
   const [selectedUser, setSelectedUser] = useState(null);
@@ -44,10 +56,7 @@ const AdminUsersManagement = () => {
   const [isCheckingApplications, setIsCheckingApplications] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [formError, setFormError] = useState('');
-  
-  // Pagination state
-  const [currentPage, setCurrentPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
+  const [verifyingUserId, setVerifyingUserId] = useState(null);
 
   // Snackbar state
   const [snackbar, setSnackbar] = useState({
@@ -86,23 +95,41 @@ const AdminUsersManagement = () => {
     }
   }, [role, router]);
 
-  // Debounce search term to prevent too many API calls
+  // Debounce search terms to prevent too many API calls
   React.useEffect(() => {
     const timer = setTimeout(() => {
-      setDebouncedSearchTerm(searchTerm);
-    }, 300); // 300ms debounce delay
-
+      setDebouncedAdminSearchTerm(adminSearchTerm);
+    }, 300);
     return () => clearTimeout(timer);
-  }, [searchTerm]);
+  }, [adminSearchTerm]);
 
-  // Reset to page 1 when debounced search term changes
   React.useEffect(() => {
-    if (debouncedSearchTerm !== '') {
-      setCurrentPage(1);
-    }
-  }, [debouncedSearchTerm]);
+    const timer = setTimeout(() => {
+      setDebouncedRequesterSearchTerm(requesterSearchTerm);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [requesterSearchTerm]);
 
-  // React Query hooks - now with server-side search
+  // Reset to page 1 when search changes
+  React.useEffect(() => {
+    if (debouncedAdminSearchTerm !== '') {
+      setAdminPage(1);
+    }
+  }, [debouncedAdminSearchTerm]);
+
+  React.useEffect(() => {
+    if (debouncedRequesterSearchTerm !== '') {
+      setRequesterPage(1);
+    }
+  }, [debouncedRequesterSearchTerm]);
+
+  // Get current tab's search term and page
+  const currentSearchTerm = activeTab === 'admin' ? debouncedAdminSearchTerm : debouncedRequesterSearchTerm;
+  const currentPage = activeTab === 'admin' ? adminPage : requesterPage;
+  const setCurrentPage = activeTab === 'admin' ? setAdminPage : setRequesterPage;
+
+  // React Query hooks - fetch admin roles (admin, staff, accounting) or requesters
+  const roleFilter = activeTab === 'admin' ? 'admin,staff,accounting' : 'requester';
   const {
     data: usersResponse,
     isLoading,
@@ -110,11 +137,16 @@ const AdminUsersManagement = () => {
     error,
     refetch,
     isFetching,
-  } = useUsers(currentPage, pageSize, debouncedSearchTerm);
+  } = useUsers(currentPage, pageSize, currentSearchTerm, roleFilter, '');
 
   const users = usersResponse?.data || [];
   const totalUsers = usersResponse?.total || 0;
   const totalPages = usersResponse?.totalPages || 0;
+
+  // Helper to check if user is admin role (admin, staff, accounting)
+  const isAdminRole = (userRole) => {
+    return userRole === 'admin' || userRole === 'staff' || userRole === 'accounting';
+  };
 
   const { data: userStats } = useUserStats();
 
@@ -140,6 +172,12 @@ const AdminUsersManagement = () => {
 
   const handleAddUser = () => {
     resetForm();
+    // Set default role based on active tab
+    if (activeTab === 'admin') {
+      setFormData(prev => ({ ...prev, role: 'staff' }));
+    } else {
+      setFormData(prev => ({ ...prev, role: 'requester' }));
+    }
     setModalMode('add');
     setShowModal(true);
   };
@@ -182,6 +220,13 @@ const AdminUsersManagement = () => {
         console.log('User creation successful:', result);
         setShowModal(false);
         resetForm();
+        
+        // Reset to page 1 to see the new user (if filters match)
+        setCurrentPage(1);
+        
+        // Explicitly refetch the users list to ensure it updates immediately
+        await refetch();
+        
         setSnackbar({
           show: true,
           message: `User created successfully! ${formData.first_name} ${formData.last_name} has been added as ${formData.role}.`,
@@ -207,6 +252,10 @@ const AdminUsersManagement = () => {
 
         setShowModal(false);
         resetForm();
+        
+        // Explicitly refetch the users list to ensure it updates immediately
+        await refetch();
+        
         setSnackbar({
           show: true,
           message: `User updated successfully! ${formData.first_name} ${formData.last_name} is now ${formData.role}.`,
@@ -295,10 +344,6 @@ const AdminUsersManagement = () => {
         return 'bg-purple-100 text-purple-800';
       case 'requester':
         return 'bg-green-100 text-green-800';
-      case 'user':
-        return 'bg-green-100 text-green-800'; // Legacy support
-      case 'external':
-        return 'bg-green-100 text-green-800'; // Legacy support
       default:
         return 'bg-gray-100 text-gray-800';
     }
@@ -309,9 +354,51 @@ const AdminUsersManagement = () => {
     return new Date(dateString).toLocaleDateString();
   };
 
+  const handleVerifyUser = async (userId) => {
+    try {
+      setVerifyingUserId(userId);
+      
+      const response = await fetch(`/api/admin/verify-user`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ userId }),
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Failed to verify user');
+      }
+
+      setSnackbar({
+        show: true,
+        message: 'User verified successfully!',
+        type: 'success'
+      });
+
+      // Refetch users to update the list
+      refetch();
+    } catch (error) {
+      console.error('Verify user error:', error);
+      setSnackbar({
+        show: true,
+        message: error?.message || 'Failed to verify user. Please try again.',
+        type: 'error'
+      });
+    } finally {
+      setVerifyingUserId(null);
+    }
+  };
+
+  const isUserVerified = (user) => {
+    return user.email_confirmed_at !== null && user.email_confirmed_at !== undefined;
+  };
+
   // Loading state - only show full loading on initial load (no search term)
   // During search, show the normal UI with loading indicator in table
-  const isInitialLoad = isLoading && users.length === 0 && !debouncedSearchTerm;
+  const isInitialLoad = isLoading && users.length === 0 && !currentSearchTerm;
   
   if (isInitialLoad) {
     return (
@@ -329,48 +416,51 @@ const AdminUsersManagement = () => {
   // Error state
   if (isError) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-center">
-          <AlertTriangle className="w-12 h-12 text-red-500 mx-auto mb-4" />
-          <h2 className="text-xl font-semibold text-gray-900 mb-2">Error Loading Users</h2>
-          <p className="text-gray-600 mb-4">{error?.message || 'Failed to load users'}</p>
-          <button 
-            onClick={() => refetch()}
-            className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
-          >
-            Try Again
-          </button>
+      <AdminLayout>
+        <div className="min-h-screen flex items-center justify-center p-4">
+          <div className="text-center max-w-md">
+            <AlertTriangle className="w-12 h-12 text-red-500 mx-auto mb-4" />
+            <h2 className="text-xl font-semibold text-gray-900 mb-2">Error Loading Users</h2>
+            <p className="text-gray-600 mb-6">{error?.message || 'Failed to load users'}</p>
+            <button 
+              onClick={() => refetch()}
+              className="inline-flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium shadow-sm"
+            >
+              <RefreshCw className="w-4 h-4" />
+              Try Again
+            </button>
+          </div>
         </div>
-      </div>
+      </AdminLayout>
     );
   }
 
   return (
     <AdminLayout>
-      <div className="max-w-7xl mx-auto p-6">
+      <div className="max-w-7xl mx-auto p-4 sm:p-6">
         {/* Header */}
-        <div className='mb-8'>
-          <div className='flex items-center justify-between'>
+        <div className='mb-6 sm:mb-8'>
+          <div className='flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4'>
             <div>
-              <h1 className='text-3xl font-bold text-gray-900 mb-2'>
+              <h1 className='text-2xl sm:text-3xl font-bold text-gray-900 tracking-tight mb-1 sm:mb-2'>
                 User Management
               </h1>
-              <p className='text-gray-600'>
-                Manage admin and staff users
+              <p className='text-sm text-gray-500'>
+                Manage admin, staff, and user accounts
               </p>
             </div>
-            <div className="flex gap-3">
+            <div className="flex flex-col sm:flex-row gap-2 sm:gap-3">
               <button
                 onClick={() => refetch()}
                 disabled={isFetching}
-                className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50"
+                className="inline-flex items-center justify-center gap-2 px-4 py-2 bg-white border border-gray-200 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 hover:text-gray-900 transition-all focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-200 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
               >
                 <RefreshCw className={`w-4 h-4 ${isFetching ? 'animate-spin' : ''}`} />
                 {isFetching ? 'Refreshing...' : 'Refresh'}
               </button>
               <button
                 onClick={handleAddUser}
-                className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700"
+                className="inline-flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-all focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 shadow-sm"
               >
                 <Plus className="w-4 h-4" />
                 Add User
@@ -381,131 +471,213 @@ const AdminUsersManagement = () => {
 
         {/* Stats Cards */}
         {userStats && (
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
-            <div className="bg-white p-6 rounded-lg shadow-md border">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 sm:gap-6 mb-6 sm:mb-8">
+            <div className="bg-white p-5 sm:p-6 rounded-xl shadow-sm border border-gray-200">
               <div className="flex items-center gap-3">
-                <Users className="w-8 h-8 text-blue-600" />
-                <div>
-                  <p className="text-sm text-gray-600">Total Users</p>
-                  <p className="text-2xl font-bold text-gray-900">{userStats.total}</p>
+                <div className="flex-shrink-0 w-10 h-10 rounded-lg bg-blue-50 flex items-center justify-center">
+                  <Users className="w-5 h-5 sm:w-6 sm:h-6 text-blue-600" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs sm:text-sm text-gray-500 font-medium">Total Users</p>
+                  <p className="text-xl sm:text-2xl font-bold text-gray-900">{userStats.total}</p>
                 </div>
               </div>
             </div>
-            <div className="bg-white p-6 rounded-lg shadow-md border">
+            <div className="bg-white p-5 sm:p-6 rounded-xl shadow-sm border border-gray-200">
               <div className="flex items-center gap-3">
-                <User className="w-8 h-8 text-red-600" />
-                <div>
-                  <p className="text-sm text-gray-600">Admins</p>
-                  <p className="text-2xl font-bold text-gray-900">{userStats.admin}</p>
+                <div className="flex-shrink-0 w-10 h-10 rounded-lg bg-red-50 flex items-center justify-center">
+                  <User className="w-5 h-5 sm:w-6 sm:h-6 text-red-600" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs sm:text-sm text-gray-500 font-medium">Admins</p>
+                  <p className="text-xl sm:text-2xl font-bold text-gray-900">{userStats.admin}</p>
                 </div>
               </div>
             </div>
-            <div className="bg-white p-6 rounded-lg shadow-md border">
+            <div className="bg-white p-5 sm:p-6 rounded-xl shadow-sm border border-gray-200">
               <div className="flex items-center gap-3">
-                <User className="w-8 h-8 text-blue-600" />
-                <div>
-                  <p className="text-sm text-gray-600">Staff</p>
-                  <p className="text-2xl font-bold text-gray-900">{userStats.staff}</p>
+                <div className="flex-shrink-0 w-10 h-10 rounded-lg bg-blue-50 flex items-center justify-center">
+                  <User className="w-5 h-5 sm:w-6 sm:h-6 text-blue-600" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs sm:text-sm text-gray-500 font-medium">Staff</p>
+                  <p className="text-xl sm:text-2xl font-bold text-gray-900">{userStats.staff}</p>
                 </div>
               </div>
             </div>
-            <div className="bg-white p-6 rounded-lg shadow-md border">
+            <div className="bg-white p-5 sm:p-6 rounded-xl shadow-sm border border-gray-200">
               <div className="flex items-center gap-3">
-                <User className="w-8 h-8 text-purple-600" />
-                <div>
-                  <p className="text-sm text-gray-600">Accounting</p>
-                  <p className="text-2xl font-bold text-gray-900">{userStats.accounting || 0}</p>
+                <div className="flex-shrink-0 w-10 h-10 rounded-lg bg-purple-50 flex items-center justify-center">
+                  <User className="w-5 h-5 sm:w-6 sm:h-6 text-purple-600" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs sm:text-sm text-gray-500 font-medium">Accounting</p>
+                  <p className="text-xl sm:text-2xl font-bold text-gray-900">{userStats.accounting || 0}</p>
                 </div>
               </div>
             </div>
-            <div className="bg-white p-6 rounded-lg shadow-md border">
+            <div className="bg-white p-5 sm:p-6 rounded-xl shadow-sm border border-gray-200">
               <div className="flex items-center gap-3">
-                <User className="w-8 h-8 text-green-600" />
-                <div>
-                  <p className="text-sm text-gray-600">Regular Users</p>
-                  <p className="text-2xl font-bold text-gray-900">{(userStats.requester || 0) + (userStats.null || 0)}</p>
+                <div className="flex-shrink-0 w-10 h-10 rounded-lg bg-green-50 flex items-center justify-center">
+                  <User className="w-5 h-5 sm:w-6 sm:h-6 text-green-600" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs sm:text-sm text-gray-500 font-medium">Regular Users</p>
+                  <p className="text-xl sm:text-2xl font-bold text-gray-900">{(userStats.requester || 0) + (userStats.null || 0)}</p>
                 </div>
               </div>
             </div>
           </div>
         )}
 
-        {/* Search */}
-        <div className="bg-white p-6 rounded-lg shadow-md border mb-8">
-          <div className="flex items-center gap-2">
-            <Search className="w-4 h-4 text-gray-500" />
-            <input
-              type="text"
-              placeholder="Search users by name, email, or domain (e.g., @company.com)..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
+        {/* Tabs */}
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 mb-6 sm:mb-8 overflow-hidden">
+          {/* Tab Headers */}
+          <div className="border-b border-gray-200">
+            <div className="flex">
+              <button
+                onClick={() => setActiveTab('admin')}
+                className={`flex-1 px-6 py-4 text-sm font-medium transition-colors ${
+                  activeTab === 'admin'
+                    ? 'bg-blue-50 text-blue-700 border-b-2 border-blue-600'
+                    : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+                }`}
+              >
+                <div className="flex items-center justify-center gap-2">
+                  <Users className="w-4 h-4" />
+                  <span>Admin Roles</span>
+                  {activeTab === 'admin' && userStats && (
+                    <span className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full text-xs font-medium">
+                      {(userStats.admin || 0) + (userStats.staff || 0) + (userStats.accounting || 0)}
+                    </span>
+                  )}
+                </div>
+              </button>
+              <button
+                onClick={() => setActiveTab('requester')}
+                className={`flex-1 px-6 py-4 text-sm font-medium transition-colors ${
+                  activeTab === 'requester'
+                    ? 'bg-blue-50 text-blue-700 border-b-2 border-blue-600'
+                    : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+                }`}
+              >
+                <div className="flex items-center justify-center gap-2">
+                  <User className="w-4 h-4" />
+                  <span>Requesters</span>
+                  {activeTab === 'requester' && userStats && (
+                    <span className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full text-xs font-medium">
+                      {(userStats.requester || 0) + (userStats.null || 0)}
+                    </span>
+                  )}
+                </div>
+              </button>
+            </div>
           </div>
-          {debouncedSearchTerm && (
-            <p className="text-sm text-gray-500 mt-2">
-              Searching for: "{debouncedSearchTerm}" ({totalUsers} result{totalUsers !== 1 ? 's' : ''})
-            </p>
-          )}
+
+          {/* Tab Content - Search Bar */}
+          <div className="p-5">
+            <div className="relative">
+              <Search className='w-5 h-5 absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400' />
+              <input
+                type="text"
+                placeholder={activeTab === 'admin' ? 'Search admin, staff, or accounting users...' : 'Search requester users...'}
+                value={activeTab === 'admin' ? adminSearchTerm : requesterSearchTerm}
+                onChange={(e) => {
+                  if (activeTab === 'admin') {
+                    setAdminSearchTerm(e.target.value);
+                  } else {
+                    setRequesterSearchTerm(e.target.value);
+                  }
+                }}
+                className="w-full pl-10 pr-4 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
+              />
+            </div>
+            
+            {currentSearchTerm && (
+              <p className="text-xs sm:text-sm text-gray-500 mt-3">
+                Showing <span className="font-medium text-gray-900">{totalUsers}</span> result{totalUsers !== 1 ? 's' : ''}
+                {currentSearchTerm && ` • Search: "${currentSearchTerm}"`}
+              </p>
+            )}
+          </div>
         </div>
 
-        {/* Users Table */}
-        <div className="bg-white rounded-lg shadow-md border overflow-hidden">
+        {/* Users Table (Desktop) */}
+        <div className="hidden sm:block bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full">
-              <thead className="bg-gray-50 border-b">
+              <thead className="bg-gray-50/80 border-b border-gray-100">
                 <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-6 py-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
                     User
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-6 py-4 text-center text-xs font-semibold text-gray-500 uppercase tracking-wider">
                     Role
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  {activeTab === 'requester' && (
+                    <th className="px-6 py-4 text-center text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                      Verification
+                    </th>
+                  )}
+                  <th className="px-6 py-4 text-center text-xs font-semibold text-gray-500 uppercase tracking-wider">
                     Created
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-6 py-4 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider">
                     Actions
                   </th>
                 </tr>
               </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
-                {isLoading && debouncedSearchTerm ? (
-                  // Show loading indicator in table during search (not full skeleton)
+              <tbody className="divide-y divide-gray-50">
+                {isLoading && currentSearchTerm ? (
                   <tr>
-                    <td colSpan="4" className="px-6 py-12 text-center">
+                    <td colSpan={activeTab === 'requester' ? 5 : 4} className="px-6 py-12 text-center">
                       <div className="flex flex-col items-center gap-3">
                         <RefreshCw className="w-6 h-6 text-blue-600 animate-spin" />
                         <p className="text-gray-600">Searching users...</p>
                       </div>
                     </td>
                   </tr>
-                ) : filteredUsers.length === 0 ? (
+                ) : users.length === 0 ? (
                   <tr>
-                    <td colSpan="4" className="px-6 py-12 text-center text-gray-500">
-                      {debouncedSearchTerm ? `No users found matching "${debouncedSearchTerm}"` : 'No users yet'}
+                    <td colSpan={activeTab === 'requester' ? 5 : 4} className="px-6 py-12 text-center">
+                      <div className="flex flex-col items-center gap-2">
+                        <Users className="w-12 h-12 text-gray-400" />
+                        <h3 className="text-lg font-medium text-gray-900">
+                          {currentSearchTerm 
+                            ? 'No users found' 
+                            : `No ${activeTab === 'admin' ? 'admin roles' : 'requesters'} yet`}
+                        </h3>
+                        <p className="text-sm text-gray-500">
+                          {currentSearchTerm 
+                            ? 'Try adjusting your search criteria' 
+                            : `Users will appear here once created`}
+                        </p>
+                      </div>
                     </td>
                   </tr>
                 ) : (
-                  filteredUsers.map((userItem) => (
+                  users.map((userItem) => (
                     <tr 
                       key={userItem.id} 
-                      className="hover:bg-gray-50"
+                      className="hover:bg-blue-50/30 transition-colors"
                       onMouseEnter={() => prefetchUser(userItem.id)}
                     >
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="flex items-center">
-                          <div>
-                            <div className="text-sm font-medium text-gray-900">
+                      <td className="px-6 py-4">
+                        <div className="flex items-center gap-3">
+                          <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center">
+                            <User className="w-4 h-4 text-gray-500" />
+                          </div>
+                          <div className="min-w-0">
+                            <div className="text-sm font-semibold text-gray-900 mb-0.5">
                               {userItem.first_name || userItem.last_name
                                 ? `${userItem.first_name || ''} ${userItem.last_name || ''}`.trim()
-                                : ''}
+                                : 'No name'}
                             </div>
-                            <div className="text-sm text-gray-500">{userItem.email}</div>
+                            <div className="text-xs text-gray-500 truncate">{userItem.email}</div>
                           </div>
                         </div>
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
+                      <td className="px-6 py-4 text-center">
                         <span
                           className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getRoleBadgeColor(
                             userItem.role
@@ -514,24 +686,58 @@ const AdminUsersManagement = () => {
                           {userItem.role || 'requester'}
                         </span>
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                      {activeTab === 'requester' && (
+                        <td className="px-6 py-4 text-center">
+                          {isUserVerified(userItem) ? (
+                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                              <CheckCircle className="w-3 h-3 mr-1" />
+                              Verified
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
+                              <AlertTriangle className="w-3 h-3 mr-1" />
+                              Unverified
+                            </span>
+                          )}
+                        </td>
+                      )}
+                      <td className="px-6 py-4 text-center text-sm text-gray-900">
                         {formatDate(userItem.created_at)}
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                        <div className="flex space-x-2">
+                      <td className="px-6 py-4 text-right text-sm font-medium">
+                        <div className="flex items-center justify-end gap-2">
+                          {activeTab === 'requester' && userItem.role === 'requester' && !isUserVerified(userItem) && (
+                            <button
+                              onClick={() => handleVerifyUser(userItem.id)}
+                              disabled={verifyingUserId === userItem.id}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-green-50 text-green-700 rounded-lg hover:bg-green-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                              {verifyingUserId === userItem.id ? (
+                                <>
+                                  <RefreshCw className="w-3 h-3 animate-spin" />
+                                  <span>Verifying...</span>
+                                </>
+                              ) : (
+                                <>
+                                  <CheckCircle className="w-3 h-3" />
+                                  <span>Verify</span>
+                                </>
+                              )}
+                            </button>
+                          )}
                           <button
                             onClick={() => handleEditUser(userItem)}
-                            className="px-3 py-1 text-sm bg-blue-100 text-blue-800 rounded-md hover:bg-blue-200 flex items-center space-x-1"
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 transition-colors"
                           >
-                            <Edit className="w-4 h-4" />
+                            <Edit className="w-3 h-3" />
                             <span>Edit</span>
                           </button>
                           {role === 'admin' && userItem.id !== user?.id && (
                             <button
                               onClick={() => handleDeleteClick(userItem)}
-                              className="px-3 py-1 text-sm bg-red-100 text-red-800 rounded-md hover:bg-red-200 flex items-center space-x-1"
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-red-50 text-red-700 rounded-lg hover:bg-red-100 transition-colors"
                             >
-                              <Trash2 className="w-4 h-4" />
+                              <Trash2 className="w-3 h-3" />
                               <span>Delete</span>
                             </button>
                           )}
@@ -545,13 +751,130 @@ const AdminUsersManagement = () => {
           </div>
         </div>
 
+        {/* Users List (Mobile) */}
+        <div className="sm:hidden space-y-4">
+          {isLoading && currentSearchTerm ? (
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-8 text-center">
+              <RefreshCw className="w-8 h-8 text-blue-600 animate-spin mx-auto mb-4" />
+              <p className="text-gray-600">Searching users...</p>
+            </div>
+          ) : users.length === 0 ? (
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-8 text-center">
+              <Users className="w-12 h-12 text-gray-400 mx-auto mb-4" />
+              <h3 className="text-lg font-medium text-gray-900 mb-2">
+                {currentSearchTerm 
+                  ? 'No users found' 
+                  : `No ${activeTab === 'admin' ? 'admin roles' : 'requesters'} yet`}
+              </h3>
+              <p className="text-sm text-gray-500">
+                {currentSearchTerm 
+                  ? 'Try adjusting your search criteria' 
+                  : 'Users will appear here once created'}
+              </p>
+            </div>
+          ) : (
+            users.map((userItem) => (
+              <div 
+                key={userItem.id} 
+                className="bg-white rounded-xl shadow-sm border border-gray-200 p-4 space-y-4"
+                onMouseEnter={() => prefetchUser(userItem.id)}
+              >
+                {/* Header: Name and Verification (only for requesters) */}
+                <div className="flex justify-between items-start">
+                  <div className="flex items-center gap-3 flex-1 min-w-0">
+                    <div className="flex-shrink-0 w-10 h-10 rounded-full bg-gray-100 flex items-center justify-center">
+                      <User className="w-5 h-5 text-gray-500" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <h3 className="text-base font-semibold text-gray-900 truncate">
+                        {userItem.first_name || userItem.last_name
+                          ? `${userItem.first_name || ''} ${userItem.last_name || ''}`.trim()
+                          : 'No name'}
+                      </h3>
+                      <p className="text-sm text-gray-500 truncate">{userItem.email}</p>
+                    </div>
+                  </div>
+                  {activeTab === 'requester' && (
+                    isUserVerified(userItem) ? (
+                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 flex-shrink-0">
+                        <CheckCircle className="w-3 h-3 mr-1" />
+                        Verified
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800 flex-shrink-0">
+                        <AlertTriangle className="w-3 h-3 mr-1" />
+                        Unverified
+                      </span>
+                    )
+                  )}
+                </div>
+
+                {/* Details Grid */}
+                <div className={`grid ${activeTab === 'requester' ? 'grid-cols-2' : 'grid-cols-1'} gap-4 border-t border-gray-100 pt-3`}>
+                  <div>
+                    <div className="text-xs text-gray-500 uppercase tracking-wider font-semibold mb-1">Role</div>
+                    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${getRoleBadgeColor(userItem.role)}`}>
+                      {userItem.role || 'requester'}
+                    </span>
+                  </div>
+                  <div>
+                    <div className="text-xs text-gray-500 uppercase tracking-wider font-semibold mb-1">Created</div>
+                    <div className="text-sm font-medium text-gray-900">{formatDate(userItem.created_at)}</div>
+                  </div>
+                </div>
+
+                {/* Action Buttons */}
+                <div className="flex flex-col gap-2 pt-2 border-t border-gray-100">
+                  {activeTab === 'requester' && userItem.role === 'requester' && !isUserVerified(userItem) && (
+                    <button
+                      onClick={() => handleVerifyUser(userItem.id)}
+                      disabled={verifyingUserId === userItem.id}
+                      className="w-full flex items-center justify-center gap-2 py-2.5 px-4 bg-green-50 text-green-700 rounded-lg hover:bg-green-100 transition-colors font-medium text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {verifyingUserId === userItem.id ? (
+                        <>
+                          <RefreshCw className="w-4 h-4 animate-spin" />
+                          <span>Verifying...</span>
+                        </>
+                      ) : (
+                        <>
+                          <CheckCircle className="w-4 h-4" />
+                          <span>Verify User</span>
+                        </>
+                      )}
+                    </button>
+                  )}
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => handleEditUser(userItem)}
+                      className="flex-1 flex items-center justify-center gap-2 py-2.5 px-4 bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 transition-colors font-medium text-sm"
+                    >
+                      <Edit className="w-4 h-4" />
+                      <span>Edit</span>
+                    </button>
+                    {role === 'admin' && userItem.id !== user?.id && (
+                      <button
+                        onClick={() => handleDeleteClick(userItem)}
+                        className="flex-1 flex items-center justify-center gap-2 py-2.5 px-4 bg-red-50 text-red-700 rounded-lg hover:bg-red-100 transition-colors font-medium text-sm"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                        <span>Delete</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+
         {/* Pagination */}
-        {(
-          <div className="bg-white rounded-lg shadow-md border p-4 mt-6">
-            <div className="flex items-center justify-between">
+        {totalUsers > 0 && (
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4 mt-6">
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
               <div className="flex items-center gap-4">
-                <span className="text-sm text-gray-700">
-                  Showing {totalUsers > 0 ? ((currentPage - 1) * pageSize) + 1 : 0} to {Math.min(currentPage * pageSize, totalUsers)} of {totalUsers} users
+                <span className="text-sm text-gray-500">
+                  Showing <span className="font-medium text-gray-900">{totalUsers > 0 ? ((currentPage - 1) * pageSize) + 1 : 0}</span> to <span className="font-medium text-gray-900">{Math.min(currentPage * pageSize, totalUsers)}</span> of <span className="font-medium text-gray-900">{totalUsers}</span> users
                 </span>
                 <select
                   value={pageSize}
@@ -559,7 +882,7 @@ const AdminUsersManagement = () => {
                     setPageSize(Number(e.target.value));
                     setCurrentPage(1);
                   }}
-                  className="px-3 py-1 border border-gray-300 rounded-md text-sm"
+                  className="px-3 py-1 bg-white border border-gray-200 rounded-lg text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 cursor-pointer"
                 >
                   <option value={10}>10 per page</option>
                   <option value={20}>20 per page</option>
@@ -571,10 +894,10 @@ const AdminUsersManagement = () => {
                 <button
                   onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
                   disabled={currentPage === 1 || totalPages <= 1}
-                  className="px-3 py-1 border border-gray-300 rounded-md text-sm hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+                  className="p-2 rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50 hover:text-gray-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="Previous page"
                 >
                   <ChevronLeft className="w-4 h-4" />
-                  Previous
                 </button>
                 
                 <div className="flex items-center gap-1">
@@ -594,10 +917,10 @@ const AdminUsersManagement = () => {
                       <button
                         key={pageNum}
                         onClick={() => setCurrentPage(pageNum)}
-                        className={`px-3 py-1 text-sm rounded-md ${
+                        className={`px-3 py-1 text-sm rounded-lg transition-colors ${
                           currentPage === pageNum
-                            ? 'bg-blue-600 text-white'
-                            : 'border border-gray-300 hover:bg-gray-50'
+                            ? 'bg-blue-600 text-white shadow-sm'
+                            : 'border border-gray-200 hover:bg-gray-50 text-gray-700'
                         }`}
                       >
                         {pageNum}
@@ -609,9 +932,9 @@ const AdminUsersManagement = () => {
                 <button
                   onClick={() => setCurrentPage(Math.min(totalPages, currentPage + 1))}
                   disabled={currentPage === totalPages || totalPages <= 1}
-                  className="px-3 py-1 border border-gray-300 rounded-md text-sm hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+                  className="p-2 rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50 hover:text-gray-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="Next page"
                 >
-                  Next
                   <ChevronRight className="w-4 h-4" />
                 </button>
               </div>
@@ -622,22 +945,22 @@ const AdminUsersManagement = () => {
         {/* Add/Edit User Modal */}
         {showModal && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-            <div className="bg-white rounded-lg max-w-md w-full p-6">
-              <div className="flex justify-between items-center mb-4">
-                <h2 className="text-xl font-bold text-gray-900">
+            <div className="bg-white rounded-xl max-w-md w-full shadow-lg">
+              <div className="px-6 py-5 border-b border-gray-200 flex justify-between items-center">
+                <h2 className="text-xl font-semibold text-gray-900">
                   {modalMode === 'add' ? 'Add New User' : 'Edit User'}
                 </h2>
                 <button
                   onClick={() => setShowModal(false)}
-                  className="text-gray-400 hover:text-gray-600"
+                  className="text-gray-400 hover:text-gray-600 transition-colors"
                 >
-                  <X className="w-6 h-6" />
+                  <X className="w-5 h-5" />
                 </button>
               </div>
 
-              <form onSubmit={handleSaveUser} className="space-y-4">
+              <form onSubmit={handleSaveUser} className="p-6 space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                  <label className="block text-sm font-medium text-gray-700 mb-1.5">
                     Email
                   </label>
                   <input
@@ -646,21 +969,21 @@ const AdminUsersManagement = () => {
                     value={formData.email}
                     onChange={(e) => {
                       const email = e.target.value;
-                      // All users are assigned "requester" role
+                      // All users are assigned "requester" role by default
                       let newRole = formData.role;
-                      // Auto-assign "requester" role for new users
-                      if (!newRole || newRole === 'user' || newRole === 'external') {
+                      // Auto-assign "requester" role for new users without a role
+                      if (!newRole) {
                         newRole = 'requester';
                       }
                       setFormData({ ...formData, email, role: newRole });
                     }}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
                   />
                 </div>
 
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                    <label className="block text-sm font-medium text-gray-700 mb-1.5">
                       First Name
                     </label>
                     <input
@@ -668,11 +991,11 @@ const AdminUsersManagement = () => {
                       required
                       value={formData.first_name}
                       onChange={(e) => setFormData({ ...formData, first_name: e.target.value })}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      className="w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
                     />
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                    <label className="block text-sm font-medium text-gray-700 mb-1.5">
                       Last Name
                     </label>
                     <input
@@ -680,14 +1003,14 @@ const AdminUsersManagement = () => {
                       required
                       value={formData.last_name}
                       onChange={(e) => setFormData({ ...formData, last_name: e.target.value })}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      className="w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
                     />
                   </div>
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Password {modalMode === 'edit' && '(leave blank to keep current)'}
+                  <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                    Password {modalMode === 'edit' && <span className="text-gray-500 font-normal">(leave blank to keep current)</span>}
                   </label>
                   <div className="relative">
                     <input
@@ -695,53 +1018,53 @@ const AdminUsersManagement = () => {
                       required={modalMode === 'add'}
                       value={formData.password}
                       onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                      className="w-full px-3 py-2 pr-10 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      className="w-full px-3 py-2 pr-10 bg-white border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
                     />
                     <button
                       type="button"
                       onClick={() => setShowPassword(!showPassword)}
-                      className="absolute inset-y-0 right-0 pr-3 flex items-center"
+                      className="absolute inset-y-0 right-0 pr-3 flex items-center text-gray-400 hover:text-gray-600"
                     >
-                      {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                      {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                     </button>
                   </div>
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                  <label className="block text-sm font-medium text-gray-700 mb-1.5">
                     Role
                   </label>
                   <select
                     value={formData.role}
                     onChange={(e) => setFormData({ ...formData, role: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
                   >
                     <option value="staff">Staff</option>
                     <option value="admin">Admin</option>
                     <option value="accounting">Accounting</option>
-                    <option value="external">External</option>
+                    <option value="requester">Requester</option>
                   </select>
                 </div>
 
                 {/* Error Display */}
                 {formError && (
-                  <div className="bg-red-50 border border-red-200 rounded-md p-3">
+                  <div className="bg-red-50 border border-red-200 rounded-lg p-3">
                     <p className="text-red-800 text-sm">{formError}</p>
                   </div>
                 )}
 
-                <div className="flex justify-end space-x-3 pt-4">
+                <div className="flex justify-end gap-3 pt-4 border-t border-gray-200">
                   <button
                     type="button"
                     onClick={() => setShowModal(false)}
-                    className="px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50"
+                    className="px-4 py-2 border border-gray-200 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors text-sm font-medium"
                   >
                     Cancel
                   </button>
                   <button
                     type="submit"
                     disabled={createUserMutation.isPending || updateUserMutation.isPending}
-                    className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 flex items-center space-x-2 disabled:opacity-50"
+                    className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm font-medium shadow-sm"
                   >
                     {(createUserMutation.isPending || updateUserMutation.isPending) && (
                       <RefreshCw className="w-4 h-4 animate-spin" />
@@ -760,62 +1083,66 @@ const AdminUsersManagement = () => {
         {/* Delete Confirmation Modal */}
         {showDeleteConfirm && userToDelete && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-            <div className="bg-white rounded-lg max-w-md w-full p-6">
-              <div className="flex items-center gap-3 mb-4">
-                <AlertTriangle className="w-8 h-8 text-red-600" />
-                <h2 className="text-xl font-bold text-gray-900">Confirm Delete</h2>
+            <div className="bg-white rounded-xl max-w-md w-full shadow-lg">
+              <div className="px-6 py-5 border-b border-gray-200 flex items-center gap-3">
+                <div className="flex-shrink-0 w-10 h-10 rounded-full bg-red-50 flex items-center justify-center">
+                  <AlertTriangle className="w-5 h-5 text-red-600" />
+                </div>
+                <h2 className="text-xl font-semibold text-gray-900">Confirm Delete</h2>
               </div>
               
-              {isCheckingApplications ? (
-                <div className="flex items-center gap-2 text-gray-600 mb-6">
-                  <RefreshCw className="w-4 h-4 animate-spin" />
-                  <span>Checking for applications...</span>
-                </div>
-              ) : (
-                <>
-                  <p className="text-gray-600 mb-4">
-                    Are you sure you want to delete the user "{userToDelete.email}"? This action cannot be undone.
-                  </p>
-                  
-                  {userToDelete.role === 'requester' && userApplicationCount > 0 && (
-                    <div className="bg-yellow-50 border border-yellow-200 rounded-md p-4 mb-6">
-                      <div className="flex items-start gap-2">
-                        <AlertTriangle className="w-5 h-5 text-yellow-600 mt-0.5 flex-shrink-0" />
-                        <div>
-                          <p className="text-sm font-medium text-yellow-800 mb-1">
-                            Warning: This user has {userApplicationCount} application{userApplicationCount !== 1 ? 's' : ''}
-                          </p>
-                          <p className="text-sm text-yellow-700">
-                            All applications associated with this external user will also be deleted (soft delete).
-                          </p>
+              <div className="p-6">
+                {isCheckingApplications ? (
+                  <div className="flex items-center gap-2 text-gray-600 mb-6">
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    <span>Checking for applications...</span>
+                  </div>
+                ) : (
+                  <>
+                    <p className="text-gray-600 mb-4">
+                      Are you sure you want to delete the user <span className="font-medium text-gray-900">"{userToDelete.email}"</span>? This action cannot be undone.
+                    </p>
+                    
+                    {userToDelete.role === 'requester' && userApplicationCount > 0 && (
+                      <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6">
+                        <div className="flex items-start gap-2">
+                          <AlertTriangle className="w-5 h-5 text-yellow-600 mt-0.5 flex-shrink-0" />
+                          <div>
+                            <p className="text-sm font-medium text-yellow-800 mb-1">
+                              Warning: This user has {userApplicationCount} application{userApplicationCount !== 1 ? 's' : ''}
+                            </p>
+                            <p className="text-sm text-yellow-700">
+                              All applications associated with this external user will also be deleted (soft delete).
+                            </p>
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  )}
-                </>
-              )}
-              
-              <div className="flex justify-end space-x-3">
-                <button
-                  onClick={() => {
-                    setShowDeleteConfirm(false);
-                    setUserToDelete(null);
-                    setUserApplicationCount(0);
-                  }}
-                  className="px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleDeleteUser}
-                  disabled={deleteUserMutation.isPending || isCheckingApplications}
-                  className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 flex items-center space-x-2 disabled:opacity-50"
-                >
-                  {deleteUserMutation.isPending && (
-                    <RefreshCw className="w-4 h-4 animate-spin" />
-                  )}
-                  <span>Delete User</span>
-                </button>
+                    )}
+                  </>
+                )}
+                
+                <div className="flex justify-end gap-3 pt-4 border-t border-gray-200">
+                  <button
+                    onClick={() => {
+                      setShowDeleteConfirm(false);
+                      setUserToDelete(null);
+                      setUserApplicationCount(0);
+                    }}
+                    className="px-4 py-2 border border-gray-200 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors text-sm font-medium"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleDeleteUser}
+                    disabled={deleteUserMutation.isPending || isCheckingApplications}
+                    className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm font-medium shadow-sm"
+                  >
+                    {deleteUserMutation.isPending && (
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                    )}
+                    <span>Delete User</span>
+                  </button>
+                </div>
               </div>
             </div>
           </div>

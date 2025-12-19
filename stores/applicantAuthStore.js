@@ -139,8 +139,8 @@ const useApplicantAuthStore = create((set, get) => ({
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          email,
-          password,
+        email,
+        password,
           first_name: userData?.first_name || '',
           last_name: userData?.last_name || '',
         }),
@@ -174,15 +174,15 @@ const useApplicantAuthStore = create((set, get) => ({
           });
           
           // Set user and profile in store
-          set({
+        set({
             user: data.session.user,
             profile: {
               id: data.user.id,
               email: data.user.email,
               email_confirmed_at: null, // Not confirmed yet
             },
-            isLoading: false,
-          });
+          isLoading: false,
+        });
         }
         
         return { 

@@ -142,9 +142,14 @@ export default async function handler(req, res) {
       ? 'Dues Request - Escrow Instructions' 
       : 'Statement of Unpaid Assessments';
     
-    // Extract filename from URL and clean it up (remove timestamp prefix)
+    // Extract filename from URL and clean it up (remove timestamp prefix and query parameters)
     const urlParts = publicUrl.split('/');
     let existingFilename = urlParts[urlParts.length - 1] || `${documentType.replace(/[^a-zA-Z0-9]/g, '_')}_${propertyAddress.replace(/[^a-zA-Z0-9]/g, '_')}.pdf`;
+    
+    // Remove query parameters (everything after ?)
+    existingFilename = existingFilename.split('?')[0];
+    // Remove URL fragments (everything after #)
+    existingFilename = existingFilename.split('#')[0];
     
     // Remove leading timestamp pattern (e.g., "1762187746441-" from filename)
     // Pattern: digits followed by hyphen at the start

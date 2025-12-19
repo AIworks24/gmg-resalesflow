@@ -33,6 +33,7 @@ import {
 import { useRouter } from 'next/router';
 import { mapFormDataToPDFFields } from '../../lib/pdfFieldMapper';
 import { formatDate, formatDateTime, formatDateTimeFull } from '../../lib/timeUtils';
+import { parseEmails } from '../../lib/emailUtils';
 import AdminPropertyInspectionForm from './AdminPropertyInspectionForm';
 import AdminResaleCertificateForm from './AdminResaleCertificateForm';
 import AdminSettlementForm from './AdminSettlementForm';
@@ -146,6 +147,8 @@ const AdminApplications = ({ userRole }) => {
       return;
     }
 
+    console.log('🔄 Setting up real-time subscription for applications...');
+
     // Create a channel for real-time updates
     const channel = supabase
       .channel('applications-changes')
@@ -157,6 +160,7 @@ const AdminApplications = ({ userRole }) => {
           table: 'applications',
         },
         (payload) => {
+          console.log('📡 Real-time event received:', payload.eventType, payload.new?.id || payload.old?.id);
           
           // For INSERT events, optimistically add then refresh silently
           if (payload.eventType === 'INSERT') {
@@ -297,13 +301,22 @@ const AdminApplications = ({ userRole }) => {
         }
       )
       .subscribe((status) => {
-        if (status === 'CHANNEL_ERROR') {
+        if (status === 'SUBSCRIBED') {
+          console.log('✅ Real-time subscription active for applications');
+        } else if (status === 'CHANNEL_ERROR') {
           console.error('❌ Real-time subscription error for applications');
+        } else if (status === 'TIMED_OUT') {
+          console.warn('⏱️ Real-time subscription timed out for applications');
+        } else if (status === 'CLOSED') {
+          console.log('🔌 Real-time subscription closed for applications');
+        } else {
+          console.log('📊 Real-time subscription status:', status);
         }
       });
 
     // Cleanup subscription on unmount
     return () => {
+      console.log('🧹 Cleaning up real-time subscription for applications');
       supabase.removeChannel(channel);
     };
   }, [supabase, mutate]); // Removed swrData from dependencies to avoid recreating subscription
@@ -678,7 +691,59 @@ const AdminApplications = ({ userRole }) => {
 
     // Apply assigned to me filter
     if (assignedToMe && userEmail) {
-      filtered = filtered.filter(app => app.assigned_to === userEmail);
+      filtered = filtered.filter(app => {
+        // Check if directly assigned (case-insensitive)
+        if (app.assigned_to && app.assigned_to.toLowerCase() === userEmail.toLowerCase()) {
+          return true;
+        }
+        
+        // For multi-community properties, check if user is owner of any property in the group
+        if (app.hoa_properties?.is_multi_community && app.application_property_groups) {
+          // Normalize user email for comparison (remove "owner." prefix if present)
+          const normalizedUserEmail = userEmail.replace(/^owner\./, '').toLowerCase();
+          
+          // Check primary property owner
+          if (app.hoa_properties?.property_owner_email) {
+            const primaryOwnerEmails = parseEmails(app.hoa_properties.property_owner_email)
+              .map(e => e.replace(/^owner\./, '').toLowerCase());
+            
+            if (primaryOwnerEmails.includes(normalizedUserEmail)) {
+              return true;
+            }
+          }
+          
+          // Check all property groups for owner email match
+          const isOwnerInAnyGroup = app.application_property_groups.some(group => {
+            // Check property_owner_email from the group
+            if (group.property_owner_email) {
+              const groupOwnerEmails = parseEmails(group.property_owner_email)
+                .map(e => e.replace(/^owner\./, '').toLowerCase());
+              
+              if (groupOwnerEmails.includes(normalizedUserEmail)) {
+                return true;
+              }
+            }
+            
+            // Also check nested hoa_properties if available
+            if (group.hoa_properties?.property_owner_email) {
+              const nestedOwnerEmails = parseEmails(group.hoa_properties.property_owner_email)
+                .map(e => e.replace(/^owner\./, '').toLowerCase());
+              
+              if (nestedOwnerEmails.includes(normalizedUserEmail)) {
+                return true;
+              }
+            }
+            
+            return false;
+          });
+          
+          if (isOwnerInAnyGroup) {
+            return true;
+          }
+        }
+        
+        return false;
+      });
     }
 
     const count = filtered.length;
@@ -1223,6 +1288,35 @@ const AdminApplications = ({ userRole }) => {
     }
   };
 
+  const TaskCard = ({ step, icon, title, description, status, children, completedAt }) => (
+    <div className={`border rounded-xl p-4 sm:p-5 bg-white shadow-sm transition-all ${getTaskStatusColor(status)}`}>
+       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+          <div className="flex items-start gap-3 sm:gap-4 flex-1 min-w-0">
+             <div className={`flex-shrink-0 flex items-center justify-center w-10 h-10 rounded-full border-2 ${
+               status === 'completed' ? 'bg-green-50 border-green-500 text-green-600' : 'bg-gray-50 border-gray-300 text-gray-500'
+             }`}>
+               <span className='text-sm font-bold'>{step}</span>
+             </div>
+             <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                   <h4 className='font-semibold text-gray-900 text-sm sm:text-base'>{title}</h4>
+                   {icon}
+                </div>
+                {description && <p className='text-sm text-gray-500 mt-1'>{description}</p>}
+                {completedAt && (
+                   <div className="mt-2 text-xs text-green-600 bg-green-50 px-2 py-1 rounded inline-block">
+                      Completed: {formatDateTimeFull(completedAt)}
+                   </div>
+                )}
+             </div>
+          </div>
+          <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2 w-full lg:w-auto lg:flex-shrink-0">
+             {children}
+          </div>
+       </div>
+    </div>
+  );
+
   // Helper function to close modal and clean up URL
   const handleCloseModal = () => {
     setSelectedApplication(null);
@@ -1665,6 +1759,7 @@ const AdminApplications = ({ userRole }) => {
     
     let pdfGeneratedSuccessfully = false;
     let pdfUrl = null;
+    let errorMessage = 'Failed to generate PDF. Please try again.';
     
     try {
       const response = await fetch('/api/regenerate-pdf', {
@@ -1676,9 +1771,23 @@ const AdminApplications = ({ userRole }) => {
         }),
       });
       
+      // Check if response is ok before parsing JSON
+      if (!response.ok) {
+        const errorText = await response.text();
+        let errorData;
+        try {
+          errorData = JSON.parse(errorText);
+        } catch {
+          errorData = { error: `Server error: ${response.status} ${response.statusText}` };
+        }
+        throw new Error(errorData.error || `Server error: ${response.status}`);
+      }
+      
       const result = await response.json();
       
-      if (!result.success) throw new Error(result.error || 'Failed to generate PDF');
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to generate PDF');
+      }
       
       // Mark PDF as generated successfully
       pdfGeneratedSuccessfully = true;
@@ -1686,7 +1795,10 @@ const AdminApplications = ({ userRole }) => {
       
     } catch (error) {
       console.error('❌ Failed to generate PDF:', error);
-      showSnackbar('Failed to generate PDF. Please try again.', 'error');
+      errorMessage = error.message || 'Failed to generate PDF. Please try again.';
+      showSnackbar(errorMessage, 'error');
+      setGeneratingPDF(false);
+      return; // Exit early on error
     }
     
     // Always clear the generating state first, regardless of what happened
@@ -1727,6 +1839,9 @@ const AdminApplications = ({ userRole }) => {
         console.warn('Post-processing failed, but PDF was generated successfully:', postProcessingError);
         showSnackbar('PDF generated successfully!', 'success');
       }
+    } else {
+      // This shouldn't happen, but just in case
+      showSnackbar('PDF generation completed but URL is missing. Please try again.', 'error');
     }
   };
 
@@ -1765,8 +1880,22 @@ const AdminApplications = ({ userRole }) => {
         }),
       });
       
+      // Check if response is ok before parsing JSON
+      if (!response.ok) {
+        const errorText = await response.text();
+        let errorData;
+        try {
+          errorData = JSON.parse(errorText);
+        } catch {
+          errorData = { error: `Server error: ${response.status} ${response.statusText}` };
+        }
+        throw new Error(errorData.error || `Server error: ${response.status}`);
+      }
+      
       const result = await response.json();
-      if (!result.success) throw new Error(result.error || 'Failed to generate PDF');
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to generate PDF');
+      }
       
       // Clear loading state immediately after successful generation
       setGeneratingPDF(false);
@@ -1788,7 +1917,8 @@ const AdminApplications = ({ userRole }) => {
       
     } catch (error) {
       console.error('Failed to generate settlement PDF:', error);
-      showSnackbar('Failed to generate PDF. Please try again.', 'error');
+      const errorMessage = error.message || 'Failed to generate PDF. Please try again.';
+      showSnackbar(errorMessage, 'error');
       setGeneratingPDF(false);
     }
   };
@@ -2391,6 +2521,18 @@ const AdminApplications = ({ userRole }) => {
         }),
       });
       
+      // Check if response is ok before parsing JSON
+      if (!response.ok) {
+        const errorText = await response.text();
+        let errorData;
+        try {
+          errorData = JSON.parse(errorText);
+        } catch {
+          errorData = { error: `Server error: ${response.status} ${response.statusText}` };
+        }
+        throw new Error(errorData.error || `Server error: ${response.status}`);
+      }
+      
       const result = await response.json();
       
       if (!result.success) {
@@ -2432,7 +2574,8 @@ const AdminApplications = ({ userRole }) => {
       
     } catch (error) {
       console.error(`❌ Failed to generate PDF for property ${group.property_name}:`, error);
-      showSnackbar(`Failed to generate PDF for ${group.property_name}. Please try again.`, 'error');
+      const errorMessage = error.message || `Failed to generate PDF for ${group.property_name}. Please try again.`;
+      showSnackbar(errorMessage, 'error');
     } finally {
       setGeneratingPDFForProperty(null); // Clear the generating state for this property
     }
@@ -3791,75 +3934,96 @@ const AdminApplications = ({ userRole }) => {
                                           const resaleStatusForGroup = group.status === 'completed' ? 'completed' : 'not_started';
                                           
                                           return (
-                                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                             <div className="space-y-4">
                                                 {/* Inspection */}
-                                                <div className={`flex flex-col p-3 rounded-lg border ${getTaskStatusColor(inspectionStatusForGroup)}`}>
-                                                    <div className="flex justify-between items-start mb-2">
-                                                       <span className="text-xs font-bold uppercase tracking-wider text-gray-500">Inspection</span>
+                                                <TaskCard 
+                                                    step="1" 
+                                                    title="Property Inspection Form" 
+                                                    description={inspectionStatusForGroup === 'not_started' ? 'Not Started' : 'Complete property inspection checklist'}
+                                                    status={inspectionStatusForGroup}
+                                                    completedAt={group.inspection_completed_at}
+                                                >
+                                                    <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2">
+                                                       <button onClick={() => handleCompleteForm(selectedApplication.id, 'inspection', group)} className="w-full sm:w-auto px-3 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 active:bg-gray-100 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap">
+                                                          {loadingFormKey === `inspection:${group.id}` ? (
+                                                             <div className="flex items-center gap-1.5">
+                                                               <RefreshCw className="w-3 h-3 animate-spin" />
+                                                               <span>Loading...</span>
+                                                             </div>
+                                                          ) : getFormButtonText(inspectionStatusForGroup)}
+                                                       </button>
                                                        {inspectionStatusForGroup !== 'completed' && (
-                                                           <button onClick={() => {
-                                                              supabase.from('application_property_groups').update({ inspection_status: 'completed', inspection_completed_at: new Date().toISOString() }).eq('id', group.id).then(() => refreshSelectedApplication(selectedApplication.id));
-                                                           }} className="text-[10px] text-green-600 font-medium hover:underline">Mark Done</button>
+                                                          <button onClick={() => {
+                                                             supabase.from('application_property_groups').update({ inspection_status: 'completed', inspection_completed_at: new Date().toISOString() }).eq('id', group.id).then(() => refreshSelectedApplication(selectedApplication.id));
+                                                          }} className="w-full sm:w-auto px-3 py-2 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 active:bg-green-300 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap">Mark Complete</button>
                                                        )}
                                                     </div>
-                                                    <button onClick={() => handleCompleteForm(selectedApplication.id, 'inspection', group)} className="w-full mt-auto py-1.5 bg-white border border-gray-300 rounded text-xs font-medium text-gray-700 hover:bg-gray-50">
-                                                       {loadingFormKey === `inspection:${group.id}` ? (
-                                                          <div className="flex items-center justify-center gap-1.5">
-                                                            <RefreshCw className="w-3 h-3 animate-spin" />
-                                                            <span>Loading...</span>
-                                                          </div>
-                                                       ) : getFormButtonText(inspectionStatusForGroup)}
-                                                    </button>
-                                                </div>
+                                                </TaskCard>
 
                                                 {/* Resale */}
-                                                <div className={`flex flex-col p-3 rounded-lg border ${getTaskStatusColor(resaleStatusForGroup)}`}>
-                                                    <div className="flex justify-between items-start mb-2">
-                                                       <span className="text-xs font-bold uppercase tracking-wider text-gray-500">Resale Cert</span>
-                                                        {isPrimary && !selectedApplication.resale_certificate_completed_at && (
-                                                           <button onClick={() => handleCompleteTask(selectedApplication.id, 'resale_certificate')} className="text-[10px] text-green-600 font-medium hover:underline">Mark Done</button>
+                                                <TaskCard 
+                                                    step="2" 
+                                                    title="Virginia Resale Certificate" 
+                                                    description={resaleStatusForGroup === 'not_started' ? 'Not Started' : 'Fill out Virginia resale disclosure'}
+                                                    status={resaleStatusForGroup}
+                                                >
+                                                    <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2">
+                                                       <button onClick={() => handleCompleteForm(selectedApplication.id, 'resale', group)} className="w-full sm:w-auto px-3 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 active:bg-gray-100 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap">
+                                                          {loadingFormKey === `resale:${group.id}` ? (
+                                                             <div className="flex items-center gap-1.5">
+                                                               <RefreshCw className="w-3 h-3 animate-spin" />
+                                                               <span>Loading...</span>
+                                                             </div>
+                                                          ) : getFormButtonText(resaleStatusForGroup)}
+                                                       </button>
+                                                       {isPrimary && !selectedApplication.resale_certificate_completed_at && (
+                                                          <button onClick={() => handleCompleteTask(selectedApplication.id, 'resale_certificate')} className="w-full sm:w-auto px-3 py-2 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 active:bg-green-300 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap">Mark Complete</button>
                                                        )}
                                                     </div>
-                                                    <button onClick={() => handleCompleteForm(selectedApplication.id, 'resale', group)} className="w-full mt-auto py-1.5 bg-white border border-gray-300 rounded text-xs font-medium text-gray-700 hover:bg-gray-50">
-                                                       {loadingFormKey === `resale:${group.id}` ? (
-                                                          <div className="flex items-center justify-center gap-1.5">
-                                                            <RefreshCw className="w-3 h-3 animate-spin" />
-                                                            <span>Loading...</span>
-                                                          </div>
-                                                       ) : getFormButtonText(resaleStatusForGroup)}
-                                                    </button>
-                                                </div>
+                                                </TaskCard>
 
                                                 {/* PDF */}
-                                                 <div className={`flex flex-col p-3 rounded-lg border ${getTaskStatusColor(group.pdf_status || 'not_started')}`}>
-                                                    <div className="flex justify-between items-start mb-2">
-                                                       <span className="text-xs font-bold uppercase tracking-wider text-gray-500">PDF</span>
-                                                       {group.pdf_url && <button onClick={() => window.open(group.pdf_url, '_blank')} className="text-[10px] text-blue-600 font-medium hover:underline">View</button>}
+                                                <TaskCard 
+                                                    step="3" 
+                                                    title="Generate PDF" 
+                                                    description="Generate PDF for this property"
+                                                    status={group.pdf_status || 'not_started'}
+                                                    completedAt={group.pdf_completed_at}
+                                                >
+                                                    <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2">
+                                                       <button onClick={() => handleGeneratePDFForProperty(selectedApplication.id, group)} disabled={generatingPDFForProperty === group.id || !canGeneratePDFForProperty(group)} className="w-full sm:w-auto px-3 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 active:bg-gray-100 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed">
+                                                          {generatingPDFForProperty === group.id ? (
+                                                             <div className="flex items-center gap-1.5">
+                                                               <RefreshCw className="w-3 h-3 animate-spin" />
+                                                               <span>Generating...</span>
+                                                             </div>
+                                                          ) : 'Generate PDF'}
+                                                       </button>
+                                                       {group.pdf_url && (
+                                                          <button onClick={() => window.open(group.pdf_url, '_blank')} className="w-full sm:w-auto px-3 py-2 bg-gray-100 border border-gray-300 rounded-lg text-gray-600 hover:bg-gray-200 active:bg-gray-300 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap">View</button>
+                                                       )}
                                                     </div>
-                                                    <button onClick={() => handleGeneratePDFForProperty(selectedApplication.id, group)} disabled={generatingPDFForProperty === group.id || !canGeneratePDFForProperty(group)} className="w-full mt-auto py-1.5 bg-white border border-gray-300 rounded text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50">
-                                                       {generatingPDFForProperty === group.id ? (
-                                                          <div className="flex items-center justify-center gap-1.5">
-                                                            <RefreshCw className="w-3 h-3 animate-spin" />
-                                                            <span>Generating...</span>
-                                                          </div>
-                                                       ) : 'Generate'}
-                                                    </button>
-                                                </div>
+                                                </TaskCard>
 
                                                 {/* Email */}
-                                                <div className={`flex flex-col p-3 rounded-lg border ${getTaskStatusColor(group.email_status || 'not_started')}`}>
-                                                    <div className="flex justify-between items-start mb-2">
-                                                       <span className="text-xs font-bold uppercase tracking-wider text-gray-500">Email</span>
+                                                <TaskCard 
+                                                    step="4" 
+                                                    title="Send Email" 
+                                                    description="Send email for this property"
+                                                    status={group.email_status || 'not_started'}
+                                                    completedAt={group.email_completed_at}
+                                                >
+                                                    <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2">
+                                                       <button onClick={() => handleSendEmailForProperty(selectedApplication.id, group)} disabled={sendingEmailForProperty === group.id || !canSendEmailForProperty(group)} className="w-full sm:w-auto px-3 sm:px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 active:bg-blue-800 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed shadow-sm">
+                                                          {sendingEmailForProperty === group.id ? (
+                                                             <div className="flex items-center gap-1.5">
+                                                               <RefreshCw className="w-3 h-3 animate-spin" />
+                                                               <span>Sending...</span>
+                                                             </div>
+                                                          ) : 'Send Email'}
+                                                       </button>
                                                     </div>
-                                                    <button onClick={() => handleSendEmailForProperty(selectedApplication.id, group)} disabled={sendingEmailForProperty === group.id || !canSendEmailForProperty(group)} className="w-full mt-auto py-1.5 bg-white border border-gray-300 rounded text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50">
-                                                       {sendingEmailForProperty === group.id ? (
-                                                          <div className="flex items-center justify-center gap-1.5">
-                                                            <RefreshCw className="w-3 h-3 animate-spin" />
-                                                            <span>Sending...</span>
-                                                          </div>
-                                                       ) : 'Send'}
-                                                    </button>
-                                                </div>
+                                                </TaskCard>
                                              </div>
                                           )
                                       }
@@ -3931,35 +4095,6 @@ const AdminApplications = ({ userRole }) => {
                       const taskStatuses = getTaskStatuses(selectedApplication);
                       const isSettlementApp = selectedApplication.submitter_type === 'settlement' || selectedApplication.application_type?.startsWith('settlement');
                       
-                      const TaskCard = ({ step, icon, title, description, status, children, completedAt }) => (
-                         <div className={`border rounded-xl p-5 bg-white shadow-sm transition-all ${getTaskStatusColor(status)}`}>
-                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                               <div className="flex items-start gap-4">
-                                  <div className={`flex-shrink-0 flex items-center justify-center w-10 h-10 rounded-full border-2 ${
-                                    status === 'completed' ? 'bg-green-50 border-green-500 text-green-600' : 'bg-gray-50 border-gray-300 text-gray-500'
-                                  }`}>
-                                    <span className='text-sm font-bold'>{step}</span>
-                                  </div>
-                                  <div>
-                                     <div className="flex items-center gap-2">
-                                        <h4 className='font-semibold text-gray-900'>{title}</h4>
-                                        {icon}
-                                     </div>
-                                     <p className='text-sm text-gray-500 mt-1'>{description}</p>
-                                     {completedAt && (
-                                        <div className="mt-2 text-xs text-green-600 bg-green-50 px-2 py-1 rounded inline-block">
-                                           Completed: {formatDateTimeFull(completedAt)}
-                                        </div>
-                                     )}
-                                  </div>
-                               </div>
-                               <div className="flex items-center gap-2 sm:self-center self-start">
-                                  {children}
-                               </div>
-                            </div>
-                         </div>
-                      );
-
                       if (isSettlementApp) {
                         const settlementFormCompleted = taskStatuses.settlement === 'completed';
                         const pdfCanBeGenerated = settlementFormCompleted && (taskStatuses.pdf === 'not_started' || taskStatuses.pdf === 'update_needed' || taskStatuses.pdf === 'completed');
@@ -3968,40 +4103,48 @@ const AdminApplications = ({ userRole }) => {
                         return (
                           <>
                              <TaskCard step="1" status={taskStatuses.settlement} title="Settlement Form" description="Complete form with assessment details" completedAt={selectedApplication.settlement_form_completed_at}>
-                                <button onClick={() => handleCompleteForm(selectedApplication.id, 'settlement')} disabled={loadingFormData} className="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 text-sm font-medium">
-                                   {loadingFormData ? (
-                                      <div className="flex items-center gap-1.5">
-                                        <RefreshCw className="w-4 h-4 animate-spin" />
-                                        <span>Loading...</span>
-                                      </div>
-                                   ) : getFormButtonText(taskStatuses.settlement)}
-                                </button>
-                                {!selectedApplication.settlement_form_completed_at && (
-                                   <button onClick={() => handleCompleteTask(selectedApplication.id, 'settlement_form')} className="px-3 py-2 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 text-sm font-medium">Complete</button>
-                                )}
+                                <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2">
+                                   <button onClick={() => handleCompleteForm(selectedApplication.id, 'settlement')} disabled={loadingFormData} className="w-full sm:w-auto px-3 sm:px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 active:bg-gray-100 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed">
+                                      {loadingFormData ? (
+                                         <div className="flex items-center gap-1.5">
+                                           <RefreshCw className="w-3 h-3 sm:w-4 sm:h-4 animate-spin" />
+                                           <span>Loading...</span>
+                                         </div>
+                                      ) : getFormButtonText(taskStatuses.settlement)}
+                                   </button>
+                                   {!selectedApplication.settlement_form_completed_at && (
+                                      <button onClick={() => handleCompleteTask(selectedApplication.id, 'settlement_form')} className="w-full sm:w-auto px-3 py-2 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 active:bg-green-300 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap">Complete</button>
+                                   )}
+                                </div>
                              </TaskCard>
                              
                              <TaskCard step="2" status={taskStatuses.pdf} title="Generate PDF" description="Generate settlement PDF document" completedAt={selectedApplication.pdf_completed_at}>
-                                <button onClick={() => handleGenerateSettlementPDF(selectedApplication.id)} disabled={!pdfCanBeGenerated || generatingPDF} className="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 text-sm font-medium disabled:opacity-50">
-                                   {generatingPDF ? (
-                                      <div className="flex items-center gap-1.5">
-                                        <RefreshCw className="w-4 h-4 animate-spin" />
-                                        <span>Generating...</span>
-                                      </div>
-                                   ) : (taskStatuses.pdf === 'completed' || taskStatuses.pdf === 'update_needed' ? 'Regenerate' : 'Generate')}
-                                </button>
-                                {selectedApplication.pdf_url && <button onClick={() => window.open(selectedApplication.pdf_url, '_blank')} className="px-3 py-2 bg-gray-100 border border-gray-300 text-gray-600 rounded-lg hover:bg-gray-200 text-sm font-medium">View</button>}
+                                <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2">
+                                   <button onClick={() => handleGenerateSettlementPDF(selectedApplication.id)} disabled={!pdfCanBeGenerated || generatingPDF} className="w-full sm:w-auto px-3 sm:px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 active:bg-gray-100 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed">
+                                      {generatingPDF ? (
+                                         <div className="flex items-center gap-1.5">
+                                           <RefreshCw className="w-3 h-3 sm:w-4 sm:h-4 animate-spin" />
+                                           <span>Generating...</span>
+                                         </div>
+                                      ) : (taskStatuses.pdf === 'completed' || taskStatuses.pdf === 'update_needed' ? 'Regenerate' : 'Generate')}
+                                   </button>
+                                   {selectedApplication.pdf_url && (
+                                      <button onClick={() => window.open(selectedApplication.pdf_url, '_blank')} className="w-full sm:w-auto px-3 py-2 bg-gray-100 border border-gray-300 text-gray-600 rounded-lg hover:bg-gray-200 active:bg-gray-300 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap">View</button>
+                                   )}
+                                </div>
                              </TaskCard>
                              
                              <TaskCard step="3" status={taskStatuses.email} title="Send Email" description="Send details to settlement agent" completedAt={selectedApplication.notifications?.find(n => n.notification_type === 'application_approved')?.sent_at}>
-                                <button onClick={() => handleSendApprovalEmail(selectedApplication.id)} disabled={!emailCanBeSent || sendingEmail} className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium disabled:opacity-50">
-                                   {sendingEmail ? (
-                                      <div className="flex items-center gap-1.5">
-                                        <RefreshCw className="w-4 h-4 animate-spin" />
-                                        <span>Sending...</span>
-                                      </div>
-                                   ) : 'Send Email'}
-                                </button>
+                                <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2">
+                                   <button onClick={() => handleSendApprovalEmail(selectedApplication.id)} disabled={!emailCanBeSent || sendingEmail} className="w-full sm:w-auto px-3 sm:px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 active:bg-blue-800 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed shadow-sm">
+                                      {sendingEmail ? (
+                                         <div className="flex items-center gap-1.5">
+                                           <RefreshCw className="w-3 h-3 sm:w-4 sm:h-4 animate-spin" />
+                                           <span>Sending...</span>
+                                         </div>
+                                      ) : 'Send Email'}
+                                   </button>
+                                </div>
                              </TaskCard>
                           </>
                         );
@@ -4014,67 +4157,75 @@ const AdminApplications = ({ userRole }) => {
                         return (
                            <>
                               <TaskCard step="1" status={taskStatuses.inspection} title="Inspection Form" description="Complete property inspection checklist" completedAt={selectedApplication.inspection_form_completed_at}>
-                                 <button onClick={() => handleCompleteForm(selectedApplication.id, 'inspection')} disabled={loadingFormData} className="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 text-sm font-medium">
-                                    {loadingFormData ? (
-                                      <div className="flex items-center gap-1.5">
-                                        <RefreshCw className="w-4 h-4 animate-spin" />
-                                        <span>Loading...</span>
-                                      </div>
-                                   ) : getFormButtonText(taskStatuses.inspection)}
-                                 </button>
-                                 {!selectedApplication.inspection_form_completed_at && (
-                                    <button onClick={() => handleCompleteTask(selectedApplication.id, 'inspection_form')} className="px-3 py-2 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 text-sm font-medium">Mark Done</button>
-                                 )}
+                                 <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2">
+                                    <button onClick={() => handleCompleteForm(selectedApplication.id, 'inspection')} disabled={loadingFormData} className="w-full sm:w-auto px-3 sm:px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 active:bg-gray-100 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed">
+                                       {loadingFormData ? (
+                                          <div className="flex items-center gap-1.5">
+                                            <RefreshCw className="w-3 h-3 sm:w-4 sm:h-4 animate-spin" />
+                                            <span>Loading...</span>
+                                          </div>
+                                       ) : getFormButtonText(taskStatuses.inspection)}
+                                    </button>
+                                    {!selectedApplication.inspection_form_completed_at && (
+                                       <button onClick={() => handleCompleteTask(selectedApplication.id, 'inspection_form')} className="w-full sm:w-auto px-3 py-2 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 active:bg-green-300 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap">Mark Done</button>
+                                    )}
+                                 </div>
                               </TaskCard>
 
                               <TaskCard step="2" status={taskStatuses.resale} title="Resale Certificate" description="Fill out Virginia resale disclosure" completedAt={selectedApplication.resale_certificate_completed_at}>
-                                 <button onClick={() => handleCompleteForm(selectedApplication.id, 'resale')} disabled={loadingFormData} className="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 text-sm font-medium">
-                                    {loadingFormData ? (
-                                      <div className="flex items-center gap-1.5">
-                                        <RefreshCw className="w-4 h-4 animate-spin" />
-                                        <span>Loading...</span>
-                                      </div>
-                                   ) : getFormButtonText(taskStatuses.resale)}
-                                 </button>
-                                 {!selectedApplication.resale_certificate_completed_at && (
-                                    <button onClick={() => handleCompleteTask(selectedApplication.id, 'resale_certificate')} className="px-3 py-2 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 text-sm font-medium">Mark Done</button>
-                                 )}
+                                 <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2">
+                                    <button onClick={() => handleCompleteForm(selectedApplication.id, 'resale')} disabled={loadingFormData} className="w-full sm:w-auto px-3 sm:px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 active:bg-gray-100 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed">
+                                       {loadingFormData ? (
+                                          <div className="flex items-center gap-1.5">
+                                            <RefreshCw className="w-3 h-3 sm:w-4 sm:h-4 animate-spin" />
+                                            <span>Loading...</span>
+                                          </div>
+                                       ) : getFormButtonText(taskStatuses.resale)}
+                                    </button>
+                                    {!selectedApplication.resale_certificate_completed_at && (
+                                       <button onClick={() => handleCompleteTask(selectedApplication.id, 'resale_certificate')} className="w-full sm:w-auto px-3 py-2 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 active:bg-green-300 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap">Mark Done</button>
+                                    )}
+                                 </div>
                               </TaskCard>
 
                               <TaskCard step="3" status={taskStatuses.pdf} title="Generate PDF" description="Create final PDF document" completedAt={selectedApplication.pdf_completed_at}>
-                                 <button 
-                                    onClick={() => {
-                                      const inspectionForm = selectedApplication.property_owner_forms?.find(form => form.form_type === 'inspection_form');
-                                      const resaleForm = selectedApplication.property_owner_forms?.find(form => form.form_type === 'resale_certificate');
-                                      handleGeneratePDF({ inspectionForm: inspectionForm?.form_data, resaleCertificate: resaleForm?.form_data }, selectedApplication.id);
-                                    }} 
-                                    disabled={generatingPDF} 
-                                    className="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 text-sm font-medium disabled:opacity-50"
-                                  >
-                                    {generatingPDF ? (
-                                      <div className="flex items-center gap-1.5">
-                                        <RefreshCw className="w-4 h-4 animate-spin" />
-                                        <span>Generating...</span>
-                                      </div>
-                                   ) : (taskStatuses.pdf === 'completed' ? 'Regenerate' : 'Generate')}
-                                 </button>
-                                 {selectedApplication.pdf_url && <button onClick={() => window.open(selectedApplication.pdf_url, '_blank')} className="px-3 py-2 bg-gray-100 border border-gray-300 text-gray-600 rounded-lg hover:bg-gray-200 text-sm font-medium">View</button>}
+                                 <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2">
+                                    <button 
+                                       onClick={() => {
+                                         const inspectionForm = selectedApplication.property_owner_forms?.find(form => form.form_type === 'inspection_form');
+                                         const resaleForm = selectedApplication.property_owner_forms?.find(form => form.form_type === 'resale_certificate');
+                                         handleGeneratePDF({ inspectionForm: inspectionForm?.form_data, resaleCertificate: resaleForm?.form_data }, selectedApplication.id);
+                                       }} 
+                                       disabled={generatingPDF} 
+                                       className="w-full sm:w-auto px-3 sm:px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 active:bg-gray-100 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
+                                     >
+                                       {generatingPDF ? (
+                                          <div className="flex items-center gap-1.5">
+                                            <RefreshCw className="w-3 h-3 sm:w-4 sm:h-4 animate-spin" />
+                                            <span>Generating...</span>
+                                          </div>
+                                       ) : (taskStatuses.pdf === 'completed' ? 'Regenerate' : 'Generate')}
+                                    </button>
+                                    {selectedApplication.pdf_url && (
+                                       <button onClick={() => window.open(selectedApplication.pdf_url, '_blank')} className="w-full sm:w-auto px-3 py-2 bg-gray-100 border border-gray-300 text-gray-600 rounded-lg hover:bg-gray-200 active:bg-gray-300 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap">View</button>
+                                    )}
+                                 </div>
                               </TaskCard>
 
                               <TaskCard step="4" status={taskStatuses.email} title="Send Completion Email" description="Send PDF and files to applicant" completedAt={selectedApplication.email_completed_at}>
-                                 <div className="flex gap-2">
-                                     <button onClick={() => setShowAttachmentModal(true)} className="px-3 py-2 bg-gray-100 text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-200 text-xs font-medium">Attachments</button>
-                                     <button onClick={() => handleSendApprovalEmail(selectedApplication.id)} disabled={!emailCanBeSent || sendingEmail || taskStatuses.pdf === 'update_needed'} className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium disabled:opacity-50">
+                                 <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2">
+                                    <button onClick={() => setShowAttachmentModal(true)} className="w-full sm:w-auto px-3 py-2 bg-gray-100 text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-200 active:bg-gray-300 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap">Attachments</button>
+                                    <button onClick={() => handleSendApprovalEmail(selectedApplication.id)} disabled={!emailCanBeSent || sendingEmail || taskStatuses.pdf === 'update_needed'} className="w-full sm:w-auto px-3 sm:px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 active:bg-blue-800 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed shadow-sm">
                                        {sendingEmail ? (
                                           <div className="flex items-center gap-1.5">
-                                            <RefreshCw className="w-4 h-4 animate-spin" />
+                                            <RefreshCw className="w-3 h-3 sm:w-4 sm:h-4 animate-spin" />
                                             <span>Sending...</span>
                                           </div>
                                        ) : 'Send Email'}
-                                     </button>
-                                     {!selectedApplication.email_completed_at && (
-                                        <button onClick={() => handleCompleteTask(selectedApplication.id, 'email')} className="px-3 py-2 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 text-sm font-medium">Mark Done</button>
-                                     )}
+                                    </button>
+                                    {!selectedApplication.email_completed_at && (
+                                       <button onClick={() => handleCompleteTask(selectedApplication.id, 'email')} className="w-full sm:w-auto px-3 py-2 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 active:bg-green-300 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap">Mark Done</button>
+                                    )}
                                  </div>
                               </TaskCard>
                            </>

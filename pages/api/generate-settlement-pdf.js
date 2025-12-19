@@ -340,6 +340,12 @@ export default async function handler(req, res) {
       .from('bucket0')
       .getPublicUrl(filePath);
 
+    // Add cache-busting query parameter to force browser to fetch new version
+    const cacheBuster = `?t=${Date.now()}`;
+    const publicUrlWithCacheBuster = publicUrl.includes('?') 
+      ? `${publicUrl}&t=${Date.now()}` 
+      : `${publicUrl}${cacheBuster}`;
+
     // Update both applications table and property_owner_forms table with PDF URL
     const timestamp = new Date().toISOString();
     
@@ -349,7 +355,7 @@ export default async function handler(req, res) {
       const { error: groupUpdateError } = await supabase
         .from('application_property_groups')
         .update({
-          pdf_url: publicUrl,
+          pdf_url: publicUrlWithCacheBuster,
           pdf_status: 'completed',
           pdf_completed_at: timestamp,
           updated_at: timestamp,
@@ -363,7 +369,7 @@ export default async function handler(req, res) {
       const { error: updateError } = await supabase
         .from('applications')
         .update({
-          pdf_url: publicUrl,
+          pdf_url: publicUrlWithCacheBuster,
           pdf_generated_at: timestamp,
           pdf_completed_at: timestamp,
           updated_at: timestamp, // Explicitly set updated_at to match pdf_generated_at
@@ -378,7 +384,7 @@ export default async function handler(req, res) {
       const { error: formUpdateError } = await supabase
         .from('property_owner_forms')
         .update({
-          pdf_url: publicUrl,
+          pdf_url: publicUrlWithCacheBuster,
         })
         .eq('id', settlementForm.id);
 
@@ -390,7 +396,7 @@ export default async function handler(req, res) {
 
     return res.status(200).json({ 
       success: true, 
-      pdfUrl: publicUrl 
+      pdfUrl: publicUrlWithCacheBuster 
     });
   } catch (error) {
     console.error('Error in generate-settlement-pdf:', error);

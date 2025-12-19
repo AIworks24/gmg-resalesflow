@@ -29,13 +29,15 @@ export default async function handler(req, res) {
     }
 
     // Parse query parameters
-    const { page = 1, limit = 10, search = '' } = req.query;
+    const { page = 1, limit = 10, search = '', role = '', verified = '' } = req.query;
     const pageNum = parseInt(page);
     const limitNum = parseInt(limit);
     const searchTerm = (search || '').trim();
+    const roleFilter = (role || '').trim();
+    const verifiedFilter = (verified || '').trim();
 
-    // Generate cache key - includes user ID, pagination, and search to prevent collisions
-    const cacheKey = `admin:users:list:${user.id}:${pageNum}:${limitNum}:search:${searchTerm}`;
+    // Generate cache key - includes user ID, pagination, search, and filters to prevent collisions
+    const cacheKey = `admin:users:list:${user.id}:${pageNum}:${limitNum}:search:${searchTerm}:role:${roleFilter}:verified:${verifiedFilter}`;
     
     // TEMPORARILY DISABLED: Try to get from cache first
     // const cachedData = await getCache(cacheKey);
@@ -61,6 +63,24 @@ export default async function handler(req, res) {
     let query = supabase
       .from('profiles')
       .select('*', { count: 'exact' });
+
+    // Apply role filter if provided
+    // Support comma-separated roles (e.g., "admin,staff,accounting")
+    if (roleFilter) {
+      const roles = roleFilter.split(',').map(r => r.trim()).filter(r => r);
+      if (roles.length === 1) {
+        query = query.eq('role', roles[0]);
+      } else if (roles.length > 1) {
+        query = query.in('role', roles);
+      }
+    }
+
+    // Apply verification status filter if provided
+    if (verifiedFilter === 'verified') {
+      query = query.not('email_confirmed_at', 'is', null);
+    } else if (verifiedFilter === 'unverified') {
+      query = query.is('email_confirmed_at', null);
+    }
 
     // Apply search filter if provided
     if (searchTerm) {

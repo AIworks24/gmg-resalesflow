@@ -30,16 +30,40 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Missing required fields' });
     }
 
+    // Get current user profile to check existing role and verification status
+    const { data: currentProfile, error: fetchError } = await supabaseAdmin
+      .from('profiles')
+      .select('role, email_confirmed_at')
+      .eq('id', id)
+      .single();
+
+    if (fetchError) {
+      console.error('Error fetching current profile:', fetchError);
+      return res.status(400).json({ error: 'User not found' });
+    }
+
+    // Prepare profile update
+    const now = new Date().toISOString();
+    const profileUpdate = {
+      email,
+      first_name: first_name || '',
+      last_name: last_name || '',
+      role,
+      updated_at: now
+    };
+
+    // Auto-verify staff, admin, and accounting users
+    // If role is being changed to staff/admin/accounting and user is not verified, verify them
+    if ((role === 'staff' || role === 'admin' || role === 'accounting') && !currentProfile.email_confirmed_at) {
+      profileUpdate.email_confirmed_at = now;
+    }
+    // If role is being changed from staff/admin/accounting to requester, keep verification status as is
+    // (don't unverify them if they were already verified)
+
     // Update profile
     const { error: profileError } = await supabaseAdmin
       .from('profiles')
-      .update({
-        email,
-        first_name: first_name || '',
-        last_name: last_name || '',
-        role,
-        updated_at: new Date().toISOString()
-      })
+      .update(profileUpdate)
       .eq('id', id);
 
     if (profileError) {
@@ -60,9 +84,15 @@ export default async function handler(req, res) {
     }
 
     // Update email in auth if it changed
+    // Also confirm email if role is staff/admin/accounting
+    const authUpdate = { email };
+    if (role === 'staff' || role === 'admin' || role === 'accounting') {
+      authUpdate.email_confirm = true;
+    }
+    
     const { error: emailError } = await supabaseAdmin.auth.admin.updateUserById(
       id,
-      { email }
+      authUpdate
     );
     if (emailError) {
       console.error('Email error:', emailError);

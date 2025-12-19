@@ -13,10 +13,10 @@ export const userKeys = {
 };
 
 // Get users with pagination and optional search
-export function useUsers(page = 1, limit = 10, search = '') {
+export function useUsers(page = 1, limit = 10, search = '', role = '', verified = '') {
   return useQuery({
-    queryKey: userKeys.list({ page, limit, search }),
-    queryFn: ({ signal }) => usersApi.getUsers({ signal, page, limit, search }),
+    queryKey: userKeys.list({ page, limit, search, role, verified }),
+    queryFn: ({ signal }) => usersApi.getUsers({ signal, page, limit, search, role, verified }),
     staleTime: 2 * 60 * 1000, // 2 minutes
     gcTime: 10 * 60 * 1000, // 10 minutes
     retry: (failureCount, error) => {
@@ -70,14 +70,23 @@ export function useCreateUser() {
       // Add the new user to the cache
       queryClient.setQueryData(userKeys.detail(newUser.id), newUser);
       
-      // Invalidate all user list queries (all pages)
-      queryClient.invalidateQueries({ queryKey: userKeys.lists() });
+      // Invalidate all user list queries (all pages) and force refetch
+      queryClient.invalidateQueries({ 
+        queryKey: userKeys.lists(),
+        refetchType: 'active' // Force refetch of active queries
+      });
       
-      // Invalidate stats
-      queryClient.invalidateQueries({ queryKey: userKeys.stats() });
+      // Invalidate stats and force refetch
+      queryClient.invalidateQueries({ 
+        queryKey: userKeys.stats(),
+        refetchType: 'active'
+      });
       
       // Clear any search results to force refresh
-      queryClient.invalidateQueries({ queryKey: userKeys.all });
+      queryClient.invalidateQueries({ 
+        queryKey: userKeys.all,
+        refetchType: 'active'
+      });
       
       console.log('✅ Cache invalidated, list should refresh');
     },

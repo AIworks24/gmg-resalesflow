@@ -163,6 +163,12 @@ export default async function handler(req, res) {
     
     clearTimeout(operationTimeout);
 
+    // Add cache-busting query parameter to force browser to fetch new version
+    const cacheBuster = `?t=${Date.now()}`;
+    const publicURLWithCacheBuster = publicURL.includes('?') 
+      ? `${publicURL}&t=${Date.now()}` 
+      : `${publicURL}${cacheBuster}`;
+
     // Update the appropriate table with the new PDF URL
     const generatedAt = new Date();
     const generationTime = Date.now() - startTime;
@@ -172,7 +178,7 @@ export default async function handler(req, res) {
       const { error: updateError } = await supabase
         .from('application_property_groups')
         .update({
-          pdf_url: publicURL,
+          pdf_url: publicURLWithCacheBuster,
           pdf_status: 'completed',
           pdf_completed_at: generatedAt.toISOString(),
           updated_at: generatedAt.toISOString()
@@ -187,7 +193,7 @@ export default async function handler(req, res) {
       const { error: updateError } = await supabase
         .from('applications')
         .update({
-          pdf_url: publicURL,
+          pdf_url: publicURLWithCacheBuster,
           pdf_generated_at: generatedAt.toISOString(),
           pdf_completed_at: generatedAt.toISOString()
         })
@@ -200,7 +206,7 @@ export default async function handler(req, res) {
 
     return res.status(200).json({ 
       success: true, 
-      pdfUrl: publicURL,
+      pdfUrl: publicURLWithCacheBuster,
       generationTimeMs: generationTime,
       propertySpecific: isPropertySpecific,
       propertyName: propertyName

@@ -77,6 +77,7 @@ export default async function handler(req, res) {
           is_primary,
           property_name,
           property_location,
+          property_owner_email,
           status,
           created_at,
           pdf_url,
@@ -87,7 +88,7 @@ export default async function handler(req, res) {
           inspection_status,
           inspection_completed_at,
           form_data,
-          hoa_properties(id, name, location)
+          hoa_properties(id, name, location, property_owner_email)
         )
       `, { count: 'exact' })
       .is('deleted_at', null) // Only get non-deleted applications
