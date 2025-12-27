@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from 'react';
-import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
 import { useRouter } from 'next/router';
 import Image from 'next/image';
 import { Eye, EyeOff, CheckCircle, AlertCircle } from 'lucide-react';
@@ -7,7 +6,6 @@ import companyLogo from '../assets/company_logo.png';
 
 export default function ResetPassword() {
   const router = useRouter();
-  const supabase = createClientComponentClient();
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -16,89 +14,37 @@ export default function ResetPassword() {
   const [message, setMessage] = useState('');
   const [isSuccess, setIsSuccess] = useState(false);
   const [isTokenValid, setIsTokenValid] = useState(false);
+  const [token, setToken] = useState('');
 
   useEffect(() => {
-    // Check if we have URL parameters (access_token and type=recovery)
-    const checkTokenFromURL = async () => {
+    // Check if we have a token in URL parameters
+    const checkTokenFromURL = () => {
       if (typeof window === 'undefined') return;
       
-      // Check both hash and search parameters
-      const hashParams = new URLSearchParams(window.location.hash.substring(1));
       const searchParams = new URLSearchParams(window.location.search);
+      const urlToken = searchParams.get('token');
       
-      // Try hash first
-      let accessToken = hashParams.get('access_token');
-      let type = hashParams.get('type');
-      let refreshToken = hashParams.get('refresh_token');
-      
-      // If not in hash, try search parameters
-      if (!accessToken) {
-        accessToken = searchParams.get('access_token');
-        type = searchParams.get('type');
-        refreshToken = searchParams.get('refresh_token');
-      }
-      
-      
-      if (accessToken && type === 'recovery') {
-        try {
-          // Set the session using the access token
-          const { data, error } = await supabase.auth.setSession({
-            access_token: accessToken,
-            refresh_token: refreshToken || ''
-          });
-          
-          if (error) {
-            console.error('Error setting session:', error);
-            setMessage('Invalid or expired reset link. Please request a new password reset.');
-          } else if (data.session) {
-            setIsTokenValid(true);
-            setMessage('');
-          }
-        } catch (error) {
-          console.error('Error processing reset token:', error);
-          setMessage('Invalid or expired reset link. Please request a new password reset.');
-        }
+      if (urlToken) {
+        setToken(urlToken);
+        setIsTokenValid(true);
+        setMessage('');
       } else {
-        // Check if we already have a valid session
-        const { data: { session }, error } = await supabase.auth.getSession();
-        
-        if (session && !error) {
-          setIsTokenValid(true);
-        } else {
-          // Maybe the token is being processed, let's wait a bit
-          setTimeout(async () => {
-            const { data: { session: delayedSession } } = await supabase.auth.getSession();
-            if (delayedSession) {
-              setIsTokenValid(true);
-              setMessage('');
-            } else {
-              setMessage('Invalid or expired reset link. Please request a new password reset.');
-            }
-          }, 2000);
-        }
+        setMessage('Invalid or missing reset token. Please request a new password reset.');
+        setIsTokenValid(false);
       }
     };
 
-    // Handle auth state change from the reset link
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-      console.log('Auth state change:', event, session ? 'session exists' : 'no session');
-      
-      if (event === 'PASSWORD_RECOVERY' && session) {
-        setIsTokenValid(true);
-        setMessage('');
-      } else if (event === 'TOKEN_REFRESHED' && session) {
-        setIsTokenValid(true);
-        setMessage('');
-      }
-    });
-
     checkTokenFromURL();
-
-    return () => subscription.unsubscribe();
   }, []);
 
   const handlePasswordReset = async (e) => {
     e.preventDefault();
+    
+    if (!token) {
+      setMessage('Invalid or missing reset token. Please request a new password reset.');
+      setIsSuccess(false);
+      return;
+    }
     
     if (password !== confirmPassword) {
       setMessage('Passwords do not match.');
@@ -116,24 +62,30 @@ export default function ResetPassword() {
     setMessage('');
 
     try {
-      const { error } = await supabase.auth.updateUser({
-        password: password
+      const response = await fetch('/api/auth/reset-password', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ token, password }),
       });
 
-      if (error) {
-        setMessage(error.message);
-        setIsSuccess(false);
-      } else {
+      const data = await response.json();
+
+      if (response.ok && data.success) {
         setMessage('Password updated successfully! Redirecting to sign in...');
         setIsSuccess(true);
         
-        // Sign out the user and redirect to home page after 3 seconds
-        setTimeout(async () => {
-          await supabase.auth.signOut();
+        // Redirect to home page after 3 seconds
+        setTimeout(() => {
           router.push('/');
         }, 3000);
+      } else {
+        setMessage(data.error || data.message || 'Failed to reset password. Please try again.');
+        setIsSuccess(false);
       }
     } catch (error) {
+      console.error('Error resetting password:', error);
       setMessage('An error occurred. Please try again.');
       setIsSuccess(false);
     } finally {

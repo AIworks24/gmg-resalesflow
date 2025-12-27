@@ -30,8 +30,8 @@ import {
 } from 'lucide-react';
 import { useRouter } from 'next/router';
 import { mapFormDataToPDFFields } from '../../lib/pdfFieldMapper';
-import { parseEmails, formatEmailsForStorage, validateEmails } from '../../lib/emailUtils';
-import MultiEmailInput from '../common/MultiEmailInput';
+import { parseEmails, formatEmailsForStorage, validateEmails, convertToOwnersArray, convertFromOwnersArray, validateOwners } from '../../lib/emailUtils';
+import PropertyOwnersInput from '../common/PropertyOwnersInput';
 import AdminLayout from './AdminLayout';
 
 // Helper function to normalize location value for dropdown
@@ -74,12 +74,11 @@ const AdminDashboard = ({ userRole }) => {
   const [uploading, setUploading] = useState(false);
   const [showPropertyEditModal, setShowPropertyEditModal] = useState(false);
   const [selectedProperty, setSelectedProperty] = useState(null);
+  const [showPropertyValidationErrors, setShowPropertyValidationErrors] = useState(false);
   const [propertyFormData, setPropertyFormData] = useState({
     name: '',
     location: '',
-    property_owner_name: '',
-    property_owner_email: [], // Changed to array for multiple emails
-    property_owner_phone: '',
+    property_owners: [], // Array of {name, email, phone} objects
     management_contact: '',
     phone: '',
     email: '',
@@ -1508,12 +1507,20 @@ const AdminDashboard = ({ userRole }) => {
       console.log('📧 Management email from DB:', data.email);
 
       setSelectedProperty(data);
+      // Convert old format to new owners array format
+      const propertyOwners = convertToOwnersArray(
+        data.property_owner_name || '',
+        data.property_owner_email || '',
+        data.property_owner_phone || ''
+      );
+      
+      // If no owners found, create one empty owner
+      const owners = propertyOwners.length > 0 ? propertyOwners : [{ name: '', email: '', phone: '' }];
+      
       const formData = {
         name: data.name || '',
         location: normalizeLocation(data.location),
-        property_owner_name: data.property_owner_name || '',
-        property_owner_email: parseEmails(data.property_owner_email), // Parse emails into array
-        property_owner_phone: data.property_owner_phone || '',
+        property_owners: owners,
         management_contact: data.management_contact || '',
         phone: data.phone || '',
         email: data.email || '',
@@ -1530,6 +1537,7 @@ const AdminDashboard = ({ userRole }) => {
       await loadPropertyFiles(propertyId);
       
       if (openModal) {
+        setShowPropertyValidationErrors(false); // Reset validation state
         setShowPropertyEditModal(true);
       }
     } catch (error) {
@@ -1603,16 +1611,19 @@ const AdminDashboard = ({ userRole }) => {
   const handlePropertySave = async (e) => {
     e.preventDefault();
     
+    // Show validation errors on submit attempt
+    setShowPropertyValidationErrors(true);
+    
     try {
-      // Validate emails before submission
-      const emailValidation = validateEmails(propertyFormData.property_owner_email);
-      if (!emailValidation.valid) {
-        showSnackbar(`Email validation error: ${emailValidation.errors.join(', ')}`, 'error');
+      // Validate owners before submission
+      const ownersValidation = validateOwners(propertyFormData.property_owners, true);
+      if (!ownersValidation.valid) {
+        showSnackbar(`Validation error: ${ownersValidation.errors.join(', ')}`, 'error');
         return;
       }
       
-      // Format emails for storage (comma-separated string)
-      const emailsForStorage = formatEmailsForStorage(propertyFormData.property_owner_email);
+      // Convert owners array to old format for database storage (backward compatibility)
+      const ownerData = convertFromOwnersArray(propertyFormData.property_owners);
       
       console.log('Saving property data:', propertyFormData);
       console.log('Property ID:', selectedProperty.id);
@@ -1621,8 +1632,15 @@ const AdminDashboard = ({ userRole }) => {
       const { data, error } = await supabase
         .from('hoa_properties')
         .update({
-          ...propertyFormData,
-          property_owner_email: emailsForStorage, // Use formatted emails
+          name: propertyFormData.name,
+          location: propertyFormData.location,
+          property_owner_name: ownerData.name,
+          property_owner_email: ownerData.email,
+          property_owner_phone: ownerData.phone,
+          management_contact: propertyFormData.management_contact,
+          phone: propertyFormData.phone,
+          email: propertyFormData.email,
+          special_requirements: propertyFormData.special_requirements,
           updated_at: new Date().toISOString()
         })
         .eq('id', selectedProperty.id)
@@ -1653,6 +1671,7 @@ const AdminDashboard = ({ userRole }) => {
       await loadApplications();
 
       setShowPropertyEditModal(false);
+      setShowPropertyValidationErrors(false); // Reset validation state
       showSnackbar('Property updated successfully!', 'success');
     } catch (error) {
       console.error('Error saving property:', error);
@@ -1879,7 +1898,7 @@ const AdminDashboard = ({ userRole }) => {
     if (!selectedProperty) return null;
 
     return (
-      <div className='bg-white rounded-lg max-w-4xl w-full max-h-[90vh] overflow-y-auto'>
+      <div className='bg-white rounded-lg max-w-5xl w-full max-h-[90vh] overflow-y-auto'>
         <div className='p-6 border-b border-gray-200'>
           <div className='flex items-center justify-between'>
             <div className='flex items-center gap-3'>
@@ -1934,43 +1953,12 @@ const AdminDashboard = ({ userRole }) => {
           {/* Property Owner Information */}
           <div className='border-t pt-4'>
             <h3 className='text-md font-medium text-gray-900 mb-3'>Property Owner Information</h3>
-            <div className='grid grid-cols-1 md:grid-cols-2 gap-4'>
-              <div>
-                <label className='block text-sm font-medium text-gray-700 mb-1'>
-                  Owner Name
-                </label>
-                <input
-                  type='text'
-                  required
-                  value={propertyFormData.property_owner_name}
-                  onChange={(e) => setPropertyFormData({...propertyFormData, property_owner_name: e.target.value})}
-                  className='w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500'
-                />
-              </div>
-
-              <div>
-                <label className='block text-sm font-medium text-gray-700 mb-1'>
-                  Owner Email
-                </label>
-                <MultiEmailInput
-                  value={propertyFormData.property_owner_email}
-                  onChange={(emails) => setPropertyFormData({...propertyFormData, property_owner_email: emails})}
-                  required
-                />
-              </div>
-
-              <div>
-                <label className='block text-sm font-medium text-gray-700 mb-1'>
-                  Owner Phone
-                </label>
-                <input
-                  type='tel'
-                  value={propertyFormData.property_owner_phone}
-                  onChange={(e) => setPropertyFormData({...propertyFormData, property_owner_phone: e.target.value})}
-                  className='w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500'
-                />
-              </div>
-            </div>
+            <PropertyOwnersInput
+              value={propertyFormData.property_owners}
+              onChange={(owners) => setPropertyFormData(prev => ({...prev, property_owners: owners}))}
+              required
+              showValidationErrors={showPropertyValidationErrors}
+            />
           </div>
 
           {/* Management Information removed per request */}

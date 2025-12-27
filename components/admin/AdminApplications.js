@@ -692,26 +692,26 @@ const AdminApplications = ({ userRole }) => {
     // Apply assigned to me filter
     if (assignedToMe && userEmail) {
       filtered = filtered.filter(app => {
-        // Check if directly assigned (case-insensitive)
+        // Normalize user email for comparison (remove "owner." prefix if present)
+        const normalizedUserEmail = userEmail.replace(/^owner\./, '').toLowerCase();
+        
+        // 1. Check if directly assigned (case-insensitive)
         if (app.assigned_to && app.assigned_to.toLowerCase() === userEmail.toLowerCase()) {
           return true;
         }
         
-        // For multi-community properties, check if user is owner of any property in the group
-        if (app.hoa_properties?.is_multi_community && app.application_property_groups) {
-          // Normalize user email for comparison (remove "owner." prefix if present)
-          const normalizedUserEmail = userEmail.replace(/^owner\./, '').toLowerCase();
+        // 2. Check if user is a property owner of the primary property (for ALL properties)
+        if (app.hoa_properties?.property_owner_email) {
+          const primaryOwnerEmails = parseEmails(app.hoa_properties.property_owner_email)
+            .map(e => e.replace(/^owner\./, '').toLowerCase());
           
-          // Check primary property owner
-          if (app.hoa_properties?.property_owner_email) {
-            const primaryOwnerEmails = parseEmails(app.hoa_properties.property_owner_email)
-              .map(e => e.replace(/^owner\./, '').toLowerCase());
-            
-            if (primaryOwnerEmails.includes(normalizedUserEmail)) {
-              return true;
-            }
+          if (primaryOwnerEmails.includes(normalizedUserEmail)) {
+            return true;
           }
-          
+        }
+        
+        // 3. For multi-community properties, also check property groups
+        if (app.hoa_properties?.is_multi_community && app.application_property_groups) {
           // Check all property groups for owner email match
           const isOwnerInAnyGroup = app.application_property_groups.some(group => {
             // Check property_owner_email from the group

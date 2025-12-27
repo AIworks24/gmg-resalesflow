@@ -146,14 +146,16 @@
             {
               "key": "paidThroughDate",
               "label": "Regular Assessment Paid Through",
-              "type": "date",
-              "required": false
+              "type": "text",
+              "required": false,
+              "placeholder": "mm/dd/yyyy or enter specific information"
             },
             {
               "key": "nextDueDate",
               "label": "Regular Assessment Next Due",
-              "type": "date",
-              "required": false
+              "type": "text",
+              "required": false,
+              "placeholder": "mm/dd/yyyy or enter specific information"
             },
             {
               "key": "dayOfMonthDue",
@@ -547,14 +549,16 @@
             {
               "key": "paidThroughDate",
               "label": "Regular Assessment Paid Through",
-              "type": "date",
-              "required": false
+              "type": "text",
+              "required": false,
+              "placeholder": "mm/dd/yyyy or enter specific information"
             },
             {
               "key": "nextDueDate",
               "label": "Regular Assessment Next Due",
-              "type": "date",
-              "required": false
+              "type": "text",
+              "required": false,
+              "placeholder": "mm/dd/yyyy or enter specific information"
             },
             {
               "key": "dayOfMonthDue",

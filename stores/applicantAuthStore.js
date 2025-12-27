@@ -353,19 +353,25 @@ const useApplicantAuthStore = create((set, get) => ({
   },
 
   resetPassword: async (email) => {
-    const supabase = createClientComponentClient();
-    
     try {
-      const { error } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: `${window.location.origin}/reset-password`,
-        captchaToken: undefined
+      const response = await fetch('/api/auth/request-password-reset', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ email }),
       });
-      
-      if (error) throw error;
-      
-      return { success: true };
+
+      const data = await response.json();
+
+      if (response.ok && data.success) {
+        return { success: true, message: data.message };
+      } else {
+        return { success: false, error: data.error || data.message || 'Failed to send password reset email' };
+      }
     } catch (error) {
-      return { success: false, error: error.message };
+      console.error('Error requesting password reset:', error);
+      return { success: false, error: error.message || 'Failed to send password reset email' };
     }
   },
 

@@ -408,22 +408,22 @@ const HOASelectionStep = React.memo(
     }, []);
 
     return (
-      <div className='space-y-6'>
-        <div className='text-center mb-8'>
-          <h3 className='text-2xl font-bold text-green-900 mb-2'>
+      <div className='space-y-4 sm:space-y-6'>
+        <div className='text-center mb-4 sm:mb-6 md:mb-8'>
+          <h3 className='text-xl sm:text-2xl font-bold text-green-900 mb-2'>
             Select HOA Property
           </h3>
-          <p className='text-gray-600'>
+          <p className='text-sm sm:text-base text-gray-600 px-2'>
             Choose the HOA community for your resale certificate application
           </p>
         </div>
 
-        <div className='bg-white p-6 rounded-lg border border-green-200'>
-          <label className='block text-sm font-medium text-gray-700 mb-3'>
+        <div className='bg-white p-4 sm:p-6 rounded-lg border border-green-200'>
+          <label className='block text-sm font-medium text-gray-700 mb-2 sm:mb-3'>
             HOA Community *
           </label>
           <div className='relative' ref={inputRef}>
-            <Search className='absolute left-3 top-3 h-5 w-5 text-gray-400' />
+            <Search className='absolute left-3 top-3.5 sm:top-3 h-4 w-4 sm:h-5 sm:w-5 text-gray-400 pointer-events-none' />
             <input
               type='text'
               value={query}
@@ -433,7 +433,7 @@ const HOASelectionStep = React.memo(
                 handleInputChange('hoaProperty', '');
               }}
               placeholder='Select an HOA Community'
-              className='w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500'
+              className='w-full pl-9 sm:pl-10 pr-4 py-3 sm:py-3 text-base sm:text-base border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500'
               autoComplete='off'
             />
             {showDropdown && filteredHOAs.length > 0 && (
@@ -441,7 +441,7 @@ const HOASelectionStep = React.memo(
                 {filteredHOAs.map((hoa) => (
                   <li
                     key={hoa.id}
-                    className='px-4 py-2 cursor-pointer hover:bg-green-100'
+                    className='px-4 py-3 sm:py-2 cursor-pointer hover:bg-green-100 active:bg-green-200 text-sm sm:text-base touch-manipulation'
                     onClick={() => selectHOA(hoa)}
                   >
                     {highlightText(hoa.name, query)} {hoa.location && (
@@ -454,14 +454,14 @@ const HOASelectionStep = React.memo(
               </ul>
             )}
             {showDropdown && filteredHOAs.length === 0 && (
-              <div className='absolute z-10 left-0 right-0 bg-white border border-gray-200 rounded-lg mt-1 px-4 py-2 text-gray-500'>
+              <div className='absolute z-10 left-0 right-0 bg-white border border-gray-200 rounded-lg mt-1 px-4 py-3 sm:py-2 text-gray-500 text-sm sm:text-base'>
                 No HOA found
               </div>
             )}
           </div>
         </div>
 
-        <div className='grid grid-cols-1 md:grid-cols-2 gap-6'>
+        <div className='grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6'>
           <div>
             <label className='block text-sm font-medium text-gray-700 mb-2'>
               Property Address *
@@ -472,7 +472,7 @@ const HOASelectionStep = React.memo(
               onChange={(e) =>
                 handleInputChange('propertyAddress', e.target.value)
               }
-              className='w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500'
+              className='w-full px-4 py-3 text-base sm:text-base border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500'
               placeholder='123 Main Street'
             />
           </div>
@@ -484,7 +484,7 @@ const HOASelectionStep = React.memo(
               type='text'
               value={formData.unitNumber}
               onChange={(e) => handleInputChange('unitNumber', e.target.value)}
-              className='w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500'
+              className='w-full px-4 py-3 text-base sm:text-base border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500'
               placeholder='4B'
             />
           </div>
@@ -492,26 +492,26 @@ const HOASelectionStep = React.memo(
 
         {/* Multi-Community Notification (no pricing on this step) */}
         {multiCommunityNotification && (
-          <div className={`p-4 rounded-lg border ${
+          <div className={`p-3 sm:p-4 rounded-lg border ${
             multiCommunityNotification.showWarning 
               ? 'bg-blue-50 border-blue-200' 
               : 'bg-yellow-50 border-yellow-200'
           }`}>
             <div className='flex items-start'>
-              <AlertCircle className={`h-5 w-5 mt-0.5 mr-2 ${
+              <AlertCircle className={`h-4 w-4 sm:h-5 sm:w-5 mt-0.5 mr-2 flex-shrink-0 ${
                 multiCommunityNotification.showWarning 
                   ? 'text-blue-600' 
                   : 'text-yellow-600'
               }`} />
-              <div className='flex-1'>
-                <h4 className={`font-medium ${
+              <div className='flex-1 min-w-0'>
+                <h4 className={`text-sm sm:text-base font-medium ${
                   multiCommunityNotification.showWarning 
                     ? 'text-blue-900' 
                     : 'text-yellow-900'
                 }`}>
                   Multi-Community Association Detected
                 </h4>
-                <p className={`text-sm mt-1 ${
+                <p className={`text-xs sm:text-sm mt-1 ${
                   multiCommunityNotification.showWarning 
                     ? 'text-blue-700' 
                     : 'text-yellow-700'
@@ -520,17 +520,17 @@ const HOASelectionStep = React.memo(
                 </p>
 
                 {multiCommunityNotification.details && multiCommunityNotification.details.associations && (
-                  <div className='mt-3'>
-                    <div className='text-sm font-medium text-gray-900 mb-2'>
+                  <div className='mt-2 sm:mt-3'>
+                    <div className='text-xs sm:text-sm font-medium text-gray-900 mb-1.5 sm:mb-2'>
                       Included Associations:
                     </div>
                     <div className='space-y-1'>
                       {multiCommunityNotification.details.associations.map((association, index) => (
-                        <div key={index} className='flex items-center text-sm text-gray-600'>
-                          <div className={`w-2 h-2 rounded-full mr-2 ${
+                        <div key={index} className='flex items-center text-xs sm:text-sm text-gray-600'>
+                          <div className={`w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full mr-2 flex-shrink-0 ${
                             association.isPrimary ? 'bg-green-500' : 'bg-blue-500'
                           }`}></div>
-                          <span className={association.isPrimary ? 'font-medium' : ''}>
+                          <span className={`truncate ${association.isPrimary ? 'font-medium' : ''}`}>
                             {association.name}
                             {association.isPrimary && ' (Primary)'}
                           </span>
@@ -546,15 +546,15 @@ const HOASelectionStep = React.memo(
 
         {/* Standard HOA Documents Ready notification */}
         {formData.hoaProperty && !multiCommunityNotification && (
-          <div className='bg-green-50 p-4 rounded-lg border border-green-200'>
+          <div className='bg-green-50 p-3 sm:p-4 rounded-lg border border-green-200'>
             <div className='flex items-start'>
-              <CheckCircle className='h-5 w-5 text-green-600 mt-0.5 mr-2' />
-              <div>
-                <h4 className='font-medium text-green-900'>
+              <CheckCircle className='h-4 w-4 sm:h-5 sm:w-5 text-green-600 mt-0.5 mr-2 flex-shrink-0' />
+              <div className='flex-1 min-w-0'>
+                <h4 className='text-sm sm:text-base font-medium text-green-900'>
                   HOA Documents Ready
                 </h4>
-                <p className='text-sm text-green-700 mt-1'>
-                  All required HOA documents for {formData.hoaProperty} will be
+                <p className='text-xs sm:text-sm text-green-700 mt-1'>
+                  All required HOA documents for <span className='font-medium'>{formData.hoaProperty}</span> will be
                   automatically included in your resale package.
                 </p>
               </div>
@@ -606,21 +606,21 @@ const SubmitterInfoStep = React.memo(({ formData, handleInputChange, hoaProperti
   }, [isNorthCarolina, formData.submitterType, handleInputChange]);
 
   return (
-    <div className='space-y-6'>
-      <div className='text-center mb-8'>
-        <h3 className='text-2xl font-bold text-green-900 mb-2'>
+    <div className='space-y-4 sm:space-y-6'>
+      <div className='text-center mb-4 sm:mb-6 md:mb-8'>
+        <h3 className='text-xl sm:text-2xl font-bold text-green-900 mb-2'>
           Who is Submitting?
         </h3>
-        <p className='text-gray-600'>
+        <p className='text-sm sm:text-base text-gray-600 px-2'>
           Tell us about yourself and your role in this transaction
         </p>
       </div>
 
-      <div className='bg-white p-6 rounded-lg border border-green-200'>
+      <div className='bg-white p-4 sm:p-6 rounded-lg border border-green-200'>
         <label className='block text-sm font-medium text-gray-700 mb-3'>
           I am Requesting: *
         </label>
-        <div className='grid grid-cols-2 md:grid-cols-5 gap-4'>
+        <div className='grid grid-cols-2 md:grid-cols-5 gap-3 sm:gap-4'>
           {(() => {
             // All available submitter types
             const allTypes = [
@@ -644,49 +644,49 @@ const SubmitterInfoStep = React.memo(({ formData, handleInputChange, hoaProperti
               <button
                 key={type.value}
                 onClick={() => handleInputChange('submitterType', type.value)}
-                className={`p-4 rounded-lg border-2 transition-all ${
+                className={`p-3 sm:p-4 rounded-lg border-2 transition-all touch-manipulation ${
                   formData.submitterType === type.value
                     ? 'border-green-500 bg-green-50 text-green-900'
-                    : 'border-gray-200 hover:border-green-300'
+                    : 'border-gray-200 hover:border-green-300 active:border-green-400'
                 }`}
               >
-                <Icon className='h-8 w-8 mx-auto mb-2' />
-                <div className='text-sm font-medium'>{type.label}</div>
+                <Icon className='h-6 w-6 sm:h-8 sm:w-8 mx-auto mb-1.5 sm:mb-2' />
+                <div className='text-xs sm:text-sm font-medium leading-tight'>{type.label}</div>
               </button>
             );
             });
           })()}
         </div>
         {formData.submitterType === 'builder' && canShowPublicOffering && (
-          <div className='mt-6 p-4 border border-amber-300 rounded-md bg-amber-50'>
-            <label className='flex items-start gap-3 cursor-pointer'>
+          <div className='mt-4 sm:mt-6 p-3 sm:p-4 border border-amber-300 rounded-md bg-amber-50'>
+            <label className='flex items-start gap-2 sm:gap-3 cursor-pointer'>
               <input
                 type='checkbox'
                 checked={!!formData.publicOffering}
                 onChange={(e) => handleInputChange('publicOffering', e.target.checked)}
-                className='mt-1 h-4 w-4 text-green-600 border-gray-300 rounded'
+                className='mt-1 h-4 w-4 sm:h-5 sm:w-5 text-green-600 border-gray-300 rounded flex-shrink-0'
               />
-              <div>
-                <div className='font-medium text-amber-900'>Request Public Offering Statement</div>
-                <div className='text-sm text-amber-800'>This special request skips other forms and goes straight to payment. Fixed fee: $200.</div>
+              <div className='min-w-0'>
+                <div className='text-sm sm:text-base font-medium text-amber-900'>Request Public Offering Statement</div>
+                <div className='text-xs sm:text-sm text-amber-800 mt-1'>This special request skips other forms and goes straight to payment. Fixed fee: $200.</div>
               </div>
             </label>
           </div>
         )}
         {formData.submitterType === 'builder' && formData.publicOffering && canShowPublicOffering && (
-          <div className='mt-2 text-sm text-green-800 bg-green-50 border border-green-200 rounded p-3'>
+          <div className='mt-2 text-xs sm:text-sm text-green-800 bg-green-50 border border-green-200 rounded p-3'>
             Public Offering Statement selected — transaction details will be skipped. You will proceed directly to payment.
           </div>
         )}
         {formData.submitterType === 'lender_questionnaire' && (
-          <div className='mt-4 p-4 rounded-lg border bg-blue-50 border-blue-200'>
+          <div className='mt-4 p-3 sm:p-4 rounded-lg border bg-blue-50 border-blue-200'>
             <div className='flex items-start'>
-              <InfoIcon className='h-5 w-5 mt-0.5 mr-2 text-blue-600' />
-              <div className='flex-1'>
-                <h4 className='font-medium text-blue-900'>
+              <InfoIcon className='h-4 w-4 sm:h-5 sm:w-5 mt-0.5 mr-2 text-blue-600 flex-shrink-0' />
+              <div className='flex-1 min-w-0'>
+                <h4 className='text-sm sm:text-base font-medium text-blue-900'>
                   Lender Questionnaire Selected
                 </h4>
-                <p className='text-sm mt-1 text-blue-700'>
+                <p className='text-xs sm:text-sm mt-1 text-blue-700'>
                   You will be able to upload your own questionnaire after payment.
                 </p>
               </div>
@@ -695,7 +695,7 @@ const SubmitterInfoStep = React.memo(({ formData, handleInputChange, hoaProperti
         )}
       </div>
 
-    <div className='grid grid-cols-1 md:grid-cols-3 gap-6'>
+    <div className='grid grid-cols-1 md:grid-cols-3 gap-4 sm:gap-6'>
       <div>
         <label className='block text-sm font-medium text-gray-700 mb-2'>
           Full Name *
@@ -707,7 +707,7 @@ const SubmitterInfoStep = React.memo(({ formData, handleInputChange, hoaProperti
           type='text'
           value={formData.submitterName}
           onChange={(e) => handleInputChange('submitterName', e.target.value)}
-          className={`w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 ${
+          className={`w-full px-4 py-3 text-base border rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 ${
             formData.submitterName ? 'border-green-300 bg-green-50' : 'border-gray-300'
           }`}
           placeholder='John Smith'
@@ -724,7 +724,7 @@ const SubmitterInfoStep = React.memo(({ formData, handleInputChange, hoaProperti
           type='email'
           value={formData.submitterEmail}
           onChange={(e) => handleInputChange('submitterEmail', e.target.value)}
-          className={`w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 ${
+          className={`w-full px-4 py-3 text-base border rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 ${
             formData.submitterEmail ? 'border-green-300 bg-green-50' : 'border-gray-300'
           }`}
           placeholder='john@example.com'
@@ -738,7 +738,7 @@ const SubmitterInfoStep = React.memo(({ formData, handleInputChange, hoaProperti
           type='tel'
           value={formData.submitterPhone}
           onChange={(e) => handleInputChange('submitterPhone', e.target.value)}
-          className='w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500'
+          className='w-full px-4 py-3 text-base border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500'
           placeholder='(555) 123-4567'
         />
       </div>
@@ -753,7 +753,7 @@ const SubmitterInfoStep = React.memo(({ formData, handleInputChange, hoaProperti
           type='text'
           value={formData.realtorLicense}
           onChange={(e) => handleInputChange('realtorLicense', e.target.value)}
-          className='w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500'
+          className='w-full px-4 py-3 text-base border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500'
           placeholder='License #'
         />
       </div>
@@ -5883,32 +5883,39 @@ export default function GMGResaleFlow() {
 
   // Form view
   return (
-    <div className='min-h-screen bg-gray-50'>
+    <div className='min-h-screen bg-gray-50 pb-20 md:pb-8'>
       {/* Header */}
-      <div className='bg-white shadow-sm border-b'>
-        <div className='max-w-7xl mx-auto px-4 sm:px-6 lg:px-8'>
-          <div className='flex justify-between items-center py-4'>
-            <div className='flex items-center space-x-4'>
-              <div className='flex items-center space-x-3'>
-                <Image src={companyLogo} alt='GMG Logo' width={50} height={50} className='object-contain' />
-                <div>
-                  <p className='text-lg font-semibold text-gray-700'>
-                    Resale Certificate System
+      <div className='bg-white shadow-sm border-b sticky top-0 z-50'>
+        <div className='max-w-7xl mx-auto px-3 sm:px-4 lg:px-8'>
+          <div className='flex justify-between items-center py-3 md:py-4'>
+            <div className='flex items-center space-x-2 sm:space-x-3 md:space-x-4 min-w-0 flex-1'>
+              <div className='flex items-center space-x-2 sm:space-x-3 min-w-0'>
+                <Image 
+                  src={companyLogo} 
+                  alt='GMG Logo' 
+                  width={40} 
+                  height={40} 
+                  className='object-contain flex-shrink-0 w-8 h-8 sm:w-10 sm:h-10 md:w-12 md:h-12' 
+                />
+                <div className='min-w-0'>
+                  <p className='text-sm sm:text-base md:text-lg font-semibold text-gray-700 leading-tight'>
+                    <span className='hidden sm:inline'>Resale Certificate System</span>
+                    <span className='sm:hidden'>Resale System</span>
                   </p>
                 </div>
               </div>
             </div>
-            <div className='flex items-center space-x-4'>
+            <div className='flex items-center space-x-2 sm:space-x-4 flex-shrink-0'>
               <button
                 onClick={() => setCurrentStep(0)}
-                className='text-gray-600 hover:text-green-700 px-3 py-2 rounded-md text-sm font-medium transition-colors'
+                className='text-gray-600 hover:text-green-700 px-2 sm:px-3 py-1.5 sm:py-2 rounded-md text-xs sm:text-sm font-medium transition-colors'
               >
                 {userRole === 'admin' ? 'Dashboard' : 'Home'}
               </button>
               {isAuthenticated && (
-                <div className='flex items-center space-x-2'>
-                  <div className='w-3 h-3 bg-green-400 rounded-full'></div>
-                  <span className='text-sm text-gray-600'>{user?.email}</span>
+                <div className='flex items-center space-x-1.5 sm:space-x-2'>
+                  <div className='w-2 h-2 sm:w-3 sm:h-3 bg-green-400 rounded-full flex-shrink-0'></div>
+                  <span className='text-xs sm:text-sm text-gray-600 truncate max-w-[100px] sm:max-w-none'>{user?.email}</span>
                 </div>
               )}
             </div>
@@ -5916,120 +5923,254 @@ export default function GMGResaleFlow() {
         </div>
       </div>
 
-      <div className='max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8 pb-20'>
+      <div className='max-w-5xl mx-auto px-3 sm:px-4 lg:px-8 py-4 sm:py-6 md:py-8'>
         {/* Progress Steps */}
-        <div className='mb-8'>
-          <div className='flex items-center justify-between'>
-            {steps.map((step, index) => {
-              const StepIcon = step.icon;
-              const isActive = currentStep === step.number;
-              const isCompleted = currentStep > step.number;
+        <div className='mb-4 sm:mb-6 md:mb-8'>
+          {/* Mobile: Compact progress with current step title */}
+          <div className='block md:hidden'>
+            {/* Current Step Title */}
+            <div className='mb-4 text-center'>
+              <div className='inline-flex items-center gap-2 px-4 py-2 bg-green-50 border border-green-200 rounded-full'>
+                <span className='text-xs font-semibold text-green-700'>
+                  Step {currentStep} of {steps.length}
+                </span>
+              </div>
+              <h2 className='mt-2 text-lg font-bold text-green-900'>
+                {steps.find(s => s.number === currentStep)?.title || 'Progress'}
+              </h2>
+            </div>
+            
+            {/* Compact Progress Dots */}
+            <div className='flex items-center justify-center gap-2'>
+              {steps.map((step, index) => {
+                const StepIcon = step.icon;
+                const isActive = currentStep === step.number;
+                const isCompleted = currentStep > step.number;
+                const isUpcoming = currentStep < step.number;
 
-              return (
-                <div key={step.number} className='flex items-center'>
-                  <div
-                    className={`flex items-center justify-center w-12 h-12 rounded-full border-2 ${
-                      isActive
-                        ? 'border-green-600 bg-green-600 text-white'
-                        : isCompleted
-                        ? 'border-green-600 bg-green-600 text-white'
-                        : 'border-gray-300 bg-white text-gray-500'
-                    }`}
-                  >
-                    <StepIcon className='h-6 w-6' />
-                  </div>
-                  <span
-                    className={`ml-3 text-sm font-medium ${
-                      isActive
-                        ? 'text-green-600'
-                        : isCompleted
-                        ? 'text-green-600'
-                        : 'text-gray-500'
-                    }`}
-                  >
-                    {step.title}
-                  </span>
-                  {index < steps.length - 1 && (
-                    <div
-                      className={`flex-1 h-px mx-6 ${
-                        currentStep > step.number
-                          ? 'bg-green-600'
-                          : 'bg-gray-300'
-                      }`}
-                    />
-                  )}
-                </div>
-              );
-            })}
+                return (
+                  <React.Fragment key={step.number}>
+                    <div className='flex flex-col items-center'>
+                      <div
+                        className={`flex items-center justify-center w-8 h-8 sm:w-10 sm:h-10 rounded-full border-2 transition-all ${
+                          isActive
+                            ? 'border-green-600 bg-green-600 text-white scale-110 shadow-lg'
+                            : isCompleted
+                            ? 'border-green-600 bg-green-600 text-white'
+                            : 'border-gray-300 bg-white text-gray-400'
+                        }`}
+                      >
+                        {isCompleted ? (
+                          <CheckCircle className='h-4 w-4 sm:h-5 sm:w-5' />
+                        ) : (
+                          <StepIcon className='h-4 w-4 sm:h-5 sm:w-5' />
+                        )}
+                      </div>
+                      {isActive && (
+                        <span className='mt-1 text-[10px] sm:text-xs font-medium text-green-600 text-center max-w-[60px] sm:max-w-[80px] leading-tight'>
+                          {step.title.split(' ')[0]}
+                        </span>
+                      )}
+                    </div>
+                    {index < steps.length - 1 && (
+                      <div
+                        className={`flex-1 h-0.5 max-w-[20px] sm:max-w-[30px] transition-colors ${
+                          isCompleted
+                            ? 'bg-green-600'
+                            : 'bg-gray-300'
+                        }`}
+                      />
+                    )}
+                  </React.Fragment>
+                );
+              })}
+            </div>
+          </div>
+          
+          {/* Desktop: Full progress bar */}
+          <div className='hidden md:block'>
+            {/* For 6+ steps (lender questionnaire), use compact single-row layout */}
+            {steps.length >= 6 ? (
+              <div className='flex items-center justify-center gap-2'>
+                {steps.map((step, index) => {
+                  const StepIcon = step.icon;
+                  const isActive = currentStep === step.number;
+                  const isCompleted = currentStep > step.number;
+
+                  return (
+                    <React.Fragment key={step.number}>
+                      <div className='flex flex-col items-center'>
+                        <div
+                          className={`flex items-center justify-center w-10 h-10 rounded-full border-2 transition-all ${
+                            isActive
+                              ? 'border-green-600 bg-green-600 text-white scale-110 shadow-md'
+                              : isCompleted
+                              ? 'border-green-600 bg-green-600 text-white'
+                              : 'border-gray-300 bg-white text-gray-400'
+                          }`}
+                        >
+                          {isCompleted ? (
+                            <CheckCircle className='h-5 w-5' />
+                          ) : (
+                            <StepIcon className='h-5 w-5' />
+                          )}
+                        </div>
+                        <span
+                          className={`mt-2 text-xs font-medium text-center max-w-[100px] leading-tight ${
+                            isActive
+                              ? 'text-green-600 font-semibold'
+                              : isCompleted
+                              ? 'text-green-600'
+                              : 'text-gray-500'
+                          }`}
+                        >
+                          {step.title}
+                        </span>
+                      </div>
+                      {index < steps.length - 1 && (
+                        <div
+                          className={`w-8 h-0.5 transition-colors ${
+                            isCompleted
+                              ? 'bg-green-600'
+                              : 'bg-gray-300'
+                          }`}
+                        />
+                      )}
+                    </React.Fragment>
+                  );
+                })}
+              </div>
+            ) : (
+              /* For 5 or fewer steps, use traditional horizontal layout */
+              <div className='flex items-center justify-between'>
+                {steps.map((step, index) => {
+                  const StepIcon = step.icon;
+                  const isActive = currentStep === step.number;
+                  const isCompleted = currentStep > step.number;
+
+                  return (
+                    <div key={step.number} className='flex items-center flex-1'>
+                      <div className='flex items-center'>
+                        <div
+                          className={`flex items-center justify-center w-12 h-12 rounded-full border-2 flex-shrink-0 ${
+                            isActive
+                              ? 'border-green-600 bg-green-600 text-white'
+                              : isCompleted
+                              ? 'border-green-600 bg-green-600 text-white'
+                              : 'border-gray-300 bg-white text-gray-500'
+                          }`}
+                        >
+                          {isCompleted ? (
+                            <CheckCircle className='h-6 w-6' />
+                          ) : (
+                            <StepIcon className='h-6 w-6' />
+                          )}
+                        </div>
+                        <span
+                          className={`ml-3 text-sm font-medium whitespace-nowrap ${
+                            isActive
+                              ? 'text-green-600'
+                              : isCompleted
+                              ? 'text-green-600'
+                              : 'text-gray-500'
+                          }`}
+                        >
+                          {step.title}
+                        </span>
+                      </div>
+                      {index < steps.length - 1 && (
+                        <div
+                          className={`flex-1 h-px mx-4 min-w-[20px] ${
+                            currentStep > step.number
+                              ? 'bg-green-600'
+                              : 'bg-gray-300'
+                          }`}
+                        />
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
 
         {/* Form Content */}
-        <div className='bg-white rounded-lg shadow-sm border border-gray-200 p-8 mb-8'>
+        <div className='bg-white rounded-lg shadow-sm border border-gray-200 p-4 sm:p-6 md:p-8 mb-4 sm:mb-6 md:mb-8'>
           {renderStepContent()}
         </div>
 
-        {/* Navigation Buttons */}
-        <div className='flex justify-between mb-12'>
-          {currentStep !== 5 ? (
-            <button
-              onClick={prevStep}
-              disabled={currentStep === 1}
-              className='px-6 py-3 border border-gray-300 rounded-lg text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2'
-            >
-              Previous
-            </button>
-          ) : (
-            <div></div>
-          )}
-
-          {currentStep < 5 && currentStep !== 4 ? (
-            <button
-              onClick={nextStep}
-              disabled={
-                (currentStep === 1 &&
-                  (!formData.hoaProperty || !formData.propertyAddress)) ||
-                (currentStep === 2 &&
-                  (!formData.submitterType ||
-                    !formData.submitterName ||
-                    !formData.submitterEmail ||
-                    (formData.submitterType === 'settlement' && !formData.closingDate))) ||
-                (currentStep === 3 &&
-                  (!formData.sellerName ||
-                    !formData.sellerEmail ||
-                    !formData.sellerPhone))
-              }
-              className='px-6 py-3 bg-green-700 text-white rounded-lg hover:bg-green-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2'
-            >
-              Continue
-              <FileText className='h-4 w-4' />
-            </button>
-          ) : currentStep === 5 ? (
-            <button
-              onClick={handleSubmit}
-              disabled={isSubmitting}
-              className={`px-8 py-3 bg-green-700 text-white rounded-lg transition-colors flex items-center gap-2 ${
-                isSubmitting 
-                  ? 'opacity-50 cursor-not-allowed' 
-                  : 'hover:bg-green-800'
-              }`}
-            >
-              {isSubmitting ? (
-                <>
-                  <svg className='animate-spin h-5 w-5 text-white' xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24'>
-                    <circle className='opacity-25' cx='12' cy='12' r='10' stroke='currentColor' strokeWidth='4'></circle>
-                    <path className='opacity-75' fill='currentColor' d='M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z'></path>
-                  </svg>
-                  Submitting...
-                </>
+        {/* Navigation Buttons - Mobile: Sticky bottom, Desktop: Normal */}
+        <div className='fixed bottom-0 left-0 right-0 md:relative md:bottom-auto md:left-auto md:right-auto bg-white border-t border-gray-200 md:border-0 md:bg-transparent shadow-lg md:shadow-none z-40 md:z-auto'>
+          <div className='max-w-5xl mx-auto px-3 sm:px-4 lg:px-8 py-3 md:py-0'>
+            <div className='flex justify-between gap-3 md:mb-12'>
+              {currentStep !== 5 ? (
+                <button
+                  onClick={prevStep}
+                  disabled={currentStep === 1}
+                  className='flex-1 md:flex-initial px-4 sm:px-6 py-3 border border-gray-300 rounded-lg text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2 text-sm sm:text-base font-medium'
+                >
+                  Previous
+                </button>
               ) : (
-                <>
-                  <CheckCircle className='h-5 w-5' />
-                  {applicationId ? 'Submit Application' : `Submit Application & Pay $${calculateTotal(formData, stripePrices, hoaProperties).toFixed(2)}`}
-                </>
+                <div className='md:block hidden'></div>
               )}
-            </button>
-          ) : null}
+
+              {currentStep < 5 && currentStep !== 4 ? (
+                <button
+                  onClick={nextStep}
+                  disabled={
+                    (currentStep === 1 &&
+                      (!formData.hoaProperty || !formData.propertyAddress)) ||
+                    (currentStep === 2 &&
+                      (!formData.submitterType ||
+                        !formData.submitterName ||
+                        !formData.submitterEmail ||
+                        (formData.submitterType === 'settlement' && !formData.closingDate))) ||
+                    (currentStep === 3 &&
+                      (!formData.sellerName ||
+                        !formData.sellerEmail ||
+                        !formData.sellerPhone))
+                  }
+                  className='flex-1 md:flex-initial px-4 sm:px-6 py-3 bg-green-700 text-white rounded-lg hover:bg-green-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2 text-sm sm:text-base font-medium'
+                >
+                  Continue
+                  <FileText className='h-4 w-4' />
+                </button>
+              ) : currentStep === 5 ? (
+                <button
+                  onClick={handleSubmit}
+                  disabled={isSubmitting}
+                  className={`w-full md:w-auto px-4 sm:px-8 py-3 bg-green-700 text-white rounded-lg transition-colors flex items-center justify-center gap-2 text-sm sm:text-base font-medium ${
+                    isSubmitting 
+                      ? 'opacity-50 cursor-not-allowed' 
+                      : 'hover:bg-green-800'
+                  }`}
+                >
+                  {isSubmitting ? (
+                    <>
+                      <svg className='animate-spin h-5 w-5 text-white' xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24'>
+                        <circle className='opacity-25' cx='12' cy='12' r='10' stroke='currentColor' strokeWidth='4'></circle>
+                        <path className='opacity-75' fill='currentColor' d='M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z'></path>
+                      </svg>
+                      <span className='hidden sm:inline'>Submitting...</span>
+                      <span className='sm:hidden'>Submitting...</span>
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle className='h-5 w-5' />
+                      <span className='hidden sm:inline'>
+                        {applicationId ? 'Submit Application' : `Submit Application & Pay $${calculateTotal(formData, stripePrices, hoaProperties).toFixed(2)}`}
+                      </span>
+                      <span className='sm:hidden'>
+                        {applicationId ? 'Submit' : `Pay $${calculateTotal(formData, stripePrices, hoaProperties).toFixed(2)}`}
+                      </span>
+                    </>
+                  )}
+                </button>
+              ) : null}
+            </div>
+          </div>
         </div>
       </div>
 

@@ -148,6 +148,9 @@ export default async function handler(req, res) {
     for (const section of sections) {
       const sectionFields = [];
       
+      // Special handling for Assessment Information section - need to preserve order
+      const isAssessmentSection = section.section === 'Assessment Information';
+      
       for (const field of section.fields) {
         const fieldKey = field.key;
         const fieldValue = formData[fieldKey];
@@ -178,12 +181,23 @@ export default async function handler(req, res) {
         }
         
         // Regular field - add to its section
-        sectionFields.push({
+        // For Assessment Information, include order information
+        const fieldData = {
           key: fieldKey,
           label: field.label || formatLabel(fieldKey),
           value: formatValue(fieldValue, field.type),
           type: field.type
-        });
+        };
+        
+        if (isAssessmentSection) {
+          // Store order from formData (same logic as frontend)
+          fieldData.order = formData[`${fieldKey}_order`] !== undefined 
+            ? formData[`${fieldKey}_order`] 
+            : section.fields.findIndex(f => f.key === fieldKey);
+          fieldData.isCustom = false;
+        }
+        
+        sectionFields.push(fieldData);
       }
       
       // Only add section if it has fields
@@ -203,6 +217,81 @@ export default async function handler(req, res) {
     // Add comments section at the very end if it has fields
     if (commentsSection.fields.length > 0) {
       organizedSections.push(commentsSection);
+    }
+
+    // Handle Assessment Information section with custom fields and proper ordering
+    const assessmentSection = organizedSections.find(s => s.section === 'Assessment Information');
+    if (assessmentSection) {
+      // Get all standard fields with their order
+      const standardFields = assessmentSection.fields.map(field => ({
+        ...field,
+        isCustom: false
+      }));
+      
+      // Get custom fields with their order
+      const customFields = [];
+      if (formData.customFields && Array.isArray(formData.customFields) && formData.customFields.length > 0) {
+        formData.customFields.forEach(customField => {
+          if (customField.name) {
+            let displayValue = customField.value || '—';
+            
+            // Format based on field type
+            if (customField.type === 'number' && customField.value) {
+              const numValue = parseFloat(customField.value);
+              if (!isNaN(numValue)) {
+                displayValue = `$${numValue.toFixed(2)}`;
+              }
+            }
+            
+            customFields.push({
+              key: `custom_${customField.id}`,
+              label: customField.name,
+              value: displayValue,
+              type: customField.type || 'text',
+              order: customField.order || 0,
+              isCustom: true
+            });
+          }
+        });
+      }
+      
+      // Combine standard and custom fields, then sort by order (same logic as frontend)
+      const allFields = [...standardFields, ...customFields].sort((a, b) => (a.order || 0) - (b.order || 0));
+      
+      // Replace the section's fields with the properly ordered fields
+      assessmentSection.fields = allFields;
+    } else if (formData.customFields && Array.isArray(formData.customFields) && formData.customFields.length > 0) {
+      // If Assessment Information section doesn't exist but we have custom fields, create it
+      const customFields = [];
+      formData.customFields.forEach(customField => {
+        if (customField.name) {
+          let displayValue = customField.value || '—';
+          
+          if (customField.type === 'number' && customField.value) {
+            const numValue = parseFloat(customField.value);
+            if (!isNaN(numValue)) {
+              displayValue = `$${numValue.toFixed(2)}`;
+            }
+          }
+          
+          customFields.push({
+            key: `custom_${customField.id}`,
+            label: customField.name,
+            value: displayValue,
+            type: customField.type || 'text',
+            order: customField.order || 0,
+            isCustom: true
+          });
+        }
+      });
+      
+      // Sort custom fields by order
+      customFields.sort((a, b) => (a.order || 0) - (b.order || 0));
+      
+      organizedSections.push({
+        section: 'Assessment Information',
+        fields: customFields
+      });
     }
 
     // Load and encode company logo

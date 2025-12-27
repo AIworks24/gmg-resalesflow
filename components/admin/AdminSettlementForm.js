@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
 import { 
   getSettlementSections, 
@@ -32,7 +32,8 @@ import {
   AlertCircle,
   CheckCircle,
   Download,
-  X
+  X,
+  GripVertical
 } from 'lucide-react';
 
 export default function AdminSettlementForm({ applicationId, onClose, isModal = false, showSnackbar, propertyGroupId = null }) {
@@ -47,6 +48,16 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
   const [propertyState, setPropertyState] = useState(null);
   const [documentType, setDocumentType] = useState('');
   const [isCompleted, setIsCompleted] = useState(false);
+  const [customFields, setCustomFields] = useState([]);
+  const fieldRefs = useRef({});
+  const [showFieldEditor, setShowFieldEditor] = useState(false);
+  const [editingFieldIndex, setEditingFieldIndex] = useState(null);
+  const [fieldEditorData, setFieldEditorData] = useState({ name: '', type: 'text', value: '', width: 'half' });
+  const [fieldEditorErrors, setFieldEditorErrors] = useState({});
+  const [draggedIndex, setDraggedIndex] = useState(null);
+  const [dragOverIndex, setDragOverIndex] = useState(null);
+  const [draggedFieldType, setDraggedFieldType] = useState(null); // 'standard' or 'custom'
+  const [assessmentFieldOrder, setAssessmentFieldOrder] = useState([]);
 
   // Get sections from JSON config
   const sections = useMemo(() => {
@@ -112,7 +123,7 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
           prev.managerEmail !== user?.email;
         
         if (needsUpdate) {
-          return {
+          const updated = {
             ...prev,
             managerName: user?.name || prev.managerName || '',
             managerTitle: user?.title || prev.managerTitle || 'Community Manager',
@@ -120,11 +131,28 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
             managerPhone: user?.phone || prev.managerPhone || '',
             managerEmail: user?.email || prev.managerEmail || '',
           };
+          // Recalculate total after update
+          updated.totalAmountDue = calculateTotalAmountDue(updated);
+          return updated;
         }
         return prev;
       });
     }
   }, [user]);
+
+  // Calculate total when custom fields change
+  useEffect(() => {
+    if (formData && Object.keys(formData).length > 0 && propertyState && customFields.length > 0) {
+      setFormData(prev => {
+        const calculated = calculateTotalAmountDue(prev);
+        // Only update if different to avoid infinite loops
+        if (prev.totalAmountDue !== calculated) {
+          return { ...prev, totalAmountDue: calculated };
+        }
+        return prev;
+      });
+    }
+  }, [customFields]);
 
   const loadCurrentUserForInit = async () => {
     try {
@@ -362,6 +390,48 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
           const hasParcelId = state !== 'NC' || (existingData.parcelId !== undefined);
           
           if (hasPropertyAddress && hasAssociationName && hasParcelId) {
+            // Clean up placeholder values that might have been saved as actual values
+            // Get sections to check which fields have placeholders
+            const sections = getSettlementSections(state);
+            sections.forEach(section => {
+              section.fields.forEach(field => {
+                if (field.placeholder && existingData[field.key] === field.placeholder) {
+                  // If the saved value matches the placeholder, clear it
+                  existingData[field.key] = '';
+                }
+              });
+            });
+            
+            // Initialize custom fields from saved data
+            if (existingData.customFields && Array.isArray(existingData.customFields)) {
+              // Ensure all fields have order and sort by it
+              const fieldsWithOrder = existingData.customFields.map((field, index) => ({
+                ...field,
+                order: field.order !== undefined ? field.order : index,
+                width: field.width || 'half'
+              })).sort((a, b) => (a.order || 0) - (b.order || 0));
+              setCustomFields(fieldsWithOrder);
+              existingData.customFields = fieldsWithOrder;
+            } else {
+              existingData.customFields = [];
+            }
+            
+            // Initialize field order for standard fields if not present
+            const assessmentSection = getSettlementSections(state).find(s => s.section === 'Assessment Information');
+            if (assessmentSection) {
+              assessmentSection.fields.forEach((field, index) => {
+                if (existingData[`${field.key}_order`] === undefined) {
+                  existingData[`${field.key}_order`] = index;
+                }
+                if (existingData[`${field.key}_width`] === undefined) {
+                  existingData[`${field.key}_width`] = (field.type === 'textarea' || field.key === 'totalAmountDue' ? 'full' : 'half');
+                }
+              });
+            }
+            
+            // Calculate total amount due for existing data
+            existingData.totalAmountDue = calculateTotalAmountDue(existingData, state);
+            
             setFormData(existingData);
             return; // Exit early if we have complete existing form data
           }
@@ -476,15 +546,111 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
     initialData.preparerSignature = userToUse?.name || managerFromProperty || '';
     initialData.preparerName = userToUse?.name || managerFromProperty || '';
 
+    // Initialize custom fields from saved form data if available
+    if (initialData.customFields && Array.isArray(initialData.customFields)) {
+      // Ensure all fields have order and sort by it
+      const fieldsWithOrder = initialData.customFields.map((field, index) => ({
+        ...field,
+        order: field.order !== undefined ? field.order : index,
+        width: field.width || 'half'
+      })).sort((a, b) => (a.order || 0) - (b.order || 0));
+      setCustomFields(fieldsWithOrder);
+      initialData.customFields = fieldsWithOrder;
+    } else {
+      initialData.customFields = [];
+    }
+    
+    // Initialize field order for standard fields
+    const assessmentSection = getSettlementSections(effectiveState).find(s => s.section === 'Assessment Information');
+    if (assessmentSection) {
+      assessmentSection.fields.forEach((field, index) => {
+        initialData[`${field.key}_order`] = index;
+        initialData[`${field.key}_width`] = (field.type === 'textarea' || field.key === 'totalAmountDue' ? 'full' : 'half');
+      });
+    }
+
+    // Calculate initial total amount due
+    initialData.totalAmountDue = calculateTotalAmountDue(initialData, effectiveState);
 
     setFormData(initialData);
   };
 
+  // Utility function to parse currency value from string
+  const parseCurrencyValue = (value) => {
+    if (!value || typeof value !== 'string') return 0;
+    // Remove $, commas, and whitespace, then parse as float
+    const cleaned = value.replace(/[$,\s]/g, '');
+    const parsed = parseFloat(cleaned);
+    return isNaN(parsed) ? 0 : parsed;
+  };
+
+  // Calculate total amount due based on property state
+  const calculateTotalAmountDue = (data, state = null) => {
+    let total = 0;
+    const effectiveState = state || propertyState;
+    
+    if (effectiveState === 'VA') {
+      // VA fields to sum
+      const vaFields = [
+        'regularAssessmentAmount',
+        'ownerCurrentBalance',
+        'transferFee',
+        'resaleCertificateFee',
+        'capitalContribution',
+        'prepaidAssessments',
+        'adminFee'
+      ];
+      
+      vaFields.forEach(field => {
+        total += parseCurrencyValue(data[field] || '');
+      });
+    } else if (effectiveState === 'NC') {
+      // NC fields to sum
+      const ncFields = [
+        'unpaidRegularAssessments',
+        'unpaidSpecialAssessments',
+        'lateFees',
+        'interestCharges',
+        'attorneyFees',
+        'otherCharges'
+      ];
+      
+      ncFields.forEach(field => {
+        total += parseCurrencyValue(data[field] || '');
+      });
+    }
+    
+    // Add custom field values (only number type fields)
+    if (data.customFields && Array.isArray(data.customFields)) {
+      data.customFields.forEach(customField => {
+        if (customField.value && customField.type === 'number') {
+          total += parseCurrencyValue(customField.value);
+        }
+      });
+    }
+    
+    // Format as currency
+    return total > 0 ? `$${total.toFixed(2)}` : '$0.00';
+  };
+
   const handleInputChange = (field, value) => {
-    setFormData(prev => ({
-      ...prev,
-      [field]: value
-    }));
+    setFormData(prev => {
+      const updated = {
+        ...prev,
+        [field]: value
+      };
+      
+      // Auto-calculate total amount due when assessment fields change
+      const assessmentFields = propertyState === 'VA' 
+        ? ['regularAssessmentAmount', 'ownerCurrentBalance', 'transferFee', 'resaleCertificateFee', 'capitalContribution', 'prepaidAssessments', 'adminFee']
+        : ['unpaidRegularAssessments', 'unpaidSpecialAssessments', 'lateFees', 'interestCharges', 'attorneyFees', 'otherCharges'];
+      
+      if (assessmentFields.includes(field) || field.startsWith('customField_')) {
+        updated.totalAmountDue = calculateTotalAmountDue(updated);
+      }
+      
+      return updated;
+    });
 
     // Clear field-specific errors
     if (errors[field]) {
@@ -495,18 +661,330 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
     }
   };
 
+  // Handle custom field changes
+  const handleCustomFieldChange = (index, field, value) => {
+    const updated = [...customFields];
+    updated[index] = { ...updated[index], [field]: value };
+    setCustomFields(updated);
+    
+    // Update formData
+    setFormData(prev => {
+      const updatedData = {
+        ...prev,
+        customFields: updated
+      };
+      
+      // Recalculate total if value changed
+      if (field === 'value') {
+        updatedData.totalAmountDue = calculateTotalAmountDue(updatedData);
+      }
+      
+      return updatedData;
+    });
+  };
+
+  // Check if field name is unique (case-insensitive)
+  const isFieldNameUnique = (name, excludeIndex = null) => {
+    if (!name || name.trim() === '') return false;
+    const nameLower = name.trim().toLowerCase();
+    
+    // Check against existing custom fields
+    for (let i = 0; i < customFields.length; i++) {
+      if (i === excludeIndex) continue;
+      if (customFields[i].name && customFields[i].name.toLowerCase() === nameLower) {
+        return false;
+      }
+    }
+    
+    // Check against predefined assessment fields (get field keys from sections)
+    const assessmentSection = sections.find(s => s.section === 'Assessment Information');
+    if (assessmentSection) {
+      const existingFieldKeys = assessmentSection.fields.map(f => f.label.toLowerCase());
+      if (existingFieldKeys.includes(nameLower)) {
+        return false;
+      }
+    }
+    
+    return true;
+  };
+
+  // Validate field editor data
+  const validateFieldEditor = () => {
+    const newErrors = {};
+    
+    // Field name validation
+    if (!fieldEditorData.name || fieldEditorData.name.trim() === '') {
+      newErrors.name = 'Field name is required';
+    } else if (fieldEditorData.name.length > 100) {
+      newErrors.name = 'Field name must be 100 characters or less';
+    } else if (!isFieldNameUnique(fieldEditorData.name, editingFieldIndex)) {
+      newErrors.name = 'Field name must be unique';
+    }
+    
+    // Field type validation
+    if (!fieldEditorData.type) {
+      newErrors.type = 'Field type is required';
+    }
+    
+    setFieldEditorErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
+  };
+
+  // Open field editor (for new field)
+  const openFieldEditor = () => {
+    setFieldEditorData({ name: '', type: 'text', value: '', width: 'half' });
+    setFieldEditorErrors({});
+    setEditingFieldIndex(null);
+    setShowFieldEditor(true);
+  };
+
+  // Open field editor (for editing existing field)
+  const openFieldEditorForEdit = (index) => {
+    const field = customFields[index];
+    setFieldEditorData({
+      name: field.name || '',
+      type: field.type || 'text',
+      value: field.value || '',
+      width: field.width || 'half'
+    });
+    setFieldEditorErrors({});
+    setEditingFieldIndex(index);
+    setShowFieldEditor(true);
+  };
+
+  // Close field editor
+  const closeFieldEditor = () => {
+    setShowFieldEditor(false);
+    setFieldEditorData({ name: '', type: 'text', value: '', width: 'half' });
+    setFieldEditorErrors({});
+    setEditingFieldIndex(null);
+  };
+
+  // Save field from editor
+  const saveFieldFromEditor = () => {
+    if (!validateFieldEditor()) {
+      return;
+    }
+
+    const fieldData = {
+      id: editingFieldIndex !== null ? customFields[editingFieldIndex].id : `custom_${Date.now()}`,
+      name: fieldEditorData.name.trim(),
+      type: fieldEditorData.type,
+      value: fieldEditorData.value || '',
+      width: fieldEditorData.width || 'half',
+      order: editingFieldIndex !== null ? customFields[editingFieldIndex].order : (customFields.length > 0 ? Math.max(...customFields.map(f => f.order || 0)) + 1 : 0)
+    };
+
+    let updated;
+    if (editingFieldIndex !== null) {
+      // Update existing field
+      updated = [...customFields];
+      updated[editingFieldIndex] = fieldData;
+    } else {
+      // Add new field
+      updated = [...customFields, fieldData];
+    }
+
+    // Sort by order
+    updated.sort((a, b) => (a.order || 0) - (b.order || 0));
+
+    setCustomFields(updated);
+    setFormData(prev => {
+      const updatedData = {
+        ...prev,
+        customFields: updated
+      };
+      // Recalculate total if it's a number/currency field
+      if (fieldData.type === 'number' && fieldData.value) {
+        updatedData.totalAmountDue = calculateTotalAmountDue(updatedData);
+      }
+      return updatedData;
+    });
+
+    closeFieldEditor();
+    
+    if (showSnackbar) {
+      showSnackbar(editingFieldIndex !== null ? 'Field updated successfully' : 'Field added successfully', 'success');
+    }
+  };
+
+  // Add new custom field (opens editor)
+  const addCustomField = () => {
+    openFieldEditor();
+  };
+
+  // Remove custom field
+  const removeCustomField = (index) => {
+    const updated = customFields.filter((_, i) => i !== index);
+    // Reorder remaining fields
+    updated.forEach((field, i) => {
+      field.order = i;
+    });
+    setCustomFields(updated);
+    
+    setFormData(prev => {
+      const updatedData = {
+        ...prev,
+        customFields: updated
+      };
+      
+      // Recalculate total
+      updatedData.totalAmountDue = calculateTotalAmountDue(updatedData);
+      
+      return updatedData;
+    });
+  };
+
+  // Get all Assessment Information fields (standard + custom) in order
+  const getAllAssessmentFields = useMemo(() => {
+    const assessmentSection = sections.find(s => s.section === 'Assessment Information');
+    if (!assessmentSection) return [];
+    
+    // Get standard fields with their order from formData or default order
+    const standardFields = assessmentSection.fields.map((field, index) => ({
+      ...field,
+      isCustom: false,
+      order: formData[`${field.key}_order`] !== undefined ? formData[`${field.key}_order`] : index,
+      width: formData[`${field.key}_width`] || (field.type === 'textarea' || field.key === 'totalAmountDue' ? 'full' : 'half')
+    }));
+    
+    // Get custom fields
+    const customFieldsWithOrder = customFields.map(field => ({
+      ...field,
+      isCustom: true,
+      width: field.width || 'half'
+    }));
+    
+    // Combine and sort by order
+    const allFields = [...standardFields, ...customFieldsWithOrder].sort((a, b) => (a.order || 0) - (b.order || 0));
+    
+    return allFields;
+  }, [sections, formData, customFields]);
+
+  // Unified drag and drop handlers for all fields
+  const handleDragStart = (e, globalIndex) => {
+    setDraggedIndex(globalIndex);
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/html', e.target.outerHTML);
+    e.target.style.opacity = '0.5';
+  };
+
+  const handleDragEnd = (e) => {
+    e.target.style.opacity = '1';
+    setDraggedIndex(null);
+    setDragOverIndex(null);
+  };
+
+  const handleDragOver = (e, index) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    if (draggedIndex !== null && draggedIndex !== index) {
+      setDragOverIndex(index);
+    }
+  };
+
+  const handleDrop = (e, dropIndex) => {
+    e.preventDefault();
+    
+    if (draggedIndex === null || draggedIndex === dropIndex) {
+      setDragOverIndex(null);
+      return;
+    }
+
+    const draggedField = getAllAssessmentFields[draggedIndex];
+    const dropField = getAllAssessmentFields[dropIndex];
+    
+    // Swap orders
+    const draggedOrder = draggedField.order || draggedIndex;
+    const dropOrder = dropField.order || dropIndex;
+    
+    // Update dragged field order
+    if (draggedField.isCustom) {
+      const customIndex = customFields.findIndex(f => f.id === draggedField.id);
+      if (customIndex !== -1) {
+        const updated = [...customFields];
+        updated[customIndex] = { ...updated[customIndex], order: dropOrder };
+        setCustomFields(updated);
+        setFormData(prev => ({
+          ...prev,
+          customFields: updated
+        }));
+      }
+    } else {
+      setFormData(prev => ({
+        ...prev,
+        [`${draggedField.key}_order`]: dropOrder
+      }));
+    }
+    
+    // Update drop field order
+    if (dropField.isCustom) {
+      const customIndex = customFields.findIndex(f => f.id === dropField.id);
+      if (customIndex !== -1) {
+        const updated = [...customFields];
+        updated[customIndex] = { ...updated[customIndex], order: draggedOrder };
+        setCustomFields(updated);
+        setFormData(prev => ({
+          ...prev,
+          customFields: updated
+        }));
+      }
+    } else {
+      setFormData(prev => ({
+        ...prev,
+        [`${dropField.key}_order`]: draggedOrder
+      }));
+    }
+    
+    setDraggedIndex(null);
+    setDragOverIndex(null);
+    
+    if (showSnackbar) {
+      showSnackbar('Field order updated', 'success');
+    }
+  };
+
+  const handleDragLeave = () => {
+    setDragOverIndex(null);
+  };
+
+  // Render custom field input based on type
+  const renderCustomFieldInput = (customField, customIndex) => {
+    const commonProps = {
+      value: customField.value || '',
+      onChange: (e) => handleCustomFieldChange(customIndex, 'value', e.target.value),
+      disabled: isCompleted,
+      className: "w-full px-3 py-2.5 bg-white border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-gray-400 disabled:opacity-60 disabled:cursor-not-allowed"
+    };
+
+    switch (customField.type) {
+      case 'number':
+        return <input type="number" step="0.01" {...commonProps} placeholder="0.00" />;
+      case 'date':
+        // Use text input for date to allow flexible input (per requirements)
+        return <input type="text" {...commonProps} placeholder="mm/dd/yyyy or enter specific information" />;
+      case 'text':
+      default:
+        return <input type="text" {...commonProps} placeholder="Enter value" />;
+    }
+  };
+
   // Render a single field based on its configuration
   const renderField = (field) => {
     const value = formData[field.key] || '';
     const hasError = errors[field.key];
+    
+    // Make totalAmountDue read-only and styled differently
+    const isTotalField = field.key === 'totalAmountDue';
 
     const commonProps = {
       value: value,
       onChange: (e) => handleInputChange(field.key, e.target.value),
       className: `w-full px-3 py-2.5 bg-gray-50 border rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-gray-400 disabled:opacity-60 disabled:cursor-not-allowed ${
         hasError ? 'border-red-300 focus:border-red-500 focus:ring-red-200' : 'border-gray-200'
-      }`,
-      disabled: isCompleted,
+      } ${isTotalField ? 'bg-blue-50 font-semibold border-blue-300' : ''}`,
+      disabled: isCompleted || isTotalField,
+      readOnly: isTotalField,
     };
 
     switch (field.type) {
@@ -549,11 +1027,56 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
     }
   };
 
+  // Scroll to first error field
+  const scrollToFirstError = (errorKeys) => {
+    if (!errorKeys || errorKeys.length === 0) return;
+    
+    // Find the first error field
+    const firstErrorKey = errorKeys[0];
+    const errorFieldRef = fieldRefs.current[firstErrorKey];
+    
+    if (errorFieldRef && errorFieldRef.current) {
+      // Scroll to the field with smooth behavior
+      errorFieldRef.current.scrollIntoView({ 
+        behavior: 'smooth', 
+        block: 'center',
+        inline: 'nearest'
+      });
+      
+      // Focus the input field after a short delay to ensure scroll completes
+      setTimeout(() => {
+        if (errorFieldRef.current) {
+          // Try to find the input/select/textarea within the field container
+          const input = errorFieldRef.current.querySelector('input, select, textarea');
+          if (input && !input.disabled) {
+            input.focus();
+            // Also try to select the text if it's an input
+            if (input.type === 'text' || input.type === 'email' || input.type === 'tel') {
+              input.select();
+            }
+          }
+        }
+      }, 400);
+    }
+  };
+
   const validateForm = () => {
     // Use JSON-based validator
     const newErrors = validateFormDataHelper(propertyState, formData);
     setErrors(newErrors);
-    return Object.keys(newErrors).length === 0;
+    const errorKeys = Object.keys(newErrors);
+    
+    // If there are errors, scroll to the first one
+    if (errorKeys.length > 0) {
+      // Use requestAnimationFrame and setTimeout to ensure state update and DOM render complete
+      requestAnimationFrame(() => {
+        setTimeout(() => {
+          scrollToFirstError(errorKeys);
+        }, 150);
+      });
+    }
+    
+    return errorKeys.length === 0;
   };
 
   const saveForm = async () => {
@@ -878,39 +1401,217 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
           {/* Form Fields - Dynamically rendered from JSON */}
           <div className="space-y-6">
             {sections && sections.length > 0 ? (
-              sections.map((section, sectionIndex) => (
-                <div key={sectionIndex} className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-                  <div className="px-5 py-3 bg-emerald-50/50 border-b border-emerald-100">
-                    <h3 className="text-sm font-bold text-gray-800 uppercase tracking-wider">
-                      {section.section}
-                    </h3>
-                  </div>
-                  <div className="p-5">
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                      {section.fields.map((field) => (
-                        <div key={field.key} className={field.type === 'textarea' ? 'md:col-span-2' : ''}>
-                          <label className="block text-xs font-medium text-gray-700 uppercase tracking-wider mb-1.5">
-                            {field.label}
-                            {field.required && <span className="text-red-500 ml-1">*</span>}
-                          </label>
-                          {renderField({
-                            ...field,
-                            className: `w-full px-3 py-2.5 bg-gray-50 border ${
-                              errors[field.key] ? 'border-red-300 focus:border-red-500 focus:ring-red-200' : 'border-gray-200 focus:border-blue-500 focus:ring-blue-500/20'
-                            } rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-4 transition-all placeholder:text-gray-400 disabled:opacity-60 disabled:cursor-not-allowed`
+              sections.map((section, sectionIndex) => {
+                const isAssessmentSection = section.section === 'Assessment Information';
+                return (
+                  <div key={sectionIndex} className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+                    <div className="px-5 py-3 bg-emerald-50/50 border-b border-emerald-100 flex items-center justify-between">
+                      <h3 className="text-sm font-bold text-gray-800 uppercase tracking-wider">
+                        {section.section}
+                      </h3>
+                      {isAssessmentSection && !isCompleted && (
+                        <button
+                          onClick={addCustomField}
+                          type="button"
+                          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-emerald-700 bg-emerald-100 hover:bg-emerald-200 rounded-md transition-colors"
+                        >
+                          <span className="text-base">+</span>
+                          Add Field
+                        </button>
+                      )}
+                    </div>
+                    <div className="p-5">
+                      {isAssessmentSection ? (
+                        // Render Assessment Information with unified drag-and-drop (only if custom fields exist)
+                        (() => {
+                          const hasCustomFields = customFields.length > 0;
+                          const allFields = hasCustomFields ? getAllAssessmentFields : section.fields;
+                          
+                          return (
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                              {hasCustomFields ? (
+                                // Render with drag-and-drop when custom fields exist
+                                allFields.map((field, index) => {
+                                  const fieldWidth = field.width || (field.type === 'textarea' || field.key === 'totalAmountDue' ? 'full' : 'half');
+                                  const colSpan = fieldWidth === 'full' ? 'md:col-span-2' : '';
+                                  const isCustom = field.isCustom;
+                                  const fieldIndex = isCustom ? customFields.findIndex(f => f.id === field.id) : section.fields.findIndex(f => f.key === field.key);
+                                  
+                                  // Create ref if it doesn't exist
+                                  const refKey = isCustom ? `custom_${field.id}` : field.key;
+                                  if (!fieldRefs.current[refKey]) {
+                                    fieldRefs.current[refKey] = React.createRef();
+                                  }
+                                  
+                                  return (
+                                    <div
+                                      key={isCustom ? field.id : field.key}
+                                      ref={fieldRefs.current[refKey]}
+                                      draggable={!isCompleted}
+                                      onDragStart={(e) => handleDragStart(e, index)}
+                                      onDragEnd={handleDragEnd}
+                                      onDragOver={(e) => handleDragOver(e, index)}
+                                      onDrop={(e) => handleDrop(e, index)}
+                                      onDragLeave={handleDragLeave}
+                                      className={`${colSpan} border rounded-lg p-4 transition-all group ${
+                                        dragOverIndex === index
+                                          ? 'border-blue-400 bg-blue-50'
+                                          : draggedIndex === index
+                                          ? 'border-gray-300 bg-gray-100 opacity-50'
+                                          : isCustom
+                                          ? 'border-gray-200 bg-gray-50'
+                                          : 'border-transparent'
+                                      } ${!isCompleted ? 'hover:border-gray-300 hover:shadow-sm cursor-move' : ''}`}
+                                    >
+                                      <div className="flex items-start gap-3">
+                                        {!isCompleted && (
+                                          <div className="mt-6 cursor-grab active:cursor-grabbing text-gray-300 opacity-0 group-hover:opacity-100 transition-opacity">
+                                            <GripVertical className="w-4 h-4" />
+                                          </div>
+                                        )}
+                                        <div className="flex-1">
+                                        {isCustom ? (
+                                          <>
+                                            <div className="flex items-center justify-between mb-3">
+                                              <label className="block text-xs font-medium text-gray-700 uppercase tracking-wider">
+                                                {field.name || 'Unnamed Field'}
+                                              </label>
+                                              <div className="flex items-center gap-2">
+                                                {!isCompleted && (
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => openFieldEditorForEdit(fieldIndex)}
+                                                    className="p-1.5 text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded transition-colors"
+                                                    title="Edit field"
+                                                  >
+                                                    <FileText className="w-4 h-4" />
+                                                  </button>
+                                                )}
+                                                {!isCompleted && (
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => removeCustomField(fieldIndex)}
+                                                    className="p-1.5 text-red-600 hover:text-red-800 hover:bg-red-50 rounded transition-colors"
+                                                    title="Remove field"
+                                                  >
+                                                    <X className="w-4 h-4" />
+                                                  </button>
+                                                )}
+                                              </div>
+                                            </div>
+                                            {renderCustomFieldInput(field, fieldIndex)}
+                                          </>
+                                        ) : (
+                                          <>
+                                            <label className="block text-xs font-medium text-gray-700 uppercase tracking-wider mb-1.5">
+                                              {field.label}
+                                              {field.required && <span className="text-red-500 ml-1">*</span>}
+                                              {field.key === 'totalAmountDue' && (
+                                                <span className="ml-2 text-xs font-normal text-gray-500 normal-case">(Auto-calculated)</span>
+                                              )}
+                                            </label>
+                                            {renderField({
+                                              ...field,
+                                              className: `w-full px-3 py-2.5 bg-gray-50 border ${
+                                                errors[field.key] ? 'border-red-300 focus:border-red-500 focus:ring-red-200' : 'border-gray-200 focus:border-blue-500 focus:ring-blue-500/20'
+                                              } rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-4 transition-all placeholder:text-gray-400 disabled:opacity-60 disabled:cursor-not-allowed`
+                                            })}
+                                            {errors[field.key] && (
+                                              <p className="text-red-600 text-xs mt-1.5 flex items-center gap-1">
+                                                <AlertCircle className="w-3 h-3" />
+                                                {errors[field.key]}
+                                              </p>
+                                            )}
+                                          </>
+                                        )}
+                                      </div>
+                                    </div>
+                                  </div>
+                                );
+                              })
+                              ) : (
+                                // Render standard fields normally when no custom fields
+                                section.fields.map((field) => {
+                                  // Create ref if it doesn't exist
+                                  if (!fieldRefs.current[field.key]) {
+                                    fieldRefs.current[field.key] = React.createRef();
+                                  }
+                                  
+                                  return (
+                                    <div 
+                                      key={field.key} 
+                                      ref={fieldRefs.current[field.key]}
+                                      className={field.type === 'textarea' ? 'md:col-span-2' : (field.key === 'totalAmountDue' ? 'md:col-span-2' : '')}
+                                    >
+                                      <label className="block text-xs font-medium text-gray-700 uppercase tracking-wider mb-1.5">
+                                        {field.label}
+                                        {field.required && <span className="text-red-500 ml-1">*</span>}
+                                        {field.key === 'totalAmountDue' && (
+                                          <span className="ml-2 text-xs font-normal text-gray-500 normal-case">(Auto-calculated)</span>
+                                        )}
+                                      </label>
+                                      {renderField({
+                                        ...field,
+                                        className: `w-full px-3 py-2.5 bg-gray-50 border ${
+                                          errors[field.key] ? 'border-red-300 focus:border-red-500 focus:ring-red-200' : 'border-gray-200 focus:border-blue-500 focus:ring-blue-500/20'
+                                        } rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-4 transition-all placeholder:text-gray-400 disabled:opacity-60 disabled:cursor-not-allowed`
+                                      })}
+                                      {errors[field.key] && (
+                                        <p className="text-red-600 text-xs mt-1.5 flex items-center gap-1">
+                                          <AlertCircle className="w-3 h-3" />
+                                          {errors[field.key]}
+                                        </p>
+                                      )}
+                                    </div>
+                                  );
+                                })
+                              )}
+                            </div>
+                          );
+                        })()
+                      ) : (
+                        // Render other sections normally
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                          {section.fields.map((field) => {
+                            // Create ref if it doesn't exist
+                            if (!fieldRefs.current[field.key]) {
+                              fieldRefs.current[field.key] = React.createRef();
+                            }
+                            
+                            return (
+                              <div 
+                                key={field.key} 
+                                ref={fieldRefs.current[field.key]}
+                                className={field.type === 'textarea' ? 'md:col-span-2' : (field.key === 'totalAmountDue' ? 'md:col-span-2' : '')}
+                              >
+                                <label className="block text-xs font-medium text-gray-700 uppercase tracking-wider mb-1.5">
+                                  {field.label}
+                                  {field.required && <span className="text-red-500 ml-1">*</span>}
+                                  {field.key === 'totalAmountDue' && (
+                                    <span className="ml-2 text-xs font-normal text-gray-500 normal-case">(Auto-calculated)</span>
+                                  )}
+                                </label>
+                                {renderField({
+                                  ...field,
+                                  className: `w-full px-3 py-2.5 bg-gray-50 border ${
+                                    errors[field.key] ? 'border-red-300 focus:border-red-500 focus:ring-red-200' : 'border-gray-200 focus:border-blue-500 focus:ring-blue-500/20'
+                                  } rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-4 transition-all placeholder:text-gray-400 disabled:opacity-60 disabled:cursor-not-allowed`
+                                })}
+                                {errors[field.key] && (
+                                  <p className="text-red-600 text-xs mt-1.5 flex items-center gap-1">
+                                    <AlertCircle className="w-3 h-3" />
+                                    {errors[field.key]}
+                                  </p>
+                                )}
+                              </div>
+                            );
                           })}
-                          {errors[field.key] && (
-                            <p className="text-red-600 text-xs mt-1.5 flex items-center gap-1">
-                              <AlertCircle className="w-3 h-3" />
-                              {errors[field.key]}
-                            </p>
-                          )}
                         </div>
-                      ))}
+                      )}
                     </div>
                   </div>
-                </div>
-              ))
+                );
+              })
             ) : (
               <div className="bg-yellow-50 p-6 rounded-xl border border-yellow-200 text-center">
                 <p className="text-yellow-800 font-medium">No form fields found. Loading...</p>
@@ -959,6 +1660,123 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
             </div>
           </div>
         )}
+
+        {/* Field Editor Modal */}
+        {showFieldEditor && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-[70]">
+            <div className="bg-white rounded-xl max-w-md w-full shadow-xl">
+              <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+                <h2 className="text-lg font-bold text-gray-900">
+                  {editingFieldIndex !== null ? 'Edit Field' : 'Add Custom Field'}
+                </h2>
+                <button
+                  onClick={closeFieldEditor}
+                  className="p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              
+              <div className="p-6 space-y-4">
+                {/* Field Name */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                    Field Name <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={fieldEditorData.name}
+                    onChange={(e) => setFieldEditorData({ ...fieldEditorData, name: e.target.value })}
+                    maxLength={100}
+                    placeholder="Enter field name"
+                    className={`w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all ${
+                      fieldEditorErrors.name ? 'border-red-300' : 'border-gray-200'
+                    }`}
+                  />
+                  {fieldEditorErrors.name && (
+                    <p className="text-red-600 text-xs mt-1 flex items-center gap-1">
+                      <AlertCircle className="w-3 h-3" />
+                      {fieldEditorErrors.name}
+                    </p>
+                  )}
+                  <p className="text-xs text-gray-500 mt-1">{fieldEditorData.name.length}/100 characters</p>
+                </div>
+
+                {/* Field Type */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                    Field Type <span className="text-red-500">*</span>
+                  </label>
+                  <select
+                    value={fieldEditorData.type}
+                    onChange={(e) => setFieldEditorData({ ...fieldEditorData, type: e.target.value })}
+                    className={`w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all ${
+                      fieldEditorErrors.type ? 'border-red-300' : 'border-gray-200'
+                    }`}
+                  >
+                    <option value="text">Text (single-line)</option>
+                    <option value="number">Number (currency-compatible)</option>
+                    <option value="date">Date</option>
+                  </select>
+                  {fieldEditorErrors.type && (
+                    <p className="text-red-600 text-xs mt-1 flex items-center gap-1">
+                      <AlertCircle className="w-3 h-3" />
+                      {fieldEditorErrors.type}
+                    </p>
+                  )}
+                </div>
+
+                {/* Field Value (Optional) */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                    Field Value <span className="text-gray-500 text-xs">(Optional)</span>
+                  </label>
+                  {fieldEditorData.type === 'number' ? (
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={fieldEditorData.value}
+                      onChange={(e) => setFieldEditorData({ ...fieldEditorData, value: e.target.value })}
+                      placeholder="0.00"
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
+                    />
+                  ) : fieldEditorData.type === 'date' ? (
+                    <input
+                      type="text"
+                      value={fieldEditorData.value}
+                      onChange={(e) => setFieldEditorData({ ...fieldEditorData, value: e.target.value })}
+                      placeholder="mm/dd/yyyy or enter specific information"
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
+                    />
+                  ) : (
+                    <input
+                      type="text"
+                      value={fieldEditorData.value}
+                      onChange={(e) => setFieldEditorData({ ...fieldEditorData, value: e.target.value })}
+                      placeholder="Enter value"
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
+                    />
+                  )}
+                </div>
+              </div>
+
+              <div className="px-6 py-4 border-t border-gray-200 flex items-center justify-end gap-3">
+                <button
+                  onClick={closeFieldEditor}
+                  className="px-4 py-2 text-gray-700 font-medium hover:bg-gray-100 rounded-lg transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={saveFieldFromEditor}
+                  className="px-4 py-2 bg-green-600 text-white font-medium rounded-lg hover:bg-green-700 transition-colors"
+                >
+                  {editingFieldIndex !== null ? 'Update' : 'Add'} Field
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -999,27 +1817,191 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
       {/* Form Fields - Dynamically rendered from JSON */}
       <div className="space-y-6 mb-8">
         {sections && sections.length > 0 ? (
-          sections.map((section, sectionIndex) => (
-            <div key={sectionIndex} className="bg-gray-50 p-6 rounded-lg">
-              <h3 className="text-lg font-semibold text-gray-900 mb-4">
-                {section.section}
-              </h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {section.fields.map((field) => (
-                  <div key={field.key} className={field.type === 'textarea' ? 'md:col-span-2' : ''}>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      {field.label}
-                      {field.required && <span className="text-red-500 ml-1">*</span>}
-                    </label>
-                    {renderField(field)}
-                    {errors[field.key] && (
-                      <p className="text-red-500 text-sm mt-1">{errors[field.key]}</p>
-                    )}
+          sections.map((section, sectionIndex) => {
+            const isAssessmentSection = section.section === 'Assessment Information';
+            return (
+              <div key={sectionIndex} className="bg-gray-50 p-6 rounded-lg">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-lg font-semibold text-gray-900">
+                    {section.section}
+                  </h3>
+                  {isAssessmentSection && !isCompleted && (
+                    <button
+                      onClick={addCustomField}
+                      type="button"
+                      className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-green-700 bg-green-100 hover:bg-green-200 rounded-md transition-colors"
+                    >
+                      <span className="text-base">+</span>
+                      Add Field
+                    </button>
+                  )}
+                </div>
+                {isAssessmentSection ? (
+                  // Render Assessment Information with unified drag-and-drop (only if custom fields exist)
+                  (() => {
+                    const hasCustomFields = customFields.length > 0;
+                    const allFields = hasCustomFields ? getAllAssessmentFields : section.fields;
+                    
+                    return (
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {hasCustomFields ? (
+                          // Render with drag-and-drop when custom fields exist
+                          allFields.map((field, index) => {
+                            const fieldWidth = field.width || (field.type === 'textarea' || field.key === 'totalAmountDue' ? 'full' : 'half');
+                            const colSpan = fieldWidth === 'full' ? 'md:col-span-2' : '';
+                            const isCustom = field.isCustom;
+                            const fieldIndex = isCustom ? customFields.findIndex(f => f.id === field.id) : section.fields.findIndex(f => f.key === field.key);
+                            
+                            // Create ref if it doesn't exist
+                            const refKey = isCustom ? `custom_${field.id}` : field.key;
+                            if (!fieldRefs.current[refKey]) {
+                              fieldRefs.current[refKey] = React.createRef();
+                            }
+                            
+                            return (
+                              <div
+                                key={isCustom ? field.id : field.key}
+                                ref={fieldRefs.current[refKey]}
+                                draggable={!isCompleted}
+                                onDragStart={(e) => handleDragStart(e, index)}
+                                onDragEnd={handleDragEnd}
+                                onDragOver={(e) => handleDragOver(e, index)}
+                                onDrop={(e) => handleDrop(e, index)}
+                                onDragLeave={handleDragLeave}
+                                className={`${colSpan} border rounded-lg p-4 transition-all group ${
+                                  dragOverIndex === index
+                                    ? 'border-blue-400 bg-blue-50'
+                                    : draggedIndex === index
+                                    ? 'border-gray-300 bg-gray-100 opacity-50'
+                                    : isCustom
+                                    ? 'border-gray-300 bg-white'
+                                    : 'border-transparent'
+                                } ${!isCompleted ? 'hover:border-gray-400 hover:shadow-sm cursor-move' : ''}`}
+                              >
+                                <div className="flex items-start gap-3">
+                                  {!isCompleted && (
+                                    <div className="mt-6 cursor-grab active:cursor-grabbing text-gray-300 opacity-0 group-hover:opacity-100 transition-opacity">
+                                      <GripVertical className="w-4 h-4" />
+                                    </div>
+                                  )}
+                                  <div className="flex-1">
+                                  {isCustom ? (
+                                    <>
+                                      <div className="flex items-center justify-between mb-3">
+                                        <label className="block text-sm font-medium text-gray-700">
+                                          {field.name || 'Unnamed Field'}
+                                        </label>
+                                        <div className="flex items-center gap-2">
+                                          {!isCompleted && (
+                                            <button
+                                              type="button"
+                                              onClick={() => openFieldEditorForEdit(fieldIndex)}
+                                              className="p-1.5 text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded transition-colors"
+                                              title="Edit field"
+                                            >
+                                              <FileText className="w-4 h-4" />
+                                            </button>
+                                          )}
+                                          {!isCompleted && (
+                                            <button
+                                              type="button"
+                                              onClick={() => removeCustomField(fieldIndex)}
+                                              className="p-1.5 text-red-600 hover:text-red-800 hover:bg-red-50 rounded transition-colors"
+                                              title="Remove field"
+                                            >
+                                              <X className="w-4 h-4" />
+                                            </button>
+                                          )}
+                                        </div>
+                                      </div>
+                                      {renderCustomFieldInput(field, fieldIndex)}
+                                    </>
+                                  ) : (
+                                    <>
+                                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                                        {field.label}
+                                        {field.required && <span className="text-red-500 ml-1">*</span>}
+                                        {field.key === 'totalAmountDue' && (
+                                          <span className="ml-2 text-xs font-normal text-gray-500">(Auto-calculated)</span>
+                                        )}
+                                      </label>
+                                      {renderField(field)}
+                                      {errors[field.key] && (
+                                        <p className="text-red-500 text-sm mt-1">{errors[field.key]}</p>
+                                      )}
+                                    </>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })
+                        ) : (
+                          // Render standard fields normally when no custom fields
+                          section.fields.map((field) => {
+                            // Create ref if it doesn't exist
+                            if (!fieldRefs.current[field.key]) {
+                              fieldRefs.current[field.key] = React.createRef();
+                            }
+                            
+                            return (
+                              <div 
+                                key={field.key} 
+                                ref={fieldRefs.current[field.key]}
+                                className={field.type === 'textarea' ? 'md:col-span-2' : (field.key === 'totalAmountDue' ? 'md:col-span-2' : '')}
+                              >
+                                <label className="block text-sm font-medium text-gray-700 mb-1">
+                                  {field.label}
+                                  {field.required && <span className="text-red-500 ml-1">*</span>}
+                                  {field.key === 'totalAmountDue' && (
+                                    <span className="ml-2 text-xs font-normal text-gray-500">(Auto-calculated)</span>
+                                  )}
+                                </label>
+                                {renderField(field)}
+                                {errors[field.key] && (
+                                  <p className="text-red-500 text-sm mt-1">{errors[field.key]}</p>
+                                )}
+                              </div>
+                            );
+                          })
+                        )}
+                      </div>
+                    );
+                  })()
+                ) : (
+                  // Render other sections normally
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {section.fields.map((field) => {
+                      // Create ref if it doesn't exist
+                      if (!fieldRefs.current[field.key]) {
+                        fieldRefs.current[field.key] = React.createRef();
+                      }
+                      
+                      return (
+                        <div 
+                          key={field.key} 
+                          ref={fieldRefs.current[field.key]}
+                          className={field.type === 'textarea' ? 'md:col-span-2' : (field.key === 'totalAmountDue' ? 'md:col-span-2' : '')}
+                        >
+                          <label className="block text-sm font-medium text-gray-700 mb-1">
+                            {field.label}
+                            {field.required && <span className="text-red-500 ml-1">*</span>}
+                            {field.key === 'totalAmountDue' && (
+                              <span className="ml-2 text-xs font-normal text-gray-500">(Auto-calculated)</span>
+                            )}
+                          </label>
+                          {renderField(field)}
+                          {errors[field.key] && (
+                            <p className="text-red-500 text-sm mt-1">{errors[field.key]}</p>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
-                ))}
+                )}
               </div>
-            </div>
-          ))
+            );
+          })
         ) : (
           <div className="bg-yellow-50 p-4 rounded-lg">
             <p className="text-yellow-800">No form fields found. propertyState: {propertyState}, sections: {JSON.stringify(sections)}</p>
@@ -1069,6 +2051,154 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
           </div>
         )}
 
+      {/* Field Editor Modal */}
+      {showFieldEditor && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-[70]">
+          <div className="bg-white rounded-xl max-w-md w-full shadow-xl">
+            <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+              <h2 className="text-lg font-bold text-gray-900">
+                {editingFieldIndex !== null ? 'Edit Field' : 'Add Custom Field'}
+              </h2>
+              <button
+                onClick={closeFieldEditor}
+                className="p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            
+            <div className="p-6 space-y-4">
+              {/* Field Name */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                  Field Name <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={fieldEditorData.name}
+                  onChange={(e) => setFieldEditorData({ ...fieldEditorData, name: e.target.value })}
+                  maxLength={100}
+                  placeholder="Enter field name"
+                  className={`w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all ${
+                    fieldEditorErrors.name ? 'border-red-300' : 'border-gray-200'
+                  }`}
+                />
+                {fieldEditorErrors.name && (
+                  <p className="text-red-600 text-xs mt-1 flex items-center gap-1">
+                    <AlertCircle className="w-3 h-3" />
+                    {fieldEditorErrors.name}
+                  </p>
+                )}
+                <p className="text-xs text-gray-500 mt-1">{fieldEditorData.name.length}/100 characters</p>
+              </div>
+
+              {/* Field Type */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                  Field Type <span className="text-red-500">*</span>
+                </label>
+                <select
+                  value={fieldEditorData.type}
+                  onChange={(e) => setFieldEditorData({ ...fieldEditorData, type: e.target.value })}
+                  className={`w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all ${
+                    fieldEditorErrors.type ? 'border-red-300' : 'border-gray-200'
+                  }`}
+                >
+                  <option value="text">Text (single-line)</option>
+                  <option value="number">Number (currency-compatible)</option>
+                  <option value="date">Date</option>
+                </select>
+                {fieldEditorErrors.type && (
+                  <p className="text-red-600 text-xs mt-1 flex items-center gap-1">
+                    <AlertCircle className="w-3 h-3" />
+                    {fieldEditorErrors.type}
+                  </p>
+                )}
+              </div>
+
+              {/* Field Width */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                  Field Width
+                </label>
+                <select
+                  value={fieldEditorData.width || 'half'}
+                  onChange={(e) => setFieldEditorData({ ...fieldEditorData, width: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
+                >
+                  <option value="half">Half Width (2 columns)</option>
+                  <option value="full">Full Width (1 column)</option>
+                </select>
+                <p className="text-xs text-gray-500 mt-1">Half width fields appear side-by-side, full width fields span the entire row</p>
+              </div>
+
+              {/* Field Width */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                  Field Width
+                </label>
+                <select
+                  value={fieldEditorData.width || 'half'}
+                  onChange={(e) => setFieldEditorData({ ...fieldEditorData, width: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
+                >
+                  <option value="half">Half Width (2 columns)</option>
+                  <option value="full">Full Width (1 column)</option>
+                </select>
+                <p className="text-xs text-gray-500 mt-1">Half width fields appear side-by-side, full width fields span the entire row</p>
+              </div>
+
+              {/* Field Value (Optional) */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                  Field Value <span className="text-gray-500 text-xs">(Optional)</span>
+                </label>
+                {fieldEditorData.type === 'number' ? (
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={fieldEditorData.value}
+                    onChange={(e) => setFieldEditorData({ ...fieldEditorData, value: e.target.value })}
+                    placeholder="0.00"
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
+                  />
+                ) : fieldEditorData.type === 'date' ? (
+                  <input
+                    type="text"
+                    value={fieldEditorData.value}
+                    onChange={(e) => setFieldEditorData({ ...fieldEditorData, value: e.target.value })}
+                    placeholder="mm/dd/yyyy or enter specific information"
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
+                  />
+                ) : (
+                  <input
+                    type="text"
+                    value={fieldEditorData.value}
+                    onChange={(e) => setFieldEditorData({ ...fieldEditorData, value: e.target.value })}
+                    placeholder="Enter value"
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
+                  />
+                )}
+              </div>
+            </div>
+
+            <div className="px-6 py-4 border-t border-gray-200 flex items-center justify-end gap-3">
+              <button
+                onClick={closeFieldEditor}
+                className="px-4 py-2 text-gray-700 font-medium hover:bg-gray-100 rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={saveFieldFromEditor}
+                className="px-4 py-2 bg-green-600 text-white font-medium rounded-lg hover:bg-green-700 transition-colors"
+              >
+                {editingFieldIndex !== null ? 'Update' : 'Add'} Field
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
