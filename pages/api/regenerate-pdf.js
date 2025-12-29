@@ -31,7 +31,10 @@ export default async function handler(req, res) {
       return res.status(403).json({ error: 'Forbidden - Admin access required' });
     }
 
-    const { formData: rawFormData, applicationId, propertyGroupId, propertyName } = req.body;
+    const { formData: rawFormData, applicationId, propertyGroupId, propertyName, timezone } = req.body;
+    
+    // Get user's timezone or default to UTC
+    const userTimezone = timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
     
     // Use service role key for server-side operations
     const supabase = createClient(
@@ -150,7 +153,7 @@ export default async function handler(req, res) {
       console.error(`⏰ PDF generation timeout for application ${applicationId}${isPropertySpecific ? `, property: ${propertyName}` : ''}`);
     }, 30000); // 30 seconds total timeout
     
-    const fields = mapFormDataToPDFFields(enrichedFormData);
+    const fields = mapFormDataToPDFFields(enrichedFormData, userTimezone);
     
     // Generate different file paths for property-specific vs application-wide PDFs
     const outputPdfPath = isPropertySpecific 

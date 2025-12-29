@@ -2,6 +2,7 @@ import { createPagesServerClient } from '@supabase/auth-helpers-nextjs';
 import settlementFormFields from '../../lib/settlementFormFields.json';
 import fs from 'fs';
 import path from 'path';
+import { formatDateTimeInTimezone } from '../../lib/timeUtils';
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -30,10 +31,13 @@ export default async function handler(req, res) {
       return res.status(403).json({ error: 'Forbidden' });
     }
 
-    const { applicationId, formData: formDataFromClient, propertyGroupId } = req.body;
+    const { applicationId, formData: formDataFromClient, propertyGroupId, timezone } = req.body;
     if (!applicationId) {
       return res.status(400).json({ error: 'Application ID is required' });
     }
+    
+    // Get user's timezone or default to UTC
+    const userTimezone = timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 
     // Get application data with settlement form
     const { data: application, error: appError } = await supabase
@@ -383,14 +387,14 @@ export default async function handler(req, res) {
     <div class="header-info">
         <p><strong>Property Address:</strong> ${escapeHtml(application.property_address)}</p>
         <p><strong>HOA:</strong> ${escapeHtml(application.hoa_properties.name)}</p>
-        <p><strong>Generated:</strong> ${new Date().toLocaleString()}</p>
+        <p><strong>Generated:</strong> ${formatDateTimeInTimezone(new Date(), userTimezone)}</p>
     </div>
     
     ${sectionsHTML}
     
     <div class="footer">
         <p><strong>Goodman Management Group</strong></p>
-        <p>This document was generated on ${new Date().toLocaleString()}</p>
+        <p>This document was generated on ${formatDateTimeInTimezone(new Date(), userTimezone)}</p>
         <p>For questions or concerns, please contact GMG ResaleFlow at resales@gmgva.com or (804) 404-8012</p>
     </div>
 </body>

@@ -701,15 +701,15 @@ const AdminApplications = ({ userRole }) => {
         }
         
         // 2. Check if user is a property owner of the primary property (for ALL properties)
-        if (app.hoa_properties?.property_owner_email) {
-          const primaryOwnerEmails = parseEmails(app.hoa_properties.property_owner_email)
-            .map(e => e.replace(/^owner\./, '').toLowerCase());
-          
-          if (primaryOwnerEmails.includes(normalizedUserEmail)) {
-            return true;
+          if (app.hoa_properties?.property_owner_email) {
+            const primaryOwnerEmails = parseEmails(app.hoa_properties.property_owner_email)
+              .map(e => e.replace(/^owner\./, '').toLowerCase());
+            
+            if (primaryOwnerEmails.includes(normalizedUserEmail)) {
+              return true;
+            }
           }
-        }
-        
+          
         // 3. For multi-community properties, also check property groups
         if (app.hoa_properties?.is_multi_community && app.application_property_groups) {
           // Check all property groups for owner email match

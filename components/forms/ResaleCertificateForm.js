@@ -132,12 +132,16 @@ const ResaleCertificateForm = ({ applicationId, token }) => {
   const handleRegeneratePDF = async () => {
     try {
       setLoading(true);
+      // Get user's timezone
+      const userTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      
       const response = await fetch('/api/regenerate-pdf', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           formData: originalSupabaseData || formData,
           applicationId,
+          timezone: userTimezone,
         }),
       });
       const result = await response.json();

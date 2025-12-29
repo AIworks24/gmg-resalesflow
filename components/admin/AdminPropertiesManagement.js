@@ -34,8 +34,8 @@ import {
   linkProperties, 
   unlinkProperties 
 } from '../../lib/multiCommunityUtils';
-import { parseEmails, formatEmailsForStorage, validateEmails, convertToOwnersArray, convertFromOwnersArray, validateOwners } from '../../lib/emailUtils';
-import PropertyOwnersInput from '../common/PropertyOwnersInput';
+import { parseEmails, formatEmailsForStorage, validateEmails } from '../../lib/emailUtils';
+import MultiEmailInput from '../common/MultiEmailInput';
 import AdminLayout from './AdminLayout';
 import useAdminAuthStore from '../../stores/adminAuthStore';
 
@@ -80,9 +80,6 @@ const AdminPropertiesManagement = () => {
 
   // Snackbar state
   const [snackbar, setSnackbar] = useState({ show: false, message: '', type: 'success' });
-  
-  // Validation state - track if form has been submitted to show errors
-  const [showValidationErrors, setShowValidationErrors] = useState(false);
 
   // Snackbar helper function
   const showSnackbar = (message, type = 'success') => {
@@ -95,7 +92,9 @@ const AdminPropertiesManagement = () => {
   const [formData, setFormData] = useState({
     name: '',
     location: '',
-    property_owners: [], // Array of {name, email, phone} objects
+    property_owner_name: '',
+    property_owner_email: [], // Changed to array for multiple emails
+    property_owner_phone: '',
     management_contact: '',
     phone: '',
     email: '',
@@ -176,7 +175,9 @@ const AdminPropertiesManagement = () => {
     setFormData({
       name: '',
       location: '',
-      property_owners: [{ name: '', email: '', phone: '' }], // Start with one empty owner
+      property_owner_name: '',
+      property_owner_email: [], // Changed to array for multiple emails
+      property_owner_phone: '',
       management_contact: '',
       phone: '',
       email: '',
@@ -187,7 +188,6 @@ const AdminPropertiesManagement = () => {
       force_price_value: null
     });
     setLinkedProperties([]);
-    setShowValidationErrors(false); // Reset validation state
     setShowModal(true);
   };
 
@@ -206,20 +206,12 @@ const AdminPropertiesManagement = () => {
     // Multi-community status is automatically managed by linked properties
     const actuallyMultiCommunity = linked.length > 0;
     
-    // Convert old format to new owners array format
-    const propertyOwners = convertToOwnersArray(
-      property.property_owner_name || '',
-      property.property_owner_email || '',
-      property.property_owner_phone || ''
-    );
-    
-    // If no owners found, create one empty owner
-    const owners = propertyOwners.length > 0 ? propertyOwners : [{ name: '', email: '', phone: '' }];
-    
     setFormData({
       name: property.name || '',
       location: normalizeLocation(property.location),
-      property_owners: owners,
+      property_owner_name: property.property_owner_name || '',
+      property_owner_email: parseEmails(property.property_owner_email), // Parse emails into array
+      property_owner_phone: property.property_owner_phone || '',
       management_contact: property.management_contact || '',
       phone: property.phone || '',
       email: property.email || '',
@@ -230,26 +222,23 @@ const AdminPropertiesManagement = () => {
       force_price_value: property.force_price_value || null
     });
     setLinkedProperties(linked);
-    setShowValidationErrors(false); // Reset validation state
+    
     setShowModal(true);
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     
-    // Show validation errors on submit attempt
-    setShowValidationErrors(true);
-    
     try {
-      // Validate owners before submission
-      const ownersValidation = validateOwners(formData.property_owners, true);
-      if (!ownersValidation.valid) {
-        showSnackbar(`Validation error: ${ownersValidation.errors.join(', ')}`, 'error');
+      // Validate emails before submission
+      const emailValidation = validateEmails(formData.property_owner_email);
+      if (!emailValidation.valid) {
+        showSnackbar(`Email validation error: ${emailValidation.errors.join(', ')}`, 'error');
         return;
       }
       
-      // Convert owners array to old format for database storage (backward compatibility)
-      const ownerData = convertFromOwnersArray(formData.property_owners);
+      // Format emails for storage (comma-separated string)
+      const emailsForStorage = formatEmailsForStorage(formData.property_owner_email);
       
       let propertyId;
       
@@ -260,9 +249,9 @@ const AdminPropertiesManagement = () => {
           .insert([{
             name: formData.name,
             location: formData.location,
-            property_owner_name: ownerData.name,
-            property_owner_email: ownerData.email,
-            property_owner_phone: ownerData.phone,
+            property_owner_name: formData.property_owner_name,
+            property_owner_email: emailsForStorage,
+            property_owner_phone: formData.property_owner_phone,
             management_contact: formData.management_contact,
             phone: formData.phone,
             email: formData.email,
@@ -289,9 +278,9 @@ const AdminPropertiesManagement = () => {
           .update({
             name: formData.name,
             location: formData.location,
-            property_owner_name: ownerData.name,
-            property_owner_email: ownerData.email,
-            property_owner_phone: ownerData.phone,
+            property_owner_name: formData.property_owner_name,
+            property_owner_email: emailsForStorage,
+            property_owner_phone: formData.property_owner_phone,
             management_contact: formData.management_contact,
             phone: formData.phone,
             email: formData.email,
@@ -382,8 +371,7 @@ const AdminPropertiesManagement = () => {
         mutate();
       }
       
-      // Show success message and reset validation state
-      setShowValidationErrors(false);
+      // Show success message
       showSnackbar('Property saved successfully!', 'success');
     } catch (error) {
       console.error('Error saving property:', error);
@@ -975,22 +963,22 @@ const AdminPropertiesManagement = () => {
         {/* Properties Table (Desktop) */}
         <div className="hidden sm:block bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
           <div className="overflow-x-auto">
-            <table className="w-full divide-y divide-gray-200 table-fixed">
+            <table className="min-w-full divide-y divide-gray-200">
               <thead className="bg-gray-50/80 border-b border-gray-100">
                 <tr>
-                  <th className="px-4 sm:px-6 py-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider w-[25%]">
+                  <th className="px-6 py-4 text-center text-xs font-semibold text-gray-500 uppercase tracking-wider">
                     Property
                   </th>
-                  <th className="px-4 sm:px-6 py-4 text-center text-xs font-semibold text-gray-500 uppercase tracking-wider w-[12%]">
+                  <th className="px-6 py-4 text-center text-xs font-semibold text-gray-500 uppercase tracking-wider">
                     Location
                   </th>
-                  <th className="px-4 sm:px-6 py-4 text-center text-xs font-semibold text-gray-500 uppercase tracking-wider w-[28%]">
+                  <th className="px-6 py-4 text-center text-xs font-semibold text-gray-500 uppercase tracking-wider">
                     Owner
                   </th>
-                  <th className="px-4 sm:px-6 py-4 text-center text-xs font-semibold text-gray-500 uppercase tracking-wider w-[15%]">
+                  <th className="px-6 py-4 text-center text-xs font-semibold text-gray-500 uppercase tracking-wider">
                     Type
                   </th>
-                  <th className="px-4 sm:px-6 py-4 text-center text-xs font-semibold text-gray-500 uppercase tracking-wider w-[20%]">
+                  <th className="px-6 py-4 text-center text-xs font-semibold text-gray-500 uppercase tracking-wider">
                     Actions
                   </th>
                 </tr>
@@ -1015,21 +1003,21 @@ const AdminPropertiesManagement = () => {
               ) : (
                 properties.map((property) => (
                 <tr key={property.id} className="hover:bg-blue-50/30 transition-colors">
-                  <td className="px-4 sm:px-6 py-4 text-left">
-                    <div className="text-sm font-semibold text-gray-900 truncate" title={property.name}>
+                  <td className="px-6 py-4 whitespace-nowrap">
+                    <div className="text-sm font-semibold text-gray-900">
                       {property.name}
                     </div>
                   </td>
-                  <td className="px-4 sm:px-6 py-4 text-center">
+                  <td className="px-6 py-4 whitespace-nowrap text-center">
                     <div className="text-sm text-gray-600">
                       {property.location || 'N/A'}
                     </div>
                   </td>
-                  <td className="px-4 sm:px-6 py-4 text-center">
-                    <div className="text-sm font-medium text-gray-900 truncate mx-auto" title={property.property_owner_name || 'N/A'}>
-                      {property.property_owner_name || 'N/A'}
+                  <td className="px-6 py-4 whitespace-nowrap text-center">
+                    <div className="text-sm font-medium text-gray-900">
+                      {property.property_owner_name}
                     </div>
-                    <div className="text-xs text-gray-500 mt-1 flex items-center justify-center">
+                    <div className="text-xs text-gray-500 mt-1">
                       {(() => {
                         if (!property.property_owner_email) return 'N/A';
                         
@@ -1045,21 +1033,21 @@ const AdminPropertiesManagement = () => {
                         
                         if (emails.length === 1) {
                           return (
-                            <div className="flex items-center justify-center gap-1.5 text-gray-500 min-w-0" title={emails[0]}>
-                              <Mail className="w-3 h-3 text-gray-400 flex-shrink-0" />
-                              <span className="truncate">{emails[0]}</span>
+                            <div className="flex items-center justify-center gap-1.5 text-gray-500" title={emails[0]}>
+                              <Mail className="w-3 h-3 text-gray-400" />
+                              <span className="truncate max-w-[180px]">{emails[0]}</span>
                             </div>
                           );
                         }
                         
                         return (
-                          <div className="flex items-center justify-center gap-1.5 min-w-0" title={emails.join(', ')}>
-                            <div className="flex items-center gap-1.5 text-gray-500 min-w-0">
-                              <Mail className="w-3 h-3 text-gray-400 flex-shrink-0" />
-                              <span className="truncate">{emails[0]}</span>
+                          <div className="flex items-center justify-center gap-1.5" title={emails.join(', ')}>
+                            <div className="flex items-center gap-1.5 text-gray-500">
+                              <Mail className="w-3 h-3 text-gray-400" />
+                              <span className="truncate max-w-[120px]">{emails[0]}</span>
                             </div>
                             {emails.length > 1 && (
-                              <div className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-gray-100 text-gray-600 border border-gray-200 cursor-help flex-shrink-0" title={`${emails.length - 1} more email(s): ${emails.slice(1).join(', ')}`}>
+                              <div className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-gray-100 text-gray-600 border border-gray-200 cursor-help">
                                 +{emails.length - 1}
                               </div>
                             )}
@@ -1068,7 +1056,7 @@ const AdminPropertiesManagement = () => {
                       })()}
                     </div>
                   </td>
-                  <td className="px-4 sm:px-6 py-4 text-center">
+                  <td className="px-6 py-4 whitespace-nowrap text-center">
                     {property.is_multi_community ? (
                       <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-50 text-blue-700 border border-blue-100">
                         Multi-Community
@@ -1079,25 +1067,25 @@ const AdminPropertiesManagement = () => {
                       </span>
                     )}
                   </td>
-                  <td className="px-4 sm:px-6 py-4 text-center">
-                    <div className="flex items-center justify-center gap-1.5 flex-wrap">
+                  <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                    <div className="flex items-center justify-center gap-2">
                       <button
                         onClick={() => router.push(`/admin/property-files/${property.id}`)}
-                        className="p-1.5 text-green-600 hover:bg-green-50 hover:shadow-[0_0_8px_rgba(22,163,74,0.4)] rounded-lg transition-all flex-shrink-0"
+                        className="p-1.5 text-green-600 hover:bg-green-50 hover:shadow-[0_0_8px_rgba(22,163,74,0.4)] rounded-lg transition-all"
                         title="Manage Documents"
                       >
                         <FileText className="w-4 h-4" />
                       </button>
                       <button
                         onClick={() => openLinkModal(property)}
-                        className="p-1.5 text-purple-600 hover:bg-purple-50 hover:shadow-[0_0_8px_rgba(147,51,234,0.4)] rounded-lg transition-all flex-shrink-0"
+                        className="p-1.5 text-purple-600 hover:bg-purple-50 hover:shadow-[0_0_8px_rgba(147,51,234,0.4)] rounded-lg transition-all"
                         title={property.is_multi_community ? "Manage Linked Properties" : "Link Properties"}
                       >
                         <Link className="w-4 h-4" />
                       </button>
                       <button
                         onClick={() => openEditModal(property)}
-                        className="p-1.5 text-blue-600 hover:bg-blue-50 hover:shadow-[0_0_8px_rgba(37,99,235,0.4)] rounded-lg transition-all flex-shrink-0"
+                        className="p-1.5 text-blue-600 hover:bg-blue-50 hover:shadow-[0_0_8px_rgba(37,99,235,0.4)] rounded-lg transition-all"
                         title="Edit Property"
                       >
                         <Edit className="w-4 h-4" />
@@ -1125,7 +1113,7 @@ const AdminPropertiesManagement = () => {
                           }
                           setShowDeleteConfirm(true);
                         }}
-                        className="p-1.5 text-red-600 hover:bg-red-50 hover:shadow-[0_0_8px_rgba(220,38,38,0.4)] rounded-lg transition-all flex-shrink-0"
+                        className="p-1.5 text-red-600 hover:bg-red-50 hover:shadow-[0_0_8px_rgba(220,38,38,0.4)] rounded-lg transition-all"
                         title="Delete Property"
                       >
                         <Trash2 className="w-4 h-4" />
@@ -1342,7 +1330,7 @@ const AdminPropertiesManagement = () => {
         {/* Add/Edit Modal */}
         {showModal && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-            <div className="bg-white rounded-lg max-w-4xl w-full max-h-[90vh] overflow-y-auto p-6">
+            <div className="bg-white rounded-lg max-w-2xl w-full max-h-[90vh] overflow-y-auto p-6">
               <div className="flex justify-between items-center mb-4">
                 <h2 className="text-lg font-semibold">
                   {modalMode === 'add' ? 'Add Property' : 'Edit Property'}
@@ -1391,12 +1379,43 @@ const AdminPropertiesManagement = () => {
                 {/* Property Owner Information */}
                 <div className="border-t pt-4">
                   <h3 className="text-md font-medium text-gray-900 mb-3">Property Owner Information</h3>
-                  <PropertyOwnersInput
-                    value={formData.property_owners}
-                    onChange={(owners) => setFormData(prev => ({...prev, property_owners: owners}))}
-                    required
-                    showValidationErrors={showValidationErrors}
-                  />
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Owner Name
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={formData.property_owner_name}
+                        onChange={(e) => setFormData({...formData, property_owner_name: e.target.value})}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Owner Email
+                      </label>
+                      <MultiEmailInput
+                        value={formData.property_owner_email}
+                        onChange={(emails) => setFormData({...formData, property_owner_email: emails})}
+                        required
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Owner Phone
+                      </label>
+                      <input
+                        type="tel"
+                        value={formData.property_owner_phone}
+                        onChange={(e) => setFormData({...formData, property_owner_phone: e.target.value})}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                    </div>
+                  </div>
                 </div>
 
                 {/* Management Information removed per request */}
