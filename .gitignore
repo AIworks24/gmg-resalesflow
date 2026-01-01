@@ -143,8 +143,13 @@ Resale1.pdf
 
 # Database exports (contains sensitive data)
 database-exports/
-*.sql
+# *.sql  # Commented out - we need SQL files for Supabase migrations
 *.dump
+
+# Supabase (but keep migrations!)
+supabase/.temp/
+supabase/.branches/
+# supabase/migrations/*.sql  # DO NOT ignore - these are version controlled!
 
 # Backup files
 *.bak
