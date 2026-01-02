@@ -54,6 +54,7 @@ const AdminLayout = ({ children, onStartTour }) => {
     { href: '/admin/dashboard', label: 'Dashboard', roles: ['admin', 'staff', 'accounting'] },
     { href: '/admin/applications', label: 'Applications', roles: ['admin', 'staff', 'accounting'] },
     { href: '/admin/properties', label: 'Properties', roles: ['admin', 'staff', 'accounting'] },
+    { href: '/admin/form-builder', label: 'Form Builder', roles: ['admin', 'staff'], isNew: true },
     { href: '/admin/reports', label: 'Reports', roles: ['admin', 'staff', 'accounting'] },
     { href: '/admin/users', label: 'Users', roles: ['admin'] },
   ];
@@ -90,13 +91,18 @@ const AdminLayout = ({ children, onStartTour }) => {
                     <button
                       key={item.href}
                       onClick={() => router.push(item.href)}
-                      className={`px-4 py-2 rounded-md text-sm font-medium transition-colors duration-200 ${
+                      className={`relative px-4 py-2 rounded-md text-sm font-medium transition-colors duration-200 ${
                         isActive(item.href)
                           ? 'bg-blue-100 text-blue-700 border border-blue-200'
                           : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
                       }`}
                     >
                       {item.label}
+                      {item.isNew && (
+                        <span className="absolute -top-1 -right-1 px-1.5 py-0.5 bg-orange-500 text-white text-[10px] font-bold rounded-full leading-none">
+                          NEW
+                        </span>
+                      )}
                     </button>
                   ))}
               </nav>
@@ -186,13 +192,18 @@ const AdminLayout = ({ children, onStartTour }) => {
                   <button
                     key={item.href}
                     onClick={() => router.push(item.href)}
-                    className={`px-3 py-2 rounded-md text-sm font-medium whitespace-nowrap transition-colors duration-200 ${
+                    className={`relative px-3 py-2 rounded-md text-sm font-medium whitespace-nowrap transition-colors duration-200 ${
                       isActive(item.href)
                         ? 'bg-blue-100 text-blue-700'
                         : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
                     }`}
                   >
                     {item.label}
+                    {item.isNew && (
+                      <span className="absolute -top-0.5 -right-0.5 px-1.5 py-0.5 bg-orange-500 text-white text-[10px] font-bold rounded-full leading-none">
+                        NEW
+                      </span>
+                    )}
                   </button>
                 ))}
             </div>
