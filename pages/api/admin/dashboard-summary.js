@@ -60,7 +60,8 @@ export default async function handler(req, res) {
         property_owner_forms(form_type, status),
         notifications(notification_type, sent_at)
       `)
-      .neq('status', 'draft');
+      .neq('status', 'draft')
+      .is('deleted_at', null); // Only count non-deleted applications
 
     // Apply role-based filtering
     if (profile.role === 'accounting') {
