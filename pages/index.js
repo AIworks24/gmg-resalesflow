@@ -4856,7 +4856,7 @@ export default function GMGResaleFlow() {
                 <span className='text-transparent bg-clip-text bg-gradient-to-r from-green-600 to-teal-600 drop-shadow-sm'>GMG ResaleFlow</span>
               </h1>
               <p className='mt-6 max-w-3xl mx-auto text-xl md:text-2xl text-gray-600 leading-relaxed animate-slideUp delay-100 font-light'>
-                The professional solution for Virginia HOA resale certificates.
+                The professional solution for Virginia and North Carolina HOA resale certificates.
                 <span className='block mt-2 font-normal text-gray-800'>Fast, compliant, and efficient document processing.</span>
               </p>
               

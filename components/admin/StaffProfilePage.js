@@ -117,6 +117,7 @@ const StaffProfilePage = () => {
         email: formData.email,
         first_name: formData.first_name,
         last_name: formData.last_name,
+        role: role || 'staff', // Include role as it's required by the API
       };
 
       // Only include password if it's provided
