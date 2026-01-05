@@ -42,3 +42,4 @@ COMMENT ON TABLE email_verification_tokens IS 'Stores email verification tokens 
 
 
 
+

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
 import {
   ArrowLeft,
@@ -20,6 +20,116 @@ import SectionConfigurationPanel from './SectionConfigurationPanel';
 import FormRenderer from './FormRenderer';
 
 export default function UnifiedFormBuilder({ template = null, creationMethod = 'visual', onClose }) {
+  // Job polling state
+  const [jobId, setJobId] = useState(null);
+  const jobPollIntervalRef = useRef(null);
+  
+  // Cleanup polling on unmount
+  useEffect(() => {
+    return () => {
+      if (jobPollIntervalRef.current) {
+        clearInterval(jobPollIntervalRef.current);
+      }
+    };
+  }, []);
+  
+  // Poll job status
+  const pollJobStatus = async (jobId) => {
+    const maxAttempts = 60; // 5 minutes max (5 second intervals)
+    let attempts = 0;
+    
+    const poll = async () => {
+      try {
+        const { data: job, error } = await supabase
+          .from('ai_processing_jobs')
+          .select('*')
+          .eq('id', jobId)
+          .single();
+        
+        if (error) throw error;
+        
+        if (job.status === 'completed') {
+          // Clear polling
+          if (jobPollIntervalRef.current) {
+            clearInterval(jobPollIntervalRef.current);
+            jobPollIntervalRef.current = null;
+          }
+          
+          // Process results
+          if (job.results) {
+            const result = job.results;
+            setFormStructure(result.formStructure || formStructure);
+            
+            if (result.formTitle && !templateName) {
+              setTemplateName(result.formTitle);
+            }
+            
+            if (result.mappingSuggestions) {
+              const mappings = {};
+              result.mappingSuggestions.forEach(suggestion => {
+                if (suggestion.pdfField && suggestion.suggestedMapping) {
+                  mappings[suggestion.pdfField] = suggestion.suggestedMapping;
+                }
+              });
+              setFieldMappings(mappings);
+            }
+            
+            if (result.formStructure?.sections?.length > 0) {
+              setActiveSectionId(result.formStructure.sections[0].id);
+            }
+          }
+          
+          setIsAnalyzingPDF(false);
+          setAnalysisProgress('');
+          setJobId(null);
+          
+        } else if (job.status === 'failed') {
+          // Clear polling
+          if (jobPollIntervalRef.current) {
+            clearInterval(jobPollIntervalRef.current);
+            jobPollIntervalRef.current = null;
+          }
+          
+          setIsAnalyzingPDF(false);
+          setAnalysisProgress('');
+          setJobId(null);
+          throw new Error(job.error || 'PDF analysis failed');
+          
+        } else if (job.status === 'processing') {
+          setAnalysisProgress('AI is analyzing the PDF... This may take 30-60 seconds.');
+        }
+        
+        attempts++;
+        if (attempts >= maxAttempts) {
+          // Timeout
+          if (jobPollIntervalRef.current) {
+            clearInterval(jobPollIntervalRef.current);
+            jobPollIntervalRef.current = null;
+          }
+          setIsAnalyzingPDF(false);
+          setAnalysisProgress('');
+          setJobId(null);
+          throw new Error('Analysis timed out. Please try again.');
+        }
+        
+      } catch (error) {
+        console.error('Error polling job status:', error);
+        if (jobPollIntervalRef.current) {
+          clearInterval(jobPollIntervalRef.current);
+          jobPollIntervalRef.current = null;
+        }
+        setIsAnalyzingPDF(false);
+        setAnalysisProgress('');
+        setJobId(null);
+        throw error;
+      }
+    };
+    
+    // Start polling every 5 seconds
+    jobPollIntervalRef.current = setInterval(poll, 5000);
+    // Initial poll
+    poll();
+  };
   const supabase = createClientComponentClient();
   const [formStructure, setFormStructure] = useState({
     sections: []
@@ -41,6 +151,8 @@ export default function UnifiedFormBuilder({ template = null, creationMethod = '
   const [errors, setErrors] = useState({});
   const [showFieldConfig, setShowFieldConfig] = useState(false);
   const [showSectionConfig, setShowSectionConfig] = useState(false);
+  const [isAnalyzingPDF, setIsAnalyzingPDF] = useState(false);
+  const [analysisProgress, setAnalysisProgress] = useState('');
 
   // Set first section as active when sections are created
   useEffect(() => {
@@ -66,6 +178,11 @@ export default function UnifiedFormBuilder({ template = null, creationMethod = '
       }
     }
   }, [template]);
+
+  // Memoize the form data change callback to prevent infinite loops
+  const handlePreviewDataChange = useCallback((data) => {
+    setPreviewData(data);
+  }, []);
 
   // Generate sample preview data
   useEffect(() => {
@@ -121,10 +238,29 @@ export default function UnifiedFormBuilder({ template = null, creationMethod = '
     setActiveSectionId(newSection.id);
   };
 
+  const handleDeleteSection = (sectionId) => {
+    if (window.confirm('Are you sure you want to delete this section? All fields in this section will also be deleted.')) {
+      const updatedSections = formStructure.sections.filter(section => section.id !== sectionId);
+      setFormStructure({ sections: updatedSections });
+      
+      // If deleted section was active, set first section as active or null
+      if (activeSectionId === sectionId) {
+        setActiveSectionId(updatedSections.length > 0 ? updatedSections[0].id : null);
+      }
+      
+      // Clear selected section if it was deleted
+      if (selectedSection?.id === sectionId) {
+        setSelectedSection(null);
+        setShowSectionConfig(false);
+      }
+    }
+  };
+
   const handleAddField = (fieldType, targetSectionId = null) => {
     const fieldLabel = fieldType === 'label' ? 'Label' : 
                        fieldType === 'textarea' ? 'Text Area' :
                        fieldType === 'tel' ? 'Phone' :
+                       fieldType === 'signature' ? 'Signature' :
                        `${fieldType.charAt(0).toUpperCase() + fieldType.slice(1)} Field`;
     
     const newField = {
@@ -137,7 +273,7 @@ export default function UnifiedFormBuilder({ template = null, creationMethod = '
       dataSource: null,
       pdfMapping: null,
       conditionalLogic: null,
-      width: (fieldType === 'textarea' || fieldType === 'label') ? 'full' : 'half',
+      width: (fieldType === 'textarea' || fieldType === 'label' || fieldType === 'signature') ? 'full' : 'half',
       options: (fieldType === 'select' || fieldType === 'radio') ? ['Option 1', 'Option 2'] : [],
       currency: false,
       computation: null,
@@ -240,26 +376,129 @@ export default function UnifiedFormBuilder({ template = null, creationMethod = '
 
   const handlePDFUpload = async (file) => {
     try {
-      const fileExt = file.name.split('.').pop();
-      const fileName = `form-templates/${Date.now()}.${fileExt}`;
+      // For AI import, analyze the PDF first
+      if (creationMethod === 'ai_import') {
+        setIsAnalyzingPDF(true);
+        setAnalysisProgress('Uploading PDF...');
 
-      const { data, error } = await supabase.storage
-        .from('bucket0')
-        .upload(fileName, file, {
-          contentType: 'application/pdf',
-          upsert: false
+        // Create FormData for API call
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('async', 'true'); // Request async processing
+
+        setAnalysisProgress('Starting PDF analysis...');
+        const response = await fetch('/api/form-builder/analyze-pdf', {
+          method: 'POST',
+          body: formData,
         });
 
-      if (error) throw error;
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.error || 'Failed to analyze PDF');
+        }
 
-      setPdfTemplatePath(fileName);
-      
-      // Load PDF into memory
-      const arrayBuffer = await file.arrayBuffer();
-      setPdfTemplate(new Uint8Array(arrayBuffer));
+        const result = await response.json();
+        
+        // Check if async job was created (202 Accepted status)
+        if (response.status === 202 && result.jobId) {
+          setJobId(result.jobId);
+          setAnalysisProgress('Analysis in progress... This may take 30-60 seconds.');
+          // Poll for job completion (non-blocking)
+          pollJobStatus(result.jobId).catch(error => {
+            console.error('Job polling error:', error);
+            setIsAnalyzingPDF(false);
+            setAnalysisProgress('');
+            setJobId(null);
+            // Show error to user
+            alert(`PDF analysis failed: ${error.message}`);
+          });
+          return;
+        }
+
+        // Synchronous processing (200 OK status)
+        setAnalysisProgress('Processing results...');
+
+        if (result.success && result.formStructure) {
+          // Set the form structure from AI analysis
+          setFormStructure(result.formStructure);
+          
+          // Set form title if provided
+          if (result.formTitle && !templateName) {
+            setTemplateName(result.formTitle);
+          }
+          
+          // Set PDF path
+          if (result.pdfPath) {
+            setPdfTemplatePath(result.pdfPath);
+            
+            // Load PDF into memory for preview
+            const { data: pdfData, error: pdfError } = await supabase.storage
+              .from('bucket0')
+              .download(result.pdfPath);
+            
+            if (!pdfError && pdfData) {
+              const arrayBuffer = await pdfData.arrayBuffer();
+              setPdfTemplate(new Uint8Array(arrayBuffer));
+            }
+          }
+
+          // Set field mappings from AI suggestions
+          if (result.mappingSuggestions && result.mappingSuggestions.length > 0) {
+            const mappings = {};
+            result.mappingSuggestions.forEach(suggestion => {
+              if (suggestion.pdfField && suggestion.suggestedMapping) {
+                mappings[suggestion.pdfField] = suggestion.suggestedMapping;
+              }
+            });
+            setFieldMappings(mappings);
+          }
+
+          // Set first section as active
+          if (result.formStructure.sections && result.formStructure.sections.length > 0) {
+            setActiveSectionId(result.formStructure.sections[0].id);
+          }
+
+          setAnalysisProgress('Complete!');
+          
+          // Show success message
+          const fieldCount = result.formStructure.sections.reduce((sum, section) => 
+            sum + (section.fields?.length || 0), 0
+          );
+          
+          setTimeout(() => {
+            setIsAnalyzingPDF(false);
+            setAnalysisProgress('');
+            // You could add a toast notification here if you have a toast system
+            console.log(`Successfully analyzed PDF: ${fieldCount} fields extracted, title: ${result.formTitle || 'Untitled'}`);
+          }, 1500);
+        } else {
+          throw new Error('Invalid response from PDF analysis');
+        }
+      } else {
+        // For visual builder, just upload the PDF
+        const fileExt = file.name.split('.').pop();
+        const fileName = `form-templates/${Date.now()}.${fileExt}`;
+
+        const { data, error } = await supabase.storage
+          .from('bucket0')
+          .upload(fileName, file, {
+            contentType: 'application/pdf',
+            upsert: false
+          });
+
+        if (error) throw error;
+
+        setPdfTemplatePath(fileName);
+        
+        // Load PDF into memory
+        const arrayBuffer = await file.arrayBuffer();
+        setPdfTemplate(new Uint8Array(arrayBuffer));
+      }
     } catch (error) {
-      console.error('Error uploading PDF:', error);
-      setErrors({ pdf: 'Failed to upload PDF' });
+      console.error('Error uploading/analyzing PDF:', error);
+      setErrors({ pdf: error.message || 'Failed to process PDF' });
+      setIsAnalyzingPDF(false);
+      setAnalysisProgress('');
     }
   };
 
@@ -420,27 +659,48 @@ export default function UnifiedFormBuilder({ template = null, creationMethod = '
 
           {/* PDF Upload Section - Only for AI Import workflow */}
           {creationMethod === 'ai_import' && !pdfTemplate && (
-            <div className="px-4 sm:px-6 py-4 border-b border-gray-200 bg-blue-50">
-              <label className="block">
-                <div className="flex flex-col items-center justify-center border-2 border-dashed border-blue-300 rounded-lg p-6 cursor-pointer hover:border-blue-400 transition-colors">
-                  <Upload className="w-8 h-8 text-blue-600 mb-2" />
-                  <span className="text-sm font-medium text-blue-600 mb-1">
-                    Upload PDF Template
+            <div className="px-4 sm:px-6 py-4 border-b border-gray-200 bg-gradient-to-r from-blue-50 to-indigo-50">
+              {isAnalyzingPDF ? (
+                <div className="flex flex-col items-center justify-center border-2 border-dashed border-blue-400 rounded-xl p-8 bg-white">
+                  <Loader2 className="w-10 h-10 text-blue-600 mb-4 animate-spin" />
+                  <span className="text-sm font-semibold text-blue-900 mb-2">
+                    AI Analysis in Progress...
                   </span>
                   <span className="text-xs text-gray-600 text-center">
-                    Click to upload or drag and drop
+                    {analysisProgress || 'Processing your PDF'}
                   </span>
+                  <div className="mt-4 w-full max-w-xs bg-gray-200 rounded-full h-2">
+                    <div className="bg-blue-600 h-2 rounded-full animate-pulse" style={{ width: '60%' }}></div>
+                  </div>
                 </div>
-                <input
-                  type="file"
-                  accept=".pdf"
-                  onChange={(e) => {
-                    const file = e.target.files[0];
-                    if (file) handlePDFUpload(file);
-                  }}
-                  className="hidden"
-                />
-              </label>
+              ) : (
+                <label className="block">
+                  <div className="flex flex-col items-center justify-center border-2 border-dashed border-blue-400 rounded-xl p-8 cursor-pointer hover:border-blue-500 hover:bg-white transition-all bg-white shadow-sm">
+                    <div className="bg-blue-100 p-4 rounded-full mb-4">
+                      <Upload className="w-8 h-8 text-blue-600" />
+                    </div>
+                    <span className="text-base font-semibold text-gray-900 mb-2">
+                      Upload PDF for AI Analysis
+                    </span>
+                    <span className="text-sm text-gray-600 text-center mb-1">
+                      AI will automatically extract fields and create your form structure
+                    </span>
+                    <span className="text-xs text-blue-600 font-medium mt-2">
+                      Click to upload or drag and drop
+                    </span>
+                  </div>
+                  <input
+                    type="file"
+                    accept=".pdf"
+                    onChange={(e) => {
+                      const file = e.target.files[0];
+                      if (file) handlePDFUpload(file);
+                    }}
+                    className="hidden"
+                    disabled={isAnalyzingPDF}
+                  />
+                </label>
+              )}
             </div>
           )}
 
@@ -476,6 +736,7 @@ export default function UnifiedFormBuilder({ template = null, creationMethod = '
               onAddField={handleAddField}
               onSectionUpdate={handleSectionUpdate}
               onAddSection={handleAddSection}
+              onDeleteSection={handleDeleteSection}
               onActiveSectionChange={setActiveSectionId}
               onSectionSelect={(section) => {
                 setSelectedSection(section);
@@ -554,7 +815,7 @@ export default function UnifiedFormBuilder({ template = null, creationMethod = '
               formStructure={formStructure}
               formTitle={templateName || 'Form Preview'}
               applicationData={previewData}
-              onFormDataChange={(data) => setPreviewData(data)}
+              onFormDataChange={handlePreviewDataChange}
             />
           </div>
         )}

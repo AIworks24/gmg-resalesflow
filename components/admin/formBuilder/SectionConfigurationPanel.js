@@ -45,12 +45,15 @@ export default function SectionConfigurationPanel({ section, formStructure, onUp
   };
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
       {/* Basic Settings */}
       <div className="space-y-4">
-        <h4 className="text-sm font-semibold text-gray-900 uppercase tracking-wider">
-          Section Settings
-        </h4>
+        <div className="flex items-center gap-2 mb-4">
+          <div className="w-1 h-5 bg-blue-600 rounded-full"></div>
+          <h4 className="text-sm font-bold text-gray-900 uppercase tracking-wider">
+            Section Settings
+          </h4>
+        </div>
 
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -60,7 +63,7 @@ export default function SectionConfigurationPanel({ section, formStructure, onUp
             type="text"
             value={formData.title}
             onChange={(e) => handleChange('title', e.target.value)}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+            className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 text-sm bg-white shadow-sm hover:shadow transition-shadow"
             placeholder="Enter section title"
           />
         </div>
@@ -73,7 +76,7 @@ export default function SectionConfigurationPanel({ section, formStructure, onUp
             value={formData.description}
             onChange={(e) => handleChange('description', e.target.value)}
             rows={2}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+            className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 text-sm bg-white shadow-sm hover:shadow transition-shadow"
             placeholder="Section description or help text"
           />
         </div>
@@ -85,7 +88,7 @@ export default function SectionConfigurationPanel({ section, formStructure, onUp
           <select
             value={formData.layout}
             onChange={(e) => handleChange('layout', e.target.value)}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+            className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 text-sm bg-white shadow-sm hover:shadow transition-shadow"
           >
             <option value="single-column">Single Column</option>
             <option value="two-column">Two Column</option>
@@ -98,10 +101,13 @@ export default function SectionConfigurationPanel({ section, formStructure, onUp
       </div>
 
       {/* Visibility Settings */}
-      <div className="space-y-4 pt-4 border-t border-gray-200">
-        <h4 className="text-sm font-semibold text-gray-900 uppercase tracking-wider">
-          Visibility Settings
-        </h4>
+      <div className="space-y-4 pt-6 border-t border-gray-200">
+        <div className="flex items-center gap-2 mb-4">
+          <div className="w-1 h-5 bg-purple-600 rounded-full"></div>
+          <h4 className="text-sm font-bold text-gray-900 uppercase tracking-wider">
+            Visibility Settings
+          </h4>
+        </div>
 
         <div className="flex items-center">
           <input
@@ -153,10 +159,13 @@ export default function SectionConfigurationPanel({ section, formStructure, onUp
       </div>
 
       {/* Conditional Visibility */}
-      <div className="space-y-4 pt-4 border-t border-gray-200">
-        <h4 className="text-sm font-semibold text-gray-900 uppercase tracking-wider">
-          Conditional Visibility
-        </h4>
+      <div className="space-y-4 pt-6 border-t border-gray-200">
+        <div className="flex items-center gap-2 mb-4">
+          <div className="w-1 h-5 bg-green-600 rounded-full"></div>
+          <h4 className="text-sm font-bold text-gray-900 uppercase tracking-wider">
+            Conditional Visibility
+          </h4>
+        </div>
 
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -168,7 +177,7 @@ export default function SectionConfigurationPanel({ section, formStructure, onUp
               ...formData.conditionalVisibility,
               action: e.target.value
             })}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+            className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 text-sm bg-white shadow-sm hover:shadow transition-shadow"
           >
             <option value="">No conditional visibility</option>
             <option value="show">Show when condition is met</option>
@@ -184,7 +193,7 @@ export default function SectionConfigurationPanel({ section, formStructure, onUp
                 ...formData.conditionalVisibility,
                 sourceFieldId: e.target.value
               })}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+              className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 text-sm bg-white shadow-sm hover:shadow transition-shadow"
             >
               <option value="">Select field...</option>
               {formStructure?.sections?.map((s) =>
@@ -217,7 +226,7 @@ export default function SectionConfigurationPanel({ section, formStructure, onUp
                     ...formData.conditionalVisibility,
                     value: e.target.value
                   })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+                  className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 text-sm bg-white shadow-sm hover:shadow transition-shadow"
                   placeholder="Value to check (e.g., 'true', 'Yes', etc.)"
                 />
                 <p className="mt-1 text-xs text-gray-500">
@@ -233,17 +242,17 @@ export default function SectionConfigurationPanel({ section, formStructure, onUp
       </div>
 
       {/* Actions */}
-      <div className="pt-4 border-t border-gray-200 flex gap-2">
+      <div className="pt-6 border-t border-gray-200 flex gap-3">
         <button
           onClick={handleSave}
-          className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-all text-sm font-medium"
+          className="flex-1 inline-flex items-center justify-center gap-2 px-5 py-3 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-lg hover:from-blue-700 hover:to-blue-800 transition-all text-sm font-semibold shadow-sm hover:shadow-md"
         >
           <Save className="w-4 h-4" />
           Save Changes
         </button>
         <button
           onClick={onClose}
-          className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-all text-sm font-medium"
+          className="px-5 py-3 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 hover:border-gray-400 transition-all text-sm font-medium"
         >
           Cancel
         </button>

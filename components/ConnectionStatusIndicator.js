@@ -52,8 +52,8 @@ export default function ConnectionStatusIndicator() {
     return null;
   }
 
-  // Adjust top position if in development mode (to account for dev banner)
-  const topOffset = process.env.NODE_ENV === 'development' ? '48px' : '0';
+  // Top position for connection status indicator
+  const topOffset = '0';
 
   return (
     <div

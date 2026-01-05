@@ -23,6 +23,7 @@ export default function FormBuilderPanel({
   onAddField,
   onSectionUpdate,
   onAddSection,
+  onDeleteSection,
   onActiveSectionChange,
   onSectionSelect
 }) {
@@ -165,12 +166,12 @@ export default function FormBuilderPanel({
               return (
                 <div
                   key={section.id}
-                  className="bg-white border border-gray-200 rounded-lg shadow-sm group"
+                  className="bg-white border border-gray-200 rounded-xl shadow-sm group hover:shadow-md transition-all"
                 >
                   {/* Section Header */}
                   <div
-                    className={`flex items-center justify-between p-4 cursor-pointer hover:bg-gray-50 transition-colors ${
-                      activeSectionId === section.id ? 'bg-blue-50 border-l-4 border-l-blue-500' : ''
+                    className={`flex items-center justify-between p-4 cursor-pointer hover:bg-gray-50 transition-colors rounded-t-xl ${
+                      activeSectionId === section.id ? 'bg-gradient-to-r from-blue-50 to-blue-100/50 border-l-4 border-l-blue-500 shadow-sm' : ''
                     }`}
                     onClick={() => handleSectionClick(section.id)}
                   >
@@ -219,6 +220,18 @@ export default function FormBuilderPanel({
                       >
                         <Settings className="w-4 h-4" />
                       </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (onDeleteSection) {
+                            onDeleteSection(section.id);
+                          }
+                        }}
+                        className="p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
+                        title="Delete section"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
                       <span className="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded">
                         {section.fields?.length || 0} field{(section.fields?.length || 0) !== 1 ? 's' : ''}
                       </span>
@@ -257,12 +270,12 @@ export default function FormBuilderPanel({
                                 }
                               }}
                               className={`
-                                flex items-center gap-3 p-3 rounded-lg border-2 transition-all cursor-move
+                                flex items-center gap-3 p-3.5 rounded-lg border-2 transition-all cursor-move
                                 ${isSelected
-                                  ? 'border-blue-500 bg-blue-50'
-                                  : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+                                  ? 'border-blue-500 bg-gradient-to-r from-blue-50 to-blue-100/50 shadow-sm'
+                                  : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50 hover:shadow-sm'
                                 }
-                                ${dragOverIndex === fieldIndex && draggedField ? 'border-blue-400 bg-blue-100' : ''}
+                                ${dragOverIndex === fieldIndex && draggedField ? 'border-blue-400 bg-blue-100 shadow-md' : ''}
                                 ${draggedFieldIndex === fieldIndex && draggedSectionId === section.id ? 'opacity-50' : ''}
                               `}
                             >

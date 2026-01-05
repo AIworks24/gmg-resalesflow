@@ -73,12 +73,15 @@ export default function FieldConfigurationPanel({ field, formStructure, onUpdate
   ];
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
       {/* Basic Settings */}
       <div className="space-y-4">
-        <h4 className="text-sm font-semibold text-gray-900 uppercase tracking-wider">
-          Basic Settings
-        </h4>
+        <div className="flex items-center gap-2 mb-4">
+          <div className="w-1 h-5 bg-blue-600 rounded-full"></div>
+          <h4 className="text-sm font-bold text-gray-900 uppercase tracking-wider">
+            Basic Settings
+          </h4>
+        </div>
 
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -88,7 +91,7 @@ export default function FieldConfigurationPanel({ field, formStructure, onUpdate
             type="text"
             value={formData.label}
             onChange={(e) => handleChange('label', e.target.value)}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+            className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 text-sm bg-white shadow-sm hover:shadow transition-shadow"
             placeholder="Enter field label"
           />
         </div>
@@ -116,7 +119,7 @@ export default function FieldConfigurationPanel({ field, formStructure, onUpdate
           <select
             value={formData.type}
             onChange={(e) => handleChange('type', e.target.value)}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+            className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 text-sm bg-white shadow-sm hover:shadow transition-shadow"
           >
             <option value="label">Label/Text (Read-only)</option>
             <option value="text">Text Field</option>
@@ -140,7 +143,7 @@ export default function FieldConfigurationPanel({ field, formStructure, onUpdate
             <select
               value={formData.width}
               onChange={(e) => handleChange('width', e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+              className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 text-sm bg-white shadow-sm hover:shadow transition-shadow"
             >
               <option value="half">Half Width</option>
               <option value="full">Full Width</option>
@@ -180,7 +183,7 @@ export default function FieldConfigurationPanel({ field, formStructure, onUpdate
               type="text"
               value={formData.checkboxLabel}
               onChange={(e) => handleChange('checkboxLabel', e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+              className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 text-sm bg-white shadow-sm hover:shadow transition-shadow"
               placeholder="Checkbox label text"
             />
             <p className="mt-1 text-xs text-gray-500">
@@ -237,7 +240,7 @@ export default function FieldConfigurationPanel({ field, formStructure, onUpdate
                   ...formData.conditionalLogic,
                   action: e.target.value
                 })}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+                className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 text-sm bg-white shadow-sm hover:shadow transition-shadow"
               >
                 <option value="">No conditional logic</option>
                 <option value="show">Show field/section when checked</option>
@@ -251,7 +254,7 @@ export default function FieldConfigurationPanel({ field, formStructure, onUpdate
                       ...formData.conditionalLogic,
                       targetFieldId: e.target.value
                     })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+                    className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 text-sm bg-white shadow-sm hover:shadow transition-shadow"
                   >
                     <option value="">Select target from list...</option>
                     <optgroup label="Sections">
@@ -311,7 +314,7 @@ export default function FieldConfigurationPanel({ field, formStructure, onUpdate
             type="text"
             value={formData.placeholder}
             onChange={(e) => handleChange('placeholder', e.target.value)}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+            className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 text-sm bg-white shadow-sm hover:shadow transition-shadow"
             placeholder="Enter placeholder text"
           />
         </div>
@@ -324,17 +327,20 @@ export default function FieldConfigurationPanel({ field, formStructure, onUpdate
             type="text"
             value={formData.defaultValue}
             onChange={(e) => handleChange('defaultValue', e.target.value)}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+            className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 text-sm bg-white shadow-sm hover:shadow transition-shadow"
             placeholder="Enter default value"
           />
         </div>
       </div>
 
       {/* Data Mapping */}
-      <div className="space-y-4 pt-4 border-t border-gray-200">
-        <h4 className="text-sm font-semibold text-gray-900 uppercase tracking-wider">
-          Data Mapping
-        </h4>
+      <div className="space-y-4 pt-6 border-t border-gray-200">
+        <div className="flex items-center gap-2 mb-4">
+          <div className="w-1 h-5 bg-green-600 rounded-full"></div>
+          <h4 className="text-sm font-bold text-gray-900 uppercase tracking-wider">
+            Data Mapping
+          </h4>
+        </div>
 
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -343,7 +349,7 @@ export default function FieldConfigurationPanel({ field, formStructure, onUpdate
           <select
             value={formData.dataSource}
             onChange={(e) => handleChange('dataSource', e.target.value)}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+            className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 text-sm bg-white shadow-sm hover:shadow transition-shadow"
           >
             <option value="">None (manual entry)</option>
             {applicationFields.map(field => (
@@ -373,17 +379,17 @@ export default function FieldConfigurationPanel({ field, formStructure, onUpdate
       </div>
 
       {/* Actions */}
-      <div className="pt-4 border-t border-gray-200 flex gap-2">
+      <div className="pt-6 border-t border-gray-200 flex gap-3">
         <button
           onClick={handleSave}
-          className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-all text-sm font-medium"
+          className="flex-1 inline-flex items-center justify-center gap-2 px-5 py-3 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-lg hover:from-blue-700 hover:to-blue-800 transition-all text-sm font-semibold shadow-sm hover:shadow-md"
         >
           <Save className="w-4 h-4" />
           Save Changes
         </button>
         <button
           onClick={onClose}
-          className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-all text-sm font-medium"
+          className="px-5 py-3 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 hover:border-gray-400 transition-all text-sm font-medium"
         >
           Cancel
         </button>

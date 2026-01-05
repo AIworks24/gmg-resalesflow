@@ -11,7 +11,8 @@ import {
   ChevronDown,
   ChevronUp,
   Circle,
-  DollarSign
+  DollarSign,
+  PenTool
 } from 'lucide-react';
 
 const fieldTypes = [
@@ -24,7 +25,8 @@ const fieldTypes = [
   { type: 'number', label: 'Number', icon: Hash, description: 'Numeric input (with currency/computation)' },
   { type: 'select', label: 'Select', icon: List, description: 'Dropdown selection' },
   { type: 'checkbox', label: 'Checkbox', icon: CheckSquare, description: 'Checkbox with conditional logic' },
-  { type: 'radio', label: 'Radio', icon: Circle, description: 'Radio button group' }
+  { type: 'radio', label: 'Radio', icon: Circle, description: 'Radio button group' },
+  { type: 'signature', label: 'Signature', icon: PenTool, description: 'Signature field (draw or upload)' }
 ];
 
 export default function FieldPalette({ onAddField, activeSectionId, formStructure }) {

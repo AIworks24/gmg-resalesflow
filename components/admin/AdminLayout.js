@@ -3,6 +3,7 @@ import { useRouter } from 'next/router';
 import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
 import useAdminAuthStore from '../../stores/adminAuthStore';
 import NotificationBell from './NotificationBell';
+import AIAnalysisNotification from './AIAnalysisNotification';
 import {
   Building,
   User,
@@ -14,6 +15,7 @@ import {
 const AdminLayout = ({ children, onStartTour }) => {
   const [userEmail, setUserEmail] = useState('');
   const [showUserMenu, setShowUserMenu] = useState(false);
+  const [activeJobCount, setActiveJobCount] = useState(0);
   const router = useRouter();
   const supabase = createClientComponentClient();
   const { role: userRole, user } = useAdminAuthStore();
@@ -23,6 +25,38 @@ const AdminLayout = ({ children, onStartTour }) => {
       setUserEmail(user.email);
     }
   }, [user]);
+
+  // Check for active AI analysis jobs
+  useEffect(() => {
+    const checkActiveJobs = async () => {
+      if (!user?.id) {
+        setActiveJobCount(0);
+        return;
+      }
+      
+      try {
+        const { count, error } = await supabase
+          .from('ai_processing_jobs')
+          .select('*', { count: 'exact', head: true })
+          .eq('user_id', user.id)
+          .eq('job_type', 'pdf_analysis')
+          .in('status', ['pending', 'processing']);
+
+        if (!error && count !== null) {
+          setActiveJobCount(count || 0);
+        } else if (error) {
+          console.error('Error checking active jobs:', error);
+        }
+      } catch (error) {
+        console.error('Error checking active jobs:', error);
+      }
+    };
+
+    checkActiveJobs();
+    // Poll every 5 seconds
+    const interval = setInterval(checkActiveJobs, 5000);
+    return () => clearInterval(interval);
+  }, [user?.id, supabase]);
 
   useEffect(() => {
     const handleClickOutside = (event) => {
@@ -101,6 +135,11 @@ const AdminLayout = ({ children, onStartTour }) => {
                       {item.isNew && (
                         <span className="absolute -top-1 -right-1 px-1.5 py-0.5 bg-orange-500 text-white text-[10px] font-bold rounded-full leading-none">
                           NEW
+                        </span>
+                      )}
+                      {item.href === '/admin/form-builder' && activeJobCount > 0 && (
+                        <span className="absolute -top-1 -right-1 px-1.5 py-0.5 bg-blue-500 text-white text-[10px] font-bold rounded-full leading-none animate-pulse">
+                          {activeJobCount}
                         </span>
                       )}
                     </button>
@@ -204,12 +243,20 @@ const AdminLayout = ({ children, onStartTour }) => {
                         NEW
                       </span>
                     )}
+                    {item.href === '/admin/form-builder' && activeJobCount > 0 && (
+                      <span className="absolute -top-0.5 -right-0.5 px-1.5 py-0.5 bg-blue-500 text-white text-[10px] font-bold rounded-full leading-none animate-pulse">
+                        {activeJobCount}
+                      </span>
+                    )}
                   </button>
                 ))}
             </div>
           </nav>
         </div>
       </header>
+
+      {/* Global AI Analysis Notification */}
+      <AIAnalysisNotification />
 
       <main className='flex-1'>
         {children}

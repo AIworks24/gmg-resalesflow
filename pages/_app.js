@@ -29,24 +29,10 @@ export default function App({ Component, pageProps }) {
   return (
     <QueryProvider>
       <AppProvider>
-        {/* Development Environment Warning */}
-        {process.env.NODE_ENV === 'development' && (
-          <div suppressHydrationWarning className="fixed top-0 left-0 right-0 z-[9999] bg-orange-500 text-white text-center py-2 px-4 font-medium shadow-lg">
-            <div className="flex items-center justify-center gap-2">
-              <span className="animate-pulse">[DEV]</span>
-              <span>DEVELOPMENT ENVIRONMENT</span>
-              <span className="animate-pulse">[DEV]</span>
-            </div>
-          </div>
-        )}
-        
         {/* Connection Status Indicator */}
         <ConnectionStatusIndicator />
         
-        {/* Add top margin when development banner is shown */}
-        <div suppressHydrationWarning className={process.env.NODE_ENV === 'development' ? 'mt-12' : ''}>
-          <AppWithAuth Component={Component} pageProps={pageProps} />
-        </div>
+        <AppWithAuth Component={Component} pageProps={pageProps} />
       </AppProvider>
     </QueryProvider>
   )

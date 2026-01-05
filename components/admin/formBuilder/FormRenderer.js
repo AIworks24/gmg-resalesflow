@@ -10,6 +10,7 @@ import {
   Send,
   AlertCircle
 } from 'lucide-react';
+import SignatureField from './SignatureField';
 
 export default function FormRenderer({
   formStructure,
@@ -21,6 +22,8 @@ export default function FormRenderer({
   const [errors, setErrors] = useState({});
   const initializedRef = useRef(false);
   const formStructureRef = useRef(null);
+  const pendingDataChangeRef = useRef(null);
+  const [syncTrigger, setSyncTrigger] = useState(0);
 
   // Helper function to get nested value
   const getNestedValue = (obj, path) => {
@@ -37,12 +40,14 @@ export default function FormRenderer({
     return value;
   };
 
-  // Memoize the callback to prevent unnecessary re-renders
-  const handleFormDataChange = useCallback((data) => {
-    if (onFormDataChange) {
-      onFormDataChange(data);
+  // Sync formData changes to parent (using useEffect to avoid setState during render)
+  // Only sync when there's a pending change from user input, not during initialization
+  useEffect(() => {
+    if (pendingDataChangeRef.current && onFormDataChange && initializedRef.current) {
+      onFormDataChange(pendingDataChangeRef.current);
+      pendingDataChangeRef.current = null;
     }
-  }, [onFormDataChange]);
+  }, [syncTrigger, onFormDataChange]);
 
   // Initialize form data from structure (only when structure changes)
   useEffect(() => {
@@ -89,11 +94,13 @@ export default function FormRenderer({
   const handleInputChange = useCallback((fieldId, value) => {
     setFormData(prevData => {
       const newData = { ...prevData, [fieldId]: value };
-      // Call onFormDataChange with the new data
-      handleFormDataChange(newData);
+      // Store the new data to be synced to parent via useEffect
+      pendingDataChangeRef.current = newData;
+      // Trigger sync effect
+      setSyncTrigger(prev => prev + 1);
       return newData;
     });
-  }, [handleFormDataChange]);
+  }, []);
 
   const renderField = (field) => {
     const value = formData[field.id] || '';
@@ -102,8 +109,8 @@ export default function FormRenderer({
     const commonProps = {
       value: value,
       onChange: (e) => handleInputChange(field.id, e.target.value),
-      className: `w-full px-3 py-2.5 bg-gray-50 border rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-gray-400 ${
-        hasError ? 'border-red-300 focus:border-red-500 focus:ring-red-200' : 'border-gray-200'
+      className: `w-full px-4 py-3 bg-white border rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 transition-all placeholder:text-gray-400 shadow-sm hover:shadow transition-shadow ${
+        hasError ? 'border-red-300 focus:border-red-500 focus:ring-red-200' : 'border-gray-300 hover:border-gray-400'
       }`,
       placeholder: field.placeholder || '',
       disabled: field.readOnly || false
@@ -219,6 +226,19 @@ export default function FormRenderer({
           </div>
         );
 
+      case 'signature':
+        return (
+          <SignatureField
+            value={value || ''}
+            onChange={(signatureData) => {
+              handleInputChange({ target: { name: field.key, value: signatureData } });
+            }}
+            label={field.label}
+            required={field.required}
+            disabled={field.readOnly || false}
+          />
+        );
+
       default:
         return <input type="text" {...commonProps} />;
     }
@@ -243,15 +263,17 @@ export default function FormRenderer({
   }
 
   return (
-    <div className="h-full overflow-auto bg-gray-50">
-      <div className="max-w-4xl mx-auto p-6 bg-white min-h-full">
+    <div className="h-full overflow-auto bg-gradient-to-br from-gray-50 to-gray-100">
+      <div className="max-w-5xl mx-auto p-4 sm:p-6 lg:p-8 min-h-full">
         {/* Form Header */}
-        <div className="bg-blue-50 p-6 rounded-lg mb-8 border border-blue-200">
-          <div className="flex items-center gap-3">
-            <FileText className="w-8 h-8 text-blue-600" />
+        <div className="bg-gradient-to-r from-blue-600 to-blue-700 p-6 sm:p-8 rounded-2xl mb-6 shadow-lg">
+          <div className="flex items-center gap-4">
+            <div className="bg-white/20 p-3 rounded-xl backdrop-blur-sm">
+              <FileText className="w-6 h-6 sm:w-8 sm:h-8 text-white" />
+            </div>
             <div>
-              <h1 className="text-2xl font-bold text-gray-900">{formTitle}</h1>
-              <p className="text-gray-600 text-sm mt-1">Form Preview</p>
+              <h1 className="text-2xl sm:text-3xl font-bold text-white">{formTitle}</h1>
+              <p className="text-blue-100 text-sm mt-1">Form Preview</p>
             </div>
           </div>
         </div>
@@ -259,64 +281,106 @@ export default function FormRenderer({
         {/* Form Sections */}
         <div className="space-y-6 mb-8">
           {formStructure.sections.map((section, sectionIndex) => (
-            <div key={section.id || sectionIndex} className="bg-gray-50 p-6 rounded-lg border border-gray-200">
+            <div key={section.id || sectionIndex} className="bg-white p-6 sm:p-8 rounded-xl shadow-sm border border-gray-200 hover:shadow-md transition-shadow">
               {/* Section Title */}
-              <h3 className="text-lg font-semibold text-gray-900 mb-4 pb-2 border-b border-gray-300">
-                {section.title || `Section ${sectionIndex + 1}`}
-              </h3>
+              <div className="flex items-center gap-3 mb-6 pb-4 border-b border-gray-200">
+                <div className="flex-shrink-0 w-1 h-8 bg-gradient-to-b from-blue-500 to-blue-600 rounded-full"></div>
+                <h3 className="text-xl font-bold text-gray-900">
+                  {section.title || `Section ${sectionIndex + 1}`}
+                </h3>
+              </div>
 
               {/* Section Fields */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {section.fields?.map((field) => {
-                  // Respect the field's width setting explicitly
-                  // If width is explicitly set (not null/undefined/empty), use it; otherwise default based on field type
-                  const fieldWidth = (field.width && (field.width === 'half' || field.width === 'full')) 
-                    ? field.width 
-                    : (field.type === 'textarea' || field.type === 'label' ? 'full' : 'half');
-                  const colSpan = fieldWidth === 'full' ? 'md:col-span-2' : '';
+              {(() => {
+                // Get section layout (default to 'two-column' for backward compatibility)
+                const sectionLayout = section.layout || 'two-column';
+                
+                // Determine grid classes based on section layout
+                let gridClasses = 'grid gap-4';
+                if (sectionLayout === 'single-column') {
+                  gridClasses = 'grid grid-cols-1 gap-4';
+                } else if (sectionLayout === 'two-column') {
+                  gridClasses = 'grid grid-cols-1 md:grid-cols-2 gap-4';
+                } else if (sectionLayout === 'three-column') {
+                  gridClasses = 'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4';
+                }
+                
+                return (
+                  <div className={gridClasses}>
+                    {section.fields?.map((field) => {
+                      // Respect the field's width setting explicitly
+                      // If width is explicitly set (not null/undefined/empty), use it; otherwise default based on field type
+                      const fieldWidth = (field.width && (field.width === 'half' || field.width === 'full')) 
+                        ? field.width 
+                        : (field.type === 'textarea' || field.type === 'label' ? 'full' : 'half');
+                      
+                      // Calculate column span based on section layout and field width
+                      let colSpan = '';
+                      if (fieldWidth === 'full') {
+                        // Full width fields span all columns
+                        if (sectionLayout === 'single-column') {
+                          colSpan = 'col-span-1';
+                        } else if (sectionLayout === 'two-column') {
+                          colSpan = 'md:col-span-2';
+                        } else if (sectionLayout === 'three-column') {
+                          colSpan = 'md:col-span-2 lg:col-span-3';
+                        }
+                      } else {
+                        // Half width fields take 1 column (or adjust for three-column layout)
+                        if (sectionLayout === 'three-column') {
+                          // In three-column, half width could mean 1 column, but we'll keep it as 1 column
+                          colSpan = '';
+                        } else {
+                          colSpan = '';
+                        }
+                      }
 
 
                   return (
                     <div key={field.id} className={colSpan}>
                       {field.type !== 'label' && field.type !== 'checkbox' && (
-                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                        <label className="block text-sm font-semibold text-gray-700 mb-2">
                           {field.label}
                           {field.required && <span className="text-red-500 ml-1">*</span>}
                         </label>
                       )}
-                      {renderField(field)}
+                      <div className="relative">
+                        {renderField(field)}
+                      </div>
                       {errors[field.id] && (
-                        <p className="text-red-500 text-sm mt-1 flex items-center gap-1">
-                          <AlertCircle className="w-4 h-4" />
+                        <p className="text-red-600 text-xs mt-1.5 flex items-center gap-1.5 font-medium">
+                          <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
                           {errors[field.id]}
                         </p>
                       )}
                     </div>
                   );
-                })}
-              </div>
+                    })}
+                  </div>
+                );
+              })()}
             </div>
           ))}
         </div>
 
         {/* Action Buttons */}
-        <div className="flex items-center justify-between pt-6 border-t border-gray-200">
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4 pt-8 mt-8 border-t border-gray-200">
           <button
-            className="px-6 py-2 text-gray-600 hover:text-gray-800 transition-colors"
+            className="px-6 py-3 text-gray-600 hover:text-gray-800 hover:bg-gray-50 rounded-lg transition-all font-medium"
           >
             Cancel
           </button>
           
-          <div className="flex space-x-4">
+          <div className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto">
             <button
-              className="px-6 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors flex items-center gap-2"
+              className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-all flex items-center justify-center gap-2 font-medium shadow-sm hover:shadow-md"
             >
               <Save className="h-4 w-4" />
               Save Draft
             </button>
             
             <button
-              className="px-6 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors flex items-center gap-2"
+              className="px-6 py-3 bg-gradient-to-r from-green-600 to-green-700 text-white rounded-lg hover:from-green-700 hover:to-green-800 transition-all flex items-center justify-center gap-2 font-medium shadow-sm hover:shadow-md"
             >
               <Send className="h-4 w-4" />
               Complete Form
