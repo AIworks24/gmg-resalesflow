@@ -147,36 +147,123 @@ export default async function handler(req, res) {
       throw queryError;
     }
 
+    // Helper function to check if a multi-community settlement application is fully completed
+    const isMultiCommunitySettlementCompleted = (app) => {
+      const propertyGroups = app.application_property_groups || [];
+      
+      // If no property groups, it's not a multi-community application
+      if (propertyGroups.length === 0) {
+        return false;
+      }
+
+      // Check if this is a settlement application
+      const isSettlementApp = app.submitter_type === 'settlement' || 
+                              app.application_type?.startsWith('settlement');
+      
+      // Only apply special logic for settlement multi-community applications
+      if (!isSettlementApp) {
+        return false;
+      }
+
+      // For multi-community settlement applications, ALL properties must be completed
+      // Each property needs: settlement form completed, PDF generated, and email sent
+      for (const group of propertyGroups) {
+        // Find settlement form for this property group
+        const settlementForm = app.property_owner_forms?.find(
+          form => form.form_type === 'settlement_form' && form.property_group_id === group.id
+        );
+        
+        const formCompleted = settlementForm?.status === 'completed';
+        const pdfCompleted = group.pdf_status === 'completed' || !!group.pdf_url;
+        const emailCompleted = group.email_status === 'completed' || !!group.email_completed_at;
+        
+        // If any property is not fully completed, the application is not completed
+        if (!formCompleted || !pdfCompleted || !emailCompleted) {
+          return false;
+        }
+      }
+      
+      // All properties are completed
+      return true;
+    };
+
+    // Helper function to check if a regular (non-multi-community) application is fully completed
+    // This matches the logic in getWorkflowStep to ensure consistency
+    const isRegularApplicationCompleted = (app) => {
+      // Check if this is a lender questionnaire application
+      const isLenderQuestionnaire = app.application_type === 'lender_questionnaire';
+      
+      if (isLenderQuestionnaire) {
+        // Lender questionnaire: needs original file, completed file, and email sent
+        const hasOriginalFile = !!app.lender_questionnaire_file_path;
+        const hasCompletedFile = !!app.lender_questionnaire_completed_file_path;
+        const hasNotificationSent = app.notifications?.some(n => n.notification_type === 'application_approved');
+        const hasEmailCompletedAt = !!app.email_completed_at;
+        return hasOriginalFile && hasCompletedFile && (hasNotificationSent || hasEmailCompletedAt);
+      }
+      
+      // Check if this is a settlement application (single property)
+      const isSettlementApp = app.submitter_type === 'settlement' || 
+                              app.application_type?.startsWith('settlement');
+      
+      if (isSettlementApp) {
+        // Settlement: needs form completed, PDF generated, and email sent
+        const settlementForm = app.property_owner_forms?.find(form => form.form_type === 'settlement_form');
+        const settlementFormStatus = settlementForm?.status || 'not_started';
+        const settlementFormCompleted = !!app.settlement_form_completed_at || settlementFormStatus === 'completed';
+        const hasPDF = !!app.pdf_url || !!app.pdf_completed_at;
+        const hasNotificationSent = app.notifications?.some(n => n.notification_type === 'application_approved');
+        const hasEmailCompletedAt = !!app.email_completed_at;
+        const hasEmailSent = hasNotificationSent || hasEmailCompletedAt;
+        
+        return settlementFormCompleted && hasPDF && hasEmailSent;
+      }
+      
+      // Standard application: needs both forms completed, PDF generated, and email sent
+      const inspectionForm = app.property_owner_forms?.find(form => form.form_type === 'inspection_form');
+      const resaleForm = app.property_owner_forms?.find(form => form.form_type === 'resale_certificate');
+      const inspectionStatus = inspectionForm?.status || 'not_started';
+      const resaleStatus = resaleForm?.status || 'not_started';
+      const hasPDF = !!app.pdf_url;
+      const hasNotificationSent = app.notifications?.some(n => n.notification_type === 'application_approved');
+      const hasEmailCompletedAt = !!app.email_completed_at;
+      const hasEmailSent = hasNotificationSent || hasEmailCompletedAt;
+      
+      return inspectionStatus === 'completed' && resaleStatus === 'completed' && hasPDF && hasEmailSent;
+    };
+
     // Apply custom status filters if needed (using same logic as dashboard)
     let filteredApplications = applications || [];
     let finalCount = count || 0;
     
     if (status === 'completed') {
       filteredApplications = filteredApplications.filter(app => {
-        // Check both notification and application status (same logic as dashboard-summary.js)
-        const hasApprovalEmail = app.notifications?.some(n => n.notification_type === 'application_approved');
-        const hasEmailCompletedAt = !!app.email_completed_at;
-        const isCompletedStatus = app.status === 'completed';
-        return hasApprovalEmail || hasEmailCompletedAt || isCompletedStatus;
+        // For multi-community settlement applications, use special completion check
+        if (isMultiCommunitySettlementCompleted(app)) {
+          return true;
+        }
+        // For regular applications, use strict completion check (matches getWorkflowStep logic)
+        return isRegularApplicationCompleted(app);
       });
     } else if (status === 'pending') {
       // Pending = all non-completed applications (same logic as dashboard: total - completed)
       filteredApplications = filteredApplications.filter(app => {
-        const hasApprovalEmail = app.notifications?.some(n => n.notification_type === 'application_approved');
-        const hasEmailCompletedAt = !!app.email_completed_at;
-        const isCompletedStatus = app.status === 'completed';
-        const isCompleted = hasApprovalEmail || hasEmailCompletedAt || isCompletedStatus;
-        return !isCompleted;
+        // For multi-community settlement applications, use special completion check
+        if (isMultiCommunitySettlementCompleted(app)) {
+          return false; // Completed, so not pending
+        }
+        // For regular applications, use strict completion check
+        return !isRegularApplicationCompleted(app);
       });
     } else if (status === 'urgent') {
       // Urgent = applications that are overdue or within 24 hours of deadline (same logic as dashboard)
       const now = new Date();
       filteredApplications = filteredApplications.filter(app => {
-        // Skip completed applications
-        const hasApprovalEmail = app.notifications?.some(n => n.notification_type === 'application_approved');
-        const hasEmailCompletedAt = !!app.email_completed_at;
-        const isCompletedStatus = app.status === 'completed';
-        if (hasApprovalEmail || hasEmailCompletedAt || isCompletedStatus) {
+        // Skip completed applications (use strict completion check)
+        if (isMultiCommunitySettlementCompleted(app)) {
+          return false;
+        }
+        if (isRegularApplicationCompleted(app)) {
           return false;
         }
 

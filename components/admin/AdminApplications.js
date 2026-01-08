@@ -858,23 +858,18 @@ const AdminApplications = ({ userRole }) => {
           return workflowStep.text === 'Completed';
         });
       } else if (selectedStatus === 'pending') {
-        // Pending = all non-completed applications (same logic as dashboard: total - completed)
+        // Pending = all non-completed applications (use workflow step to handle all app types correctly)
         filtered = filtered.filter(app => {
-          const hasApprovalEmail = app.notifications?.some(n => n.notification_type === 'application_approved');
-          const hasEmailCompletedAt = !!app.email_completed_at;
-          const isCompletedStatus = app.status === 'completed';
-          const isCompleted = hasApprovalEmail || hasEmailCompletedAt || isCompletedStatus;
-          return !isCompleted;
+          const workflowStep = getWorkflowStep(app);
+          return workflowStep.text !== 'Completed';
         });
       } else if (selectedStatus === 'urgent') {
         // Urgent = applications that are overdue or within 24 hours of deadline (same logic as dashboard)
         const now = new Date();
         filtered = filtered.filter(app => {
-          // Skip completed applications
-          const hasApprovalEmail = app.notifications?.some(n => n.notification_type === 'application_approved');
-          const hasEmailCompletedAt = !!app.email_completed_at;
-          const isCompletedStatus = app.status === 'completed';
-          if (hasApprovalEmail || hasEmailCompletedAt || isCompletedStatus) {
+          // Skip completed applications (use workflow step to handle all app types correctly)
+          const workflowStep = getWorkflowStep(app);
+          if (workflowStep.text === 'Completed') {
             return false;
           }
 
@@ -889,12 +884,11 @@ const AdminApplications = ({ userRole }) => {
           return hoursUntilDeadline < 24;
         });
       } else if (selectedStatus === 'completed') {
-        // Completed = same logic as dashboard (check notification, email_completed_at, or status)
+        // Completed = check by workflow step text to handle all app types correctly
+        // This ensures multi-community settlement apps are only marked completed when ALL properties are done
         filtered = filtered.filter(app => {
-          const hasApprovalEmail = app.notifications?.some(n => n.notification_type === 'application_approved');
-          const hasEmailCompletedAt = !!app.email_completed_at;
-          const isCompletedStatus = app.status === 'completed';
-          return hasApprovalEmail || hasEmailCompletedAt || isCompletedStatus;
+          const workflowStep = getWorkflowStep(app);
+          return workflowStep.text === 'Completed';
         });
       } else {
         filtered = filtered.filter(app => app.status === selectedStatus);

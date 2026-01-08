@@ -57,8 +57,17 @@ export default async function handler(req, res) {
       .from('applications')
       .select(`
         *,
-        property_owner_forms(form_type, status),
-        notifications(notification_type, sent_at)
+        property_owner_forms(form_type, status, property_group_id),
+        notifications(notification_type, sent_at),
+        application_property_groups(
+          id,
+          status,
+          pdf_status,
+          pdf_url,
+          email_status,
+          email_completed_at,
+          inspection_status
+        )
       `)
       .neq('status', 'draft')
       .neq('status', 'pending_payment')
@@ -74,14 +83,101 @@ export default async function handler(req, res) {
       throw queryError;
     }
 
+    // Helper function to check if a multi-community settlement application is fully completed
+    const isMultiCommunitySettlementCompleted = (app) => {
+      const propertyGroups = app.application_property_groups || [];
+      
+      // If no property groups, it's not a multi-community application
+      if (propertyGroups.length === 0) {
+        return false;
+      }
+
+      // Check if this is a settlement application
+      const isSettlementApp = app.submitter_type === 'settlement' || 
+                              app.application_type?.startsWith('settlement');
+      
+      // Only apply special logic for settlement multi-community applications
+      if (!isSettlementApp) {
+        return false;
+      }
+
+      // For multi-community settlement applications, ALL properties must be completed
+      // Each property needs: settlement form completed, PDF generated, and email sent
+      for (const group of propertyGroups) {
+        // Find settlement form for this property group
+        const settlementForm = app.property_owner_forms?.find(
+          form => form.form_type === 'settlement_form' && form.property_group_id === group.id
+        );
+        
+        const formCompleted = settlementForm?.status === 'completed';
+        const pdfCompleted = group.pdf_status === 'completed' || !!group.pdf_url;
+        const emailCompleted = group.email_status === 'completed' || !!group.email_completed_at;
+        
+        // If any property is not fully completed, the application is not completed
+        if (!formCompleted || !pdfCompleted || !emailCompleted) {
+          return false;
+        }
+      }
+      
+      // All properties are completed
+      return true;
+    };
+
+    // Helper function to check if a regular (non-multi-community) application is fully completed
+    // This matches the logic in getWorkflowStep to ensure consistency
+    const isRegularApplicationCompleted = (app) => {
+      // Check if this is a lender questionnaire application
+      const isLenderQuestionnaire = app.application_type === 'lender_questionnaire';
+      
+      if (isLenderQuestionnaire) {
+        // Lender questionnaire: needs original file, completed file, and email sent
+        const hasOriginalFile = !!app.lender_questionnaire_file_path;
+        const hasCompletedFile = !!app.lender_questionnaire_completed_file_path;
+        const hasNotificationSent = app.notifications?.some(n => n.notification_type === 'application_approved');
+        const hasEmailCompletedAt = !!app.email_completed_at;
+        return hasOriginalFile && hasCompletedFile && (hasNotificationSent || hasEmailCompletedAt);
+      }
+      
+      // Check if this is a settlement application (single property)
+      const isSettlementApp = app.submitter_type === 'settlement' || 
+                              app.application_type?.startsWith('settlement');
+      
+      if (isSettlementApp) {
+        // Settlement: needs form completed, PDF generated, and email sent
+        const settlementForm = app.property_owner_forms?.find(form => form.form_type === 'settlement_form');
+        const settlementFormStatus = settlementForm?.status || 'not_started';
+        const settlementFormCompleted = !!app.settlement_form_completed_at || settlementFormStatus === 'completed';
+        const hasPDF = !!app.pdf_url || !!app.pdf_completed_at;
+        const hasNotificationSent = app.notifications?.some(n => n.notification_type === 'application_approved');
+        const hasEmailCompletedAt = !!app.email_completed_at;
+        const hasEmailSent = hasNotificationSent || hasEmailCompletedAt;
+        
+        return settlementFormCompleted && hasPDF && hasEmailSent;
+      }
+      
+      // Standard application: needs both forms completed, PDF generated, and email sent
+      const inspectionForm = app.property_owner_forms?.find(form => form.form_type === 'inspection_form');
+      const resaleForm = app.property_owner_forms?.find(form => form.form_type === 'resale_certificate');
+      const inspectionStatus = inspectionForm?.status || 'not_started';
+      const resaleStatus = resaleForm?.status || 'not_started';
+      const hasPDF = !!app.pdf_url;
+      const hasNotificationSent = app.notifications?.some(n => n.notification_type === 'application_approved');
+      const hasEmailCompletedAt = !!app.email_completed_at;
+      const hasEmailSent = hasNotificationSent || hasEmailCompletedAt;
+      
+      return inspectionStatus === 'completed' && resaleStatus === 'completed' && hasPDF && hasEmailSent;
+    };
+
     // Calculate metrics
     const total = applications.length;
     const completed = applications.filter(app => {
-      // Check both notification and application status
-      const hasApprovalEmail = app.notifications?.some(n => n.notification_type === 'application_approved');
-      const hasEmailCompletedAt = !!app.email_completed_at;
-      const isCompletedStatus = app.status === 'completed';
-      return hasApprovalEmail || hasEmailCompletedAt || isCompletedStatus;
+      // For multi-community settlement applications, use special completion check
+      if (isMultiCommunitySettlementCompleted(app)) {
+        return true;
+      }
+      
+      // For regular applications, use strict completion check (matches getWorkflowStep logic)
+      return isRegularApplicationCompleted(app);
     }).length;
     const pending = total - completed;
 
@@ -99,11 +195,11 @@ export default async function handler(req, res) {
     let overdueCount = 0;
 
     applications.forEach(app => {
-      // Skip completed applications
-      const hasApprovalEmail = app.notifications?.some(n => n.notification_type === 'application_approved');
-      const hasEmailCompletedAt = !!app.email_completed_at;
-      const isCompletedStatus = app.status === 'completed';
-      if (hasApprovalEmail || hasEmailCompletedAt || isCompletedStatus) {
+      // Skip completed applications (use strict completion check)
+      if (isMultiCommunitySettlementCompleted(app)) {
+        return;
+      }
+      if (isRegularApplicationCompleted(app)) {
         return;
       }
 
@@ -129,13 +225,39 @@ export default async function handler(req, res) {
     const allForms = applications.flatMap(app => app.property_owner_forms || []);
     const formsCompleted = allForms.filter(form => form.status === 'completed').length;
 
-    // Emails sent
-    const emailsSent = applications.filter(app => {
-      const hasApprovalEmail = app.notifications?.some(n => n.notification_type === 'application_approved');
-      const hasEmailCompletedAt = !!app.email_completed_at;
-      const isCompletedStatus = app.status === 'completed';
-      return hasApprovalEmail || hasEmailCompletedAt || isCompletedStatus;
-    }).length;
+    // Emails sent - count actual emails, not applications
+    // For multi-community: count each property group email
+    // For regular applications: count each application email
+    let emailsSent = 0;
+    applications.forEach(app => {
+      const propertyGroups = app.application_property_groups || [];
+      const isSettlementApp = app.submitter_type === 'settlement' || 
+                              app.application_type?.startsWith('settlement');
+      
+      // Check if this is a multi-community settlement application
+      if (propertyGroups.length > 0 && isSettlementApp) {
+        // For multi-community settlement: count each property group that had an email sent
+        propertyGroups.forEach(group => {
+          if (group.email_status === 'completed' || group.email_completed_at) {
+            emailsSent++;
+          }
+        });
+      } else if (propertyGroups.length > 0) {
+        // For multi-community standard applications: count each property group that had an email sent
+        propertyGroups.forEach(group => {
+          if (group.email_status === 'completed' || group.email_completed_at) {
+            emailsSent++;
+          }
+        });
+      } else {
+        // For regular single-property applications: count if email was sent
+        const hasApprovalEmail = app.notifications?.some(n => n.notification_type === 'application_approved');
+        const hasEmailCompletedAt = !!app.email_completed_at;
+        if (hasApprovalEmail || hasEmailCompletedAt) {
+          emailsSent++;
+        }
+      }
+    });
 
     // Helper function to determine workflow step
     const getWorkflowStep = (application) => {
@@ -194,6 +316,10 @@ export default async function handler(req, res) {
       { 
         name: 'Send Email', 
         count: applications.filter(app => {
+          // Skip multi-community settlement applications that are already completed
+          if (isMultiCommunitySettlementCompleted(app)) {
+            return false;
+          }
           const hasApprovalEmail = app.notifications?.some(n => n.notification_type === 'application_approved');
           const hasEmailCompletedAt = !!app.email_completed_at;
           const isCompletedStatus = app.status === 'completed';
