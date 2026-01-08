@@ -9,6 +9,7 @@ import { useAppContext } from '../lib/AppContext';
 import { useApplicantAuth } from '../providers/ApplicantAuthProvider';
 import useApplicantAuthStore from '../stores/applicantAuthStore';
 import useRequireVerifiedEmail from '../hooks/useRequireVerifiedEmail';
+import MultiEmailInput from '../components/common/MultiEmailInput';
 // Removed pricingUtils import - using database-driven pricing instead
 import { 
   determineApplicationType, 
@@ -791,19 +792,12 @@ const TransactionDetailsStep = ({ formData, handleInputChange }) => (
         <User className='h-5 w-5 mr-2' />
         Buyer Information (Optional)
       </h4>
-      <div className='grid grid-cols-1 md:grid-cols-3 gap-4'>
+      <div className='grid grid-cols-1 md:grid-cols-2 gap-4 mb-4'>
         <input
           type='text'
           placeholder='Buyer Full Name'
           value={formData.buyerName || ''}
           onChange={(e) => handleInputChange('buyerName', e.target.value)}
-          className='px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500'
-        />
-        <input
-          type='email'
-          placeholder='Buyer Email'
-          value={formData.buyerEmail || ''}
-          onChange={(e) => handleInputChange('buyerEmail', e.target.value)}
           className='px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500'
         />
         <input
@@ -813,6 +807,26 @@ const TransactionDetailsStep = ({ formData, handleInputChange }) => (
           onChange={(e) => handleInputChange('buyerPhone', e.target.value)}
           className='px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500'
         />
+      </div>
+      <div className='mt-4'>
+        <label className='block text-sm font-medium text-gray-700 mb-2'>
+          Buyer Email (Optional)
+        </label>
+        <MultiEmailInput
+          value={Array.isArray(formData.buyerEmails) ? formData.buyerEmails : (formData.buyerEmail ? [formData.buyerEmail] : [])}
+          onChange={(emails) => {
+            // Update both buyerEmails array and buyerEmail (first email for backward compatibility)
+            handleInputChange('buyerEmails', emails);
+            handleInputChange('buyerEmail', emails.length > 0 ? emails[0] : '');
+          }}
+          placeholder='Enter buyer email address'
+          className='w-full'
+          enableAutocomplete={false}
+        />
+        <p className='mt-2 text-xs text-gray-600 flex items-center gap-1'>
+          <InfoIcon className='h-3 w-3' />
+          <span>Buyer email(s) will also receive final property documents once the application is complete.</span>
+        </p>
       </div>
     </div>
 
@@ -1034,7 +1048,9 @@ const PackagePaymentStep = ({
             submitter_phone: formData.submitterPhone,
             realtor_license: formData.realtorLicense,
             buyer_name: formData.buyerName,
-            buyer_email: formData.buyerEmail,
+            buyer_email: Array.isArray(formData.buyerEmails) && formData.buyerEmails.length > 0 
+              ? formData.buyerEmails.join(',') 
+              : (formData.buyerEmail || ''),
             buyer_phone: formData.buyerPhone,
             seller_name: formData.sellerName,
             seller_email: formData.sellerEmail,
@@ -1082,7 +1098,9 @@ const PackagePaymentStep = ({
             submitter_phone: formData.submitterPhone,
             realtor_license: formData.realtorLicense,
             buyer_name: formData.buyerName,
-            buyer_email: formData.buyerEmail,
+            buyer_email: Array.isArray(formData.buyerEmails) && formData.buyerEmails.length > 0 
+              ? formData.buyerEmails.join(',') 
+              : (formData.buyerEmail || ''),
             buyer_phone: formData.buyerPhone,
             seller_name: formData.sellerName,
             seller_email: formData.sellerEmail,
@@ -1240,6 +1258,7 @@ const PackagePaymentStep = ({
           realtorLicense: '',
           buyerName: '',
           buyerEmail: '',
+          buyerEmails: [],
           buyerPhone: '',
           sellerName: '',
           sellerEmail: '',
@@ -1274,7 +1293,9 @@ const PackagePaymentStep = ({
             submitter_phone: formData.submitterPhone,
             realtor_license: formData.realtorLicense,
             buyer_name: formData.buyerName,
-            buyer_email: formData.buyerEmail,
+            buyer_email: Array.isArray(formData.buyerEmails) && formData.buyerEmails.length > 0 
+              ? formData.buyerEmails.join(',') 
+              : (formData.buyerEmail || ''),
             buyer_phone: formData.buyerPhone,
             seller_name: formData.sellerName,
             seller_email: formData.sellerEmail,
@@ -1366,7 +1387,9 @@ const PackagePaymentStep = ({
             submitter_phone: formData.submitterPhone,
             realtor_license: formData.realtorLicense,
             buyer_name: formData.buyerName,
-            buyer_email: formData.buyerEmail,
+            buyer_email: Array.isArray(formData.buyerEmails) && formData.buyerEmails.length > 0 
+              ? formData.buyerEmails.join(',') 
+              : (formData.buyerEmail || ''),
             buyer_phone: formData.buyerPhone,
             seller_name: formData.sellerName,
             seller_email: formData.sellerEmail,
@@ -3405,7 +3428,9 @@ const ReviewSubmitStep = ({ formData, stripePrices, applicationId, hoaProperties
             </div>
             <div>
               <span className='font-medium'>Buyer Email:</span>{' '}
-              {formData.buyerEmail}
+              {Array.isArray(formData.buyerEmails) && formData.buyerEmails.length > 0
+                ? formData.buyerEmails.join(', ')
+                : (formData.buyerEmail || 'Not provided')}
             </div>
             <div>
               <span className='font-medium'>Seller:</span> {formData.sellerName}
@@ -3610,6 +3635,7 @@ export default function GMGResaleFlow() {
     realtorLicense: '',
     buyerName: '',
     buyerEmail: '',
+    buyerEmails: [],
     buyerPhone: '',
     sellerName: '',
     sellerEmail: '',
@@ -3772,7 +3798,18 @@ export default function GMGResaleFlow() {
       // Set application ID first to prevent user profile from overriding data
       setApplicationId(appId);
 
+      // Parse buyer emails from comma-separated string or single email
+      const parseBuyerEmails = (buyerEmail) => {
+        if (!buyerEmail) return [];
+        // Check if it's already a comma-separated string
+        if (buyerEmail.includes(',')) {
+          return buyerEmail.split(',').map(email => email.trim()).filter(email => email);
+        }
+        return [buyerEmail.trim()].filter(email => email);
+      };
+
       // Populate form with existing data
+      const buyerEmailsArray = parseBuyerEmails(data.buyer_email);
       const draftFormData = {
         hoaProperty: data.hoa_properties?.name || '',
         propertyAddress: data.property_address || '',
@@ -3784,7 +3821,8 @@ export default function GMGResaleFlow() {
         submitterPhone: data.submitter_phone || '',
         realtorLicense: data.realtor_license || '',
         buyerName: data.buyer_name || '',
-        buyerEmail: data.buyer_email || '',
+        buyerEmail: buyerEmailsArray.length > 0 ? buyerEmailsArray[0] : '',
+        buyerEmails: buyerEmailsArray,
         buyerPhone: data.buyer_phone || '',
         sellerName: data.seller_name || '',
         sellerEmail: data.seller_email || '',

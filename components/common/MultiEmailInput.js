@@ -19,13 +19,15 @@ import { X, User, AlertCircle, CheckCircle } from 'lucide-react';
  * @param {boolean} required - Whether the field is required
  * @param {string} className - Additional CSS classes
  * @param {string} placeholder - Placeholder text
+ * @param {boolean} enableAutocomplete - Whether to enable user autocomplete/search (default: true)
  */
 const MultiEmailInput = ({ 
   value = [], 
   onChange, 
   required = false,
   className = '',
-  placeholder = 'Type to search users or enter email addresses'
+  placeholder = 'Type to search users or enter email addresses',
+  enableAutocomplete = true
 }) => {
   const [inputValue, setInputValue] = useState('');
   const [error, setError] = useState('');
@@ -74,9 +76,9 @@ const MultiEmailInput = ({
     }
   }, []);
 
-  // Check if an email is a registered user
+  // Check if an email is a registered user (only if autocomplete is enabled)
   const checkEmailStatus = useCallback(async (email) => {
-    if (!email || !emailRegex.test(email.trim())) return;
+    if (!enableAutocomplete || !email || !emailRegex.test(email.trim())) return;
 
     try {
       const response = await fetch(`/api/admin/search-users-by-email?q=${encodeURIComponent(email.trim())}&limit=1`);
@@ -93,10 +95,16 @@ const MultiEmailInput = ({
     } catch (error) {
       console.error('Error checking email status:', error);
     }
-  }, []);
+  }, [enableAutocomplete]);
 
-  // Debounced search
+  // Debounced search (only if autocomplete is enabled)
   useEffect(() => {
+    if (!enableAutocomplete) {
+      setSuggestions([]);
+      setShowSuggestions(false);
+      return;
+    }
+
     if (debounceTimerRef.current) {
       clearTimeout(debounceTimerRef.current);
     }
@@ -117,7 +125,7 @@ const MultiEmailInput = ({
         clearTimeout(debounceTimerRef.current);
       }
     };
-  }, [inputValue, fetchSuggestions]);
+  }, [inputValue, fetchSuggestions, enableAutocomplete]);
 
   const validateEmail = (email) => {
     const trimmed = email.trim();
@@ -260,8 +268,10 @@ const MultiEmailInput = ({
     addEmail(suggestion.email);
   };
 
-  // Check status of existing emails when they change
+  // Check status of existing emails when they change (only if autocomplete is enabled)
   useEffect(() => {
+    if (!enableAutocomplete) return;
+    
     emails.forEach(email => {
       const emailLower = email.toLowerCase();
       // Only check if we haven't checked this email yet
@@ -269,7 +279,7 @@ const MultiEmailInput = ({
         checkEmailStatus(email);
       }
     });
-  }, [emails]); // Run when emails change
+  }, [emails, enableAutocomplete, checkEmailStatus]); // Run when emails change
 
   return (
     <div className={`w-full relative ${className}`}>

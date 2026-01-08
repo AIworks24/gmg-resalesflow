@@ -315,6 +315,19 @@ export default async function handler(req, res) {
       console.log(`Download link ${index + 1}:`, link.filename, 'Type:', link.type);
     });
     
+    // Parse buyer emails from comma-separated string or single email
+    const parseBuyerEmails = (buyerEmail) => {
+      if (!buyerEmail) return [];
+      // Check if it's already a comma-separated string
+      if (buyerEmail.includes(',')) {
+        return buyerEmail.split(',').map(email => email.trim()).filter(email => email);
+      }
+      return [buyerEmail.trim()].filter(email => email);
+    };
+
+    const buyerEmails = parseBuyerEmails(application.buyer_email);
+    
+    // Send email to submitter with buyer emails as CC
     try {
       await sendApprovalEmail({
         to: application.submitter_email,
@@ -324,8 +337,14 @@ export default async function handler(req, res) {
         pdfUrl: publicUrl,
         applicationId: applicationId,
         downloadLinks: downloadLinks,
-        comments: application.comments || null
+        comments: application.comments || null,
+        cc: buyerEmails // Include buyer emails as CC recipients
       });
+      if (buyerEmails.length > 0) {
+        console.log(`Email sent successfully to submitter: ${application.submitter_email} (CC: ${buyerEmails.join(', ')})`);
+      } else {
+        console.log('Email sent successfully to submitter:', application.submitter_email);
+      }
     } catch (emailError) {
       console.error('Email sending failed:', emailError);
       // Don't throw here - we still want to mark as success if notification was created

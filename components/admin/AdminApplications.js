@@ -51,6 +51,7 @@ const AdminApplications = ({ userRole }) => {
   // Initialize state from URL params
   const [selectedStatus, setSelectedStatus] = useState(urlStatus);
   const [selectedApplicationType, setSelectedApplicationType] = useState('all');
+  const [selectedPackageType, setSelectedPackageType] = useState('all'); // 'all', 'standard', 'rush'
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedApplication, setSelectedApplication] = useState(null);
   const [sendingEmail, setSendingEmail] = useState(false);
@@ -101,8 +102,9 @@ const AdminApplications = ({ userRole }) => {
     }
   }, [router.query.status, router.isReady]);
 
-  // Build dynamic API URL with sort parameters
-  const apiUrl = `/api/admin/applications?sortBy=${sortBy}&sortOrder=${sortOrder}`;
+  // Build dynamic API URL with sort and status parameters
+  // Include status in API URL so server-side filtering happens
+  const apiUrl = `/api/admin/applications?status=${selectedStatus}&sortBy=${sortBy}&sortOrder=${sortOrder}`;
 
   // SWR fetcher function
   const fetcher = async (url) => {
@@ -116,7 +118,7 @@ const AdminApplications = ({ userRole }) => {
     return res.json();
   };
 
-  // Fetch applications using SWR (will auto-refresh when URL changes)
+  // Fetch applications using SWR (will auto-refresh when URL or status changes)
   const { data: swrData, error: swrError, isLoading, mutate } = useSWR(
     apiUrl,
     fetcher,
@@ -402,6 +404,194 @@ const AdminApplications = ({ userRole }) => {
     return hoursUntilDeadline < 48;
   };
 
+  const getMultiCommunityWorkflowStep = (application) => {
+    const propertyGroups = application.application_property_groups || [];
+    
+    if (propertyGroups.length === 0) {
+      return { step: 1, text: 'Forms Required', color: 'bg-yellow-100 text-yellow-800' };
+    }
+
+    // Check if this is a settlement application
+    const isSettlementApp = application.submitter_type === 'settlement' || 
+                            application.application_type?.startsWith('settlement');
+
+    // Track progress for each property group
+    let totalProperties = propertyGroups.length;
+    let completedProperties = 0;
+    let formsInProgress = 0;
+    let pdfsGenerated = 0;
+    let emailsSent = 0;
+
+    propertyGroups.forEach((group, index) => {
+      let formsCompleted = false;
+      
+      if (isSettlementApp) {
+        // Settlement application: only needs settlement form
+        const settlementForm = application.property_owner_forms?.find(
+          form => form.form_type === 'settlement_form' && form.property_group_id === group.id
+        );
+        const settlementFormStatus = settlementForm?.status || 'not_started';
+        formsCompleted = settlementFormStatus === 'completed';
+        
+        // Check if form is in progress
+        if (settlementFormStatus === 'in_progress') {
+          formsInProgress++;
+        }
+      } else {
+        // Standard application: needs both inspection and resale forms
+        // Use property-group-specific inspection status only (no fallback to application-level)
+        const inspectionStatus = group.inspection_status ?? 'not_started';
+        const resaleStatus = group.status === 'completed';
+        formsCompleted = inspectionStatus === 'completed' && resaleStatus;
+        
+        // Check if forms are in progress
+        if (group.status === 'in_progress' || inspectionStatus === 'in_progress') {
+          formsInProgress++;
+        }
+      }
+
+      if (formsCompleted) {
+        // Check PDF generation
+        if (group.pdf_status === 'completed' || group.pdf_url) {
+          pdfsGenerated++;
+          
+          // Check email sending
+          if (group.email_status === 'completed' || group.email_completed_at) {
+            emailsSent++;
+            completedProperties++;
+          }
+        }
+      }
+    });
+
+    // Determine workflow step based on progress
+    if (completedProperties === totalProperties) {
+      return { step: 5, text: 'Completed', color: 'bg-green-100 text-green-800' };
+    }
+    
+    if (emailsSent > 0 && emailsSent < totalProperties) {
+      return { step: 4, text: 'Send Email', color: 'bg-purple-100 text-purple-800' };
+    }
+    
+    if (pdfsGenerated > 0 && pdfsGenerated < totalProperties) {
+      return { step: 3, text: 'Generate PDF', color: 'bg-orange-100 text-orange-800' };
+    }
+    
+    if (formsInProgress > 0 || (formsInProgress === 0 && pdfsGenerated === 0)) {
+      return { step: 2, text: 'Forms In Progress', color: 'bg-blue-100 text-blue-800' };
+    }
+    
+    return { step: 1, text: 'Forms Required', color: 'bg-yellow-100 text-yellow-800' };
+  };
+
+  const getWorkflowStep = (application) => {
+    // Check if this is a lender questionnaire application
+    const isLenderQuestionnaire = application.application_type === 'lender_questionnaire';
+    
+    if (isLenderQuestionnaire) {
+      // Lender questionnaire workflow - 3 steps (Download + Upload + Email)
+      const hasOriginalFile = !!application.lender_questionnaire_file_path;
+      const hasCompletedFile = !!application.lender_questionnaire_completed_file_path;
+      const hasNotificationSent = application.notifications?.some(n => n.notification_type === 'application_approved');
+      const hasEmailCompletedAt = application.email_completed_at;
+      
+      if (!hasOriginalFile) {
+        return { step: 1, text: 'Awaiting Upload', color: 'bg-yellow-100 text-yellow-800' };
+      }
+      
+      if (!hasCompletedFile) {
+        return { step: 2, text: 'Upload Completed Form', color: 'bg-orange-100 text-orange-800' };
+      }
+      
+      if (!hasNotificationSent && !hasEmailCompletedAt) {
+        return { step: 3, text: 'Send Email', color: 'bg-purple-100 text-purple-800' };
+      }
+      
+      return { step: 4, text: 'Completed', color: 'bg-green-100 text-green-800' };
+    }
+    
+    // Check if this is a multi-community application FIRST (before settlement check)
+    // This ensures settlement multi-community apps use the multi-community workflow
+    const isMultiCommunity = application.hoa_properties?.is_multi_community && 
+                            application.application_property_groups && 
+                            application.application_property_groups.length > 1;
+
+    if (isMultiCommunity) {
+      return getMultiCommunityWorkflowStep(application);
+    }
+    
+    // Check if this is a settlement application (single property only at this point)
+    const isSettlementApp = application.submitter_type === 'settlement' || 
+                            application.application_type?.startsWith('settlement');
+
+    if (isSettlementApp) {
+      // Settlement workflow - 3 tasks (Form + PDF + Email)
+      // Check both form status AND completion timestamps (tasks can be completed via /api/complete-task)
+      const settlementForm = application.property_owner_forms?.find(form => form.form_type === 'settlement_form');
+      const settlementFormStatus = settlementForm?.status || 'not_started';
+      const settlementFormCompleted = !!application.settlement_form_completed_at || settlementFormStatus === 'completed';
+      const hasPDF = !!application.pdf_url || !!application.pdf_completed_at;
+      const hasEmailSent = application.notifications?.some(n => n.notification_type === 'application_approved') || !!application.email_completed_at;
+
+      // Step 1: Form Required - if form not completed
+      if (!settlementFormCompleted && (settlementFormStatus === 'not_started' || settlementFormStatus === 'not_created')) {
+        return { step: 1, text: 'Form Required', color: 'bg-yellow-100 text-yellow-800' };
+      }
+      
+      // Step 2: Generate PDF - if form completed but no PDF
+      if (settlementFormCompleted && !hasPDF) {
+        return { step: 2, text: 'Generate PDF', color: 'bg-orange-100 text-orange-800' };
+      }
+      
+      // Step 3: Send Email - if PDF generated but email not sent
+      if (hasPDF && !hasEmailSent) {
+        return { step: 3, text: 'Send Email', color: 'bg-purple-100 text-purple-800' };
+      }
+      
+      // Step 4: Completed - all tasks done
+      if (settlementFormCompleted && hasPDF && hasEmailSent) {
+        return { step: 4, text: 'Completed', color: 'bg-green-100 text-green-800' };
+      }
+      
+      // Fallback: if form is in progress but not completed
+      if (settlementFormStatus === 'in_progress') {
+        return { step: 1, text: 'Form In Progress', color: 'bg-blue-100 text-blue-800' };
+      }
+      
+      // Default fallback
+      return { step: 1, text: 'Form Required', color: 'bg-yellow-100 text-yellow-800' };
+    }
+
+    // Standard single property workflow
+    const inspectionForm = application.property_owner_forms?.find(form => form.form_type === 'inspection_form');
+    const resaleForm = application.property_owner_forms?.find(form => form.form_type === 'resale_certificate');
+    const inspectionStatus = inspectionForm?.status || 'not_started';
+    const resaleStatus = resaleForm?.status || 'not_started';
+    const hasPDF = application.pdf_url;
+    const hasNotificationSent = application.notifications?.some(n => n.notification_type === 'application_approved');
+    const hasEmailCompletedAt = !!application.email_completed_at;
+    const hasEmailSent = hasNotificationSent || hasEmailCompletedAt;
+
+    if ((inspectionStatus === 'not_created' || inspectionStatus === 'not_started') && 
+        (resaleStatus === 'not_created' || resaleStatus === 'not_started')) {
+      return { step: 1, text: 'Forms Required', color: 'bg-yellow-100 text-yellow-800' };
+    }
+    
+    if (inspectionStatus !== 'completed' || resaleStatus !== 'completed') {
+      return { step: 2, text: 'Forms In Progress', color: 'bg-blue-100 text-blue-800' };
+    }
+    
+    if (!hasPDF) {
+      return { step: 3, text: 'Generate PDF', color: 'bg-orange-100 text-orange-800' };
+    }
+    
+    if (!hasEmailSent) {
+      return { step: 4, text: 'Send Email', color: 'bg-purple-100 text-purple-800' };
+    }
+    
+    return { step: 5, text: 'Completed', color: 'bg-green-100 text-green-800' };
+  };
+
   // Get current user email for assignment filter
   const [userEmail, setUserEmail] = useState(null);
 
@@ -424,13 +614,13 @@ const AdminApplications = ({ userRole }) => {
     };
     getCurrentUserEmail();
 
-    // Load staff members for assignment dropdown
+    // Load staff members for assignment dropdown (includes admin, staff, and accounting)
     const loadStaffMembers = async () => {
       try {
         const { data, error } = await supabase
           .from('profiles')
           .select('email, first_name, last_name, role')
-          .in('role', ['admin', 'staff'])
+          .in('role', ['admin', 'staff', 'accounting'])
           .eq('active', true)
           .order('first_name');
 
@@ -472,7 +662,7 @@ const AdminApplications = ({ userRole }) => {
   // Reset to page 1 when filters change
   useEffect(() => {
     setCurrentPage(1);
-  }, [dateFilter, customDateRange, assignedToMe, selectedStatus, selectedApplicationType, searchTerm]);
+  }, [dateFilter, customDateRange, assignedToMe, selectedStatus, selectedApplicationType, selectedPackageType, searchTerm]);
 
   // Load SimplePDF script
   useEffect(() => {
@@ -628,15 +818,8 @@ const AdminApplications = ({ userRole }) => {
 
     let filtered = [...swrData.data];
 
-    // Apply role-based filtering (backup to server-side filtering)
-    if (userRole === 'accounting') {
-      // Accounting users can only see settlement applications
-      filtered = filtered.filter(app => 
-        app.submitter_type === 'settlement' || 
-        app.application_type?.startsWith('settlement')
-      );
-    }
-    // Admin and staff users can see all applications (no additional filtering)
+    // All admin, staff, and accounting users can see all applications
+    // (No role-based filtering - accounting users now have full visibility)
 
     // Apply date filter
     const dateRange = getDateRange();
@@ -648,35 +831,119 @@ const AdminApplications = ({ userRole }) => {
     }
 
     // Apply status filter
-    if (selectedStatus !== 'all' && selectedStatus !== 'urgent') {
-      if (selectedStatus === 'ongoing') {
-        filtered = filtered.filter(app =>
-          ['under_review', 'compliance_pending', 'compliance_completed', 'documents_generated', 'awaiting_property_owner_response'].includes(app.status)
-        );
-      } else if (selectedStatus === 'pending') {
-        // Pending = applications without approval notifications or email completion
+    if (selectedStatus !== 'all') {
+      if (selectedStatus === 'payment_confirmed') {
+        // Not Started = step 1
         filtered = filtered.filter(app => {
-          const hasNotificationSent = app.notifications?.some(n => n.notification_type === 'application_approved');
+          const workflowStep = getWorkflowStep(app);
+          return workflowStep.step === 1;
+        });
+      } else if (selectedStatus === 'ongoing') {
+        // Ongoing = in progress but not completed
+        // Different application types have different step counts, so we check the text to exclude completed
+        filtered = filtered.filter(app => {
+          const workflowStep = getWorkflowStep(app);
+          // Exclude completed applications by checking the text
+          if (workflowStep.text === 'Completed') {
+            return false;
+          }
+          // Include steps 2, 3, or 4 that are not completed
+          return workflowStep.step === 2 || workflowStep.step === 3 || workflowStep.step === 4;
+        });
+      } else if (selectedStatus === 'approved') {
+        // Completed = check by text since different app types have different step counts
+        // Settlement apps: step 4 = Completed, Standard apps: step 5 = Completed, Lender: step 4 = Completed
+        filtered = filtered.filter(app => {
+          const workflowStep = getWorkflowStep(app);
+          return workflowStep.text === 'Completed';
+        });
+      } else if (selectedStatus === 'pending') {
+        // Pending = all non-completed applications (same logic as dashboard: total - completed)
+        filtered = filtered.filter(app => {
+          const hasApprovalEmail = app.notifications?.some(n => n.notification_type === 'application_approved');
           const hasEmailCompletedAt = !!app.email_completed_at;
-          return !hasNotificationSent && !hasEmailCompletedAt;
+          const isCompletedStatus = app.status === 'completed';
+          const isCompleted = hasApprovalEmail || hasEmailCompletedAt || isCompletedStatus;
+          return !isCompleted;
+        });
+      } else if (selectedStatus === 'urgent') {
+        // Urgent = applications that are overdue or within 24 hours of deadline (same logic as dashboard)
+        const now = new Date();
+        filtered = filtered.filter(app => {
+          // Skip completed applications
+          const hasApprovalEmail = app.notifications?.some(n => n.notification_type === 'application_approved');
+          const hasEmailCompletedAt = !!app.email_completed_at;
+          const isCompletedStatus = app.status === 'completed';
+          if (hasApprovalEmail || hasEmailCompletedAt || isCompletedStatus) {
+            return false;
+          }
+
+          // Calculate deadline (7 days from submission, same as dashboard)
+          const submittedDate = new Date(app.created_at);
+          const deadline = new Date(submittedDate);
+          deadline.setDate(deadline.getDate() + 7);
+
+          const hoursUntilDeadline = (deadline - now) / (1000 * 60 * 60);
+
+          // Urgent if overdue or within 24 hours of deadline
+          return hoursUntilDeadline < 24;
         });
       } else if (selectedStatus === 'completed') {
-        // Completed = applications with approval notifications or email completion
+        // Completed = same logic as dashboard (check notification, email_completed_at, or status)
         filtered = filtered.filter(app => {
-          const hasNotificationSent = app.notifications?.some(n => n.notification_type === 'application_approved');
+          const hasApprovalEmail = app.notifications?.some(n => n.notification_type === 'application_approved');
           const hasEmailCompletedAt = !!app.email_completed_at;
-          return hasNotificationSent || hasEmailCompletedAt;
+          const isCompletedStatus = app.status === 'completed';
+          return hasApprovalEmail || hasEmailCompletedAt || isCompletedStatus;
         });
       } else {
         filtered = filtered.filter(app => app.status === selectedStatus);
       }
-    } else if (selectedStatus === 'urgent') {
-      filtered = filtered.filter(app => isApplicationUrgent(app));
     }
 
-    // Apply application type filter
+    // Apply application type filter (without package type)
     if (selectedApplicationType !== 'all') {
-      filtered = filtered.filter(app => app.application_type === selectedApplicationType);
+      filtered = filtered.filter(app => {
+        const appType = app.application_type || 'single_property';
+        const isMultiCommunity = app.hoa_properties?.is_multi_community;
+        
+        // Handle Builder/Developer filter (filter by submitter_type)
+        if (selectedApplicationType === 'builder') {
+          return app.submitter_type === 'builder';
+        }
+        
+        // Handle MC Settlement filters
+        if (selectedApplicationType === 'mc_settlement_va') {
+          return appType === 'settlement_va' && isMultiCommunity;
+        }
+        if (selectedApplicationType === 'mc_settlement_nc') {
+          return appType === 'settlement_nc' && isMultiCommunity;
+        }
+        
+        // Handle regular application types
+        if (appType === selectedApplicationType) {
+          // If it's a settlement type on multi-community, skip it (handled by MC Settlement filters)
+          if ((appType === 'settlement_va' || appType === 'settlement_nc') && isMultiCommunity) {
+            return false;
+          }
+          return true;
+        }
+        
+        return false;
+      });
+    }
+
+    // Apply package type filter separately
+    if (selectedPackageType !== 'all') {
+      filtered = filtered.filter(app => {
+        const isRush = app.package_type === 'rush';
+        if (selectedPackageType === 'rush') {
+          return isRush;
+        } else if (selectedPackageType === 'standard') {
+          return !isRush;
+        }
+        return true;
+      });
     }
 
     // Apply search filter
@@ -753,7 +1020,7 @@ const AdminApplications = ({ userRole }) => {
     const paginated = filtered.slice(startIndex, startIndex + itemsPerPage);
 
     return { applications: paginated, totalCount: count };
-  }, [swrData, dateFilter, customDateRange, selectedStatus, selectedApplicationType, searchTerm, assignedToMe, userEmail, currentPage, itemsPerPage, userRole]);
+  }, [swrData, dateFilter, customDateRange, selectedStatus, selectedApplicationType, selectedPackageType, searchTerm, assignedToMe, userEmail, currentPage, itemsPerPage, userRole]);
 
   // Check if application was created before auto-assignment feature was implemented
   // Auto-assignment was implemented on 2025-01-15
@@ -901,195 +1168,6 @@ const AdminApplications = ({ userRole }) => {
     } catch (error) {
       showSnackbar('Failed to save comments', 'error');
     }
-  };
-
-
-  const getWorkflowStep = (application) => {
-    // Check if this is a lender questionnaire application
-    const isLenderQuestionnaire = application.application_type === 'lender_questionnaire';
-    
-    if (isLenderQuestionnaire) {
-      // Lender questionnaire workflow - 3 steps (Download + Upload + Email)
-      const hasOriginalFile = !!application.lender_questionnaire_file_path;
-      const hasCompletedFile = !!application.lender_questionnaire_completed_file_path;
-      const hasNotificationSent = application.notifications?.some(n => n.notification_type === 'application_approved');
-      const hasEmailCompletedAt = application.email_completed_at;
-      
-      if (!hasOriginalFile) {
-        return { step: 1, text: 'Awaiting Upload', color: 'bg-yellow-100 text-yellow-800' };
-      }
-      
-      if (!hasCompletedFile) {
-        return { step: 2, text: 'Upload Completed Form', color: 'bg-orange-100 text-orange-800' };
-      }
-      
-      if (!hasNotificationSent && !hasEmailCompletedAt) {
-        return { step: 3, text: 'Send Email', color: 'bg-purple-100 text-purple-800' };
-      }
-      
-      return { step: 4, text: 'Completed', color: 'bg-green-100 text-green-800' };
-    }
-    
-    // Check if this is a multi-community application FIRST (before settlement check)
-    // This ensures settlement multi-community apps use the multi-community workflow
-    const isMultiCommunity = application.hoa_properties?.is_multi_community && 
-                            application.application_property_groups && 
-                            application.application_property_groups.length > 1;
-
-    if (isMultiCommunity) {
-      return getMultiCommunityWorkflowStep(application);
-    }
-    
-    // Check if this is a settlement application (single property only at this point)
-    const isSettlementApp = application.submitter_type === 'settlement' || 
-                            application.application_type?.startsWith('settlement');
-
-    if (isSettlementApp) {
-      // Settlement workflow - 3 tasks (Form + PDF + Email)
-      // Check both form status AND completion timestamps (tasks can be completed via /api/complete-task)
-      const settlementForm = application.property_owner_forms?.find(form => form.form_type === 'settlement_form');
-      const settlementFormStatus = settlementForm?.status || 'not_started';
-      const settlementFormCompleted = !!application.settlement_form_completed_at || settlementFormStatus === 'completed';
-      const hasPDF = !!application.pdf_url || !!application.pdf_completed_at;
-      const hasEmailSent = application.notifications?.some(n => n.notification_type === 'application_approved') || !!application.email_completed_at;
-
-      // Step 1: Form Required - if form not completed
-      if (!settlementFormCompleted && (settlementFormStatus === 'not_started' || settlementFormStatus === 'not_created')) {
-        return { step: 1, text: 'Form Required', color: 'bg-yellow-100 text-yellow-800' };
-      }
-      
-      // Step 2: Generate PDF - if form completed but no PDF
-      if (settlementFormCompleted && !hasPDF) {
-        return { step: 2, text: 'Generate PDF', color: 'bg-orange-100 text-orange-800' };
-      }
-      
-      // Step 3: Send Email - if PDF generated but email not sent
-      if (hasPDF && !hasEmailSent) {
-        return { step: 3, text: 'Send Email', color: 'bg-purple-100 text-purple-800' };
-      }
-      
-      // Step 4: Completed - all tasks done
-      if (settlementFormCompleted && hasPDF && hasEmailSent) {
-        return { step: 4, text: 'Completed', color: 'bg-green-100 text-green-800' };
-      }
-      
-      // Fallback: if form is in progress but not completed
-      if (settlementFormStatus === 'in_progress') {
-        return { step: 1, text: 'Form In Progress', color: 'bg-blue-100 text-blue-800' };
-      }
-      
-      // Default fallback
-      return { step: 1, text: 'Form Required', color: 'bg-yellow-100 text-yellow-800' };
-    }
-
-    // Standard single property workflow
-    const inspectionForm = application.property_owner_forms?.find(form => form.form_type === 'inspection_form');
-    const resaleForm = application.property_owner_forms?.find(form => form.form_type === 'resale_certificate');
-    const inspectionStatus = inspectionForm?.status || 'not_started';
-    const resaleStatus = resaleForm?.status || 'not_started';
-    const hasPDF = application.pdf_url;
-    const hasNotificationSent = application.notifications?.some(n => n.notification_type === 'application_approved');
-    const hasEmailCompletedAt = !!application.email_completed_at;
-    const hasEmailSent = hasNotificationSent || hasEmailCompletedAt;
-
-    if ((inspectionStatus === 'not_created' || inspectionStatus === 'not_started') && 
-        (resaleStatus === 'not_created' || resaleStatus === 'not_started')) {
-      return { step: 1, text: 'Forms Required', color: 'bg-yellow-100 text-yellow-800' };
-    }
-    
-    if (inspectionStatus !== 'completed' || resaleStatus !== 'completed') {
-      return { step: 2, text: 'Forms In Progress', color: 'bg-blue-100 text-blue-800' };
-    }
-    
-    if (!hasPDF) {
-      return { step: 3, text: 'Generate PDF', color: 'bg-orange-100 text-orange-800' };
-    }
-    
-    if (!hasEmailSent) {
-      return { step: 4, text: 'Send Email', color: 'bg-purple-100 text-purple-800' };
-    }
-    
-    return { step: 5, text: 'Completed', color: 'bg-green-100 text-green-800' };
-  };
-
-  const getMultiCommunityWorkflowStep = (application) => {
-    const propertyGroups = application.application_property_groups || [];
-    
-    if (propertyGroups.length === 0) {
-      return { step: 1, text: 'Forms Required', color: 'bg-yellow-100 text-yellow-800' };
-    }
-
-    // Check if this is a settlement application
-    const isSettlementApp = application.submitter_type === 'settlement' || 
-                            application.application_type?.startsWith('settlement');
-
-    // Track progress for each property group
-    let totalProperties = propertyGroups.length;
-    let completedProperties = 0;
-    let formsInProgress = 0;
-    let pdfsGenerated = 0;
-    let emailsSent = 0;
-
-    propertyGroups.forEach((group, index) => {
-      let formsCompleted = false;
-      
-      if (isSettlementApp) {
-        // Settlement application: only needs settlement form
-        const settlementForm = application.property_owner_forms?.find(
-          form => form.form_type === 'settlement_form' && form.property_group_id === group.id
-        );
-        const settlementFormStatus = settlementForm?.status || 'not_started';
-        formsCompleted = settlementFormStatus === 'completed';
-        
-        // Check if form is in progress
-        if (settlementFormStatus === 'in_progress') {
-          formsInProgress++;
-        }
-      } else {
-        // Standard application: needs both inspection and resale forms
-        // Use property-group-specific inspection status only (no fallback to application-level)
-        const inspectionStatus = group.inspection_status ?? 'not_started';
-        const resaleStatus = group.status === 'completed';
-        formsCompleted = inspectionStatus === 'completed' && resaleStatus;
-        
-        // Check if forms are in progress
-        if (group.status === 'in_progress' || inspectionStatus === 'in_progress') {
-          formsInProgress++;
-        }
-      }
-
-      if (formsCompleted) {
-        // Check PDF generation
-        if (group.pdf_status === 'completed' || group.pdf_url) {
-          pdfsGenerated++;
-          
-          // Check email sending
-          if (group.email_status === 'completed' || group.email_completed_at) {
-            emailsSent++;
-            completedProperties++;
-          }
-        }
-      }
-    });
-
-    // Determine workflow step based on progress
-    if (completedProperties === totalProperties) {
-      return { step: 5, text: 'Completed', color: 'bg-green-100 text-green-800' };
-    }
-    
-    if (emailsSent > 0 && emailsSent < totalProperties) {
-      return { step: 4, text: 'Send Email', color: 'bg-purple-100 text-purple-800' };
-    }
-    
-    if (pdfsGenerated > 0 && pdfsGenerated < totalProperties) {
-      return { step: 3, text: 'Generate PDF', color: 'bg-orange-100 text-orange-800' };
-    }
-    
-    if (formsInProgress > 0 || (formsInProgress === 0 && pdfsGenerated === 0)) {
-      return { step: 2, text: 'Forms In Progress', color: 'bg-blue-100 text-blue-800' };
-    }
-    
-    return { step: 1, text: 'Forms Required', color: 'bg-yellow-100 text-yellow-800' };
   };
 
   // Helper functions for modal
@@ -1361,7 +1439,8 @@ const AdminApplications = ({ userRole }) => {
           )
         `)
         .eq('id', application.id)
-        .single();
+        .is('deleted_at', null) // Only get non-deleted applications
+        .maybeSingle(); // Use maybeSingle() instead of single() to handle 0 rows gracefully
 
       if (appError) {
         console.error('❌ Error loading application:', appError);
@@ -1370,7 +1449,7 @@ const AdminApplications = ({ userRole }) => {
 
       if (!appData) {
         console.error('❌ No application data found for ID:', application.id);
-        throw new Error('Application not found');
+        throw new Error('Application not found or has been deleted');
       }
 
       // Process the data to match the expected format
@@ -1459,7 +1538,8 @@ const AdminApplications = ({ userRole }) => {
               notifications(id, notification_type, status, sent_at)
             `)
             .eq('id', updatedId)
-            .single();
+            .is('deleted_at', null) // Only get non-deleted applications
+            .maybeSingle();
           if (updatedApp) setSelectedApplication(updatedApp);
         }
       } catch (err) {
@@ -1486,9 +1566,14 @@ const AdminApplications = ({ userRole }) => {
           hoa_properties(name, property_owner_email, property_owner_name, is_multi_community)
         `)
         .eq('id', applicationId)
-        .single();
+        .is('deleted_at', null) // Only get non-deleted applications
+        .maybeSingle();
 
       if (appError) throw appError;
+      
+      if (!appData) {
+        throw new Error('Application not found or has been deleted');
+      }
 
       // If a property group is provided, override HOA context for the form UI
       const effectiveHoaName = group?.hoa_properties?.name || group?.property_name || appData.hoa_properties?.name;
@@ -1619,6 +1704,7 @@ const AdminApplications = ({ userRole }) => {
           )
         `)
         .eq('id', applicationId)
+        .is('deleted_at', null) // Only get non-deleted applications
         .maybeSingle();
       
       if (queryError) {
@@ -2786,7 +2872,6 @@ const AdminApplications = ({ userRole }) => {
                 className='w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all'
               >
                 <option value='all'>All Steps</option>
-                <option value='urgent'>Urgent Applications</option>
                 <option value='payment_confirmed'>Not Started</option>
                 <option value='ongoing'>Ongoing</option>
                 <option value='approved'>Completed</option>
@@ -2804,9 +2889,45 @@ const AdminApplications = ({ userRole }) => {
                 className='w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all'
               >
                 <option value='all'>All Types</option>
+                <optgroup label='Builder/Developer'>
+                  <option value='builder'>Builder/Developer</option>
+                </optgroup>
+                <optgroup label='Single Property'>
+                  <option value='single_property'>Single Property</option>
+                </optgroup>
+                <optgroup label='Settlement'>
+                  <option value='settlement_va'>Settlement - VA</option>
+                  <option value='settlement_nc'>Settlement - NC</option>
+                </optgroup>
+                <optgroup label='Lender Questionnaire'>
+                  <option value='lender_questionnaire'>Lender Questionnaire</option>
+                </optgroup>
+                <optgroup label='Multi Community'>
+                  <option value='multi_community'>Multi Community</option>
+                </optgroup>
+                <optgroup label='MC Settlement'>
+                  <option value='mc_settlement_va'>MC Settlement - VA</option>
+                  <option value='mc_settlement_nc'>MC Settlement - NC</option>
+                </optgroup>
+                <optgroup label='Public Offering'>
+                  <option value='public_offering'>Public Offering</option>
+                </optgroup>
+              </select>
+            </div>
+
+            {/* Package Type Filter */}
+            <div className='space-y-1.5'>
+              <label className='text-xs font-semibold text-gray-500 uppercase tracking-wider'>
+                Package
+              </label>
+              <select
+                value={selectedPackageType}
+                onChange={(e) => setSelectedPackageType(e.target.value)}
+                className='w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all'
+              >
+                <option value='all'>All Packages</option>
                 <option value='standard'>Standard</option>
-                <option value='settlement_agent_va'>Settlement - Virginia</option>
-                <option value='settlement_agent_nc'>Settlement - North Carolina</option>
+                <option value='rush'>Rush</option>
               </select>
             </div>
 
@@ -3910,20 +4031,29 @@ const AdminApplications = ({ userRole }) => {
                                                   </div>
                                                </div>
                                                 {/* Task 3 */}
-                                                <div className={`flex items-center justify-between p-3 rounded-lg border ${getTaskStatusColor(taskStatuses.email)}`}>
-                                                  <div className="flex items-center gap-3">
-                                                    <span className="flex items-center justify-center w-6 h-6 rounded-full bg-white border border-gray-300 text-xs font-bold">3</span>
-                                                    <span className="text-sm font-medium">Send Email</span>
-                                                  </div>
-                                                   <div className="flex gap-2">
-                                                     <button onClick={() => handleSendApprovalEmail(selectedApplication.id, group)} disabled={!emailCanBeSent || sendingEmail} className="px-3 py-1 text-xs font-medium bg-white border border-gray-300 rounded hover:bg-gray-50 text-gray-700 disabled:opacity-50">
+                                                <div className={`p-3 rounded-lg border ${getTaskStatusColor(taskStatuses.email)}`}>
+                                                  <div className="flex items-center justify-between">
+                                                    <div className="flex items-center gap-3 flex-1">
+                                                      <span className="flex items-center justify-center w-6 h-6 rounded-full bg-white border border-gray-300 text-xs font-bold">3</span>
+                                                      <div className="flex-1 min-w-0">
+                                                        <span className="text-sm font-medium">Send Email</span>
+                                                        {group.email_completed_at && (
+                                                          <div className="mt-2 text-xs text-green-600 bg-green-50 px-2 py-1 rounded inline-block">
+                                                            Completed: {formatDateTimeFull(group.email_completed_at)}
+                                                          </div>
+                                                        )}
+                                                      </div>
+                                                    </div>
+                                                    <div className="flex gap-2">
+                                                      <button onClick={() => handleSendApprovalEmail(selectedApplication.id, group)} disabled={!emailCanBeSent || sendingEmail} className="px-3 py-1 text-xs font-medium bg-white border border-gray-300 rounded hover:bg-gray-50 text-gray-700 disabled:opacity-50">
                                                         {sendingEmail ? (
                                                           <div className="flex items-center gap-1.5">
                                                             <RefreshCw className="w-3 h-3 animate-spin" />
                                                             <span>Sending...</span>
                                                           </div>
                                                         ) : 'Send'}
-                                                     </button>
+                                                      </button>
+                                                    </div>
                                                   </div>
                                                </div>
                                             </div>
@@ -4134,7 +4264,7 @@ const AdminApplications = ({ userRole }) => {
                                 </div>
                              </TaskCard>
                              
-                             <TaskCard step="3" status={taskStatuses.email} title="Send Email" description="Send details to settlement agent" completedAt={selectedApplication.notifications?.find(n => n.notification_type === 'application_approved')?.sent_at}>
+                             <TaskCard step="3" status={taskStatuses.email} title="Send Email" description="Send details to settlement agent" completedAt={selectedApplication.email_completed_at}>
                                 <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2">
                                    <button onClick={() => handleSendApprovalEmail(selectedApplication.id)} disabled={!emailCanBeSent || sendingEmail} className="w-full sm:w-auto px-3 sm:px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 active:bg-blue-800 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed shadow-sm">
                                       {sendingEmail ? (

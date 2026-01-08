@@ -61,14 +61,11 @@ export default async function handler(req, res) {
         notifications(notification_type, sent_at)
       `)
       .neq('status', 'draft')
+      .neq('status', 'pending_payment')
       .is('deleted_at', null); // Only count non-deleted applications
 
-    // Apply role-based filtering
-    if (profile.role === 'accounting') {
-      // Accounting users can only see settlement applications
-      query = query.or('submitter_type.eq.settlement,application_type.like.settlement%');
-    }
-    // Admin and staff users can see all applications (no additional filtering)
+    // All admin, staff, and accounting users can see all applications
+    // (No role-based filtering - accounting users now have full visibility)
 
     const { data: applications, error: queryError } = await query;
 

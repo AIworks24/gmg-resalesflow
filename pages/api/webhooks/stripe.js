@@ -1,5 +1,6 @@
 import { getServerStripe, getWebhookSecret } from '../../../lib/stripe';
 import { getTestModeFromRequest } from '../../../lib/stripeMode';
+import { sendInvoiceReceiptEmail, sendPaymentConfirmationEmail } from '../../../lib/emailService';
 
 // Helper function to get raw body for webhook signature verification
 function getRawBody(req) {
@@ -28,27 +29,56 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  // Check if test mode is enabled (from query param or header)
-  const useTestMode = getTestModeFromRequest(req);
-  const stripe = getServerStripe(req);
   const sig = req.headers['stripe-signature'];
-  const endpointSecret = getWebhookSecret(useTestMode);
   
-  console.log(`[Webhook] Processing webhook in ${useTestMode ? 'test' : 'live'} mode`);
-
+  // Get raw body first (needed for signature verification)
+  const rawBody = await getRawBody(req);
+  
+  // Get both secrets for verification
+  const testSecret = getWebhookSecret(true);
+  const liveSecret = getWebhookSecret(false);
+  
+  // Try to verify with test mode secret first (since most events are test mode)
+  // Then try live mode if that fails
   let event;
-
+  let useTestMode = true; // Start with test mode since livemode: false events are common
+  let endpointSecret;
+  
+  // We need a temporary Stripe instance just for webhook verification
+  // We'll create the correct one after we know the event's livemode
+  const tempStripe = getServerStripe(req);
+  
   try {
-    // Get raw body
-    const rawBody = await getRawBody(req);
-    
-    // Verify webhook signature
-    event = stripe.webhooks.constructEvent(rawBody, sig, endpointSecret);
-    console.log('Webhook signature verified successfully:', event.type);
-  } catch (err) {
-    console.error('Webhook signature verification failed:', err.message);
-    return res.status(400).json({ error: 'Webhook signature verification failed' });
+    // Try test mode first
+    endpointSecret = testSecret;
+    event = tempStripe.webhooks.constructEvent(rawBody, sig, endpointSecret);
+    useTestMode = true;
+  } catch (testErr) {
+    // Try live mode
+    try {
+      endpointSecret = liveSecret;
+      event = tempStripe.webhooks.constructEvent(rawBody, sig, endpointSecret);
+      useTestMode = false;
+    } catch (liveErr) {
+      console.error('[Webhook] ✗ Both test and live mode verification failed');
+      console.error('[Webhook] Test mode error:', testErr.message);
+      console.error('[Webhook] Live mode error:', liveErr.message);
+      console.error('[Webhook] Signature header:', sig ? `${sig.substring(0, 50)}...` : 'MISSING');
+      return res.status(400).json({ error: 'Webhook signature verification failed' });
+    }
   }
+  
+  // Now determine the correct mode from the event itself (most reliable)
+  // event.livemode is false for test mode, true for live mode
+  const eventIsLiveMode = event.livemode === true;
+  const correctTestMode = !eventIsLiveMode;
+  
+  // Create the correct Stripe client based on the event's livemode
+  const { getStripeKeys } = require('../../../lib/stripeMode');
+  const keys = getStripeKeys(correctTestMode);
+  const stripe = require('stripe')(keys.secretKey);
+  
+  console.log(`[Webhook] Event livemode: ${event.livemode}, using ${correctTestMode ? 'test' : 'live'} mode Stripe client`);
 
   try {
     const { createClient } = require('@supabase/supabase-js');
@@ -61,7 +91,6 @@ export default async function handler(req, res) {
     switch (event.type) {
       case 'checkout.session.completed':
         const session = event.data.object;
-        console.log('Checkout session completed:', session.id);
         
         // Update application status - keep as pending_payment to allow user to continue the flow
         const { data: updatedApp } = await supabase
@@ -72,35 +101,131 @@ export default async function handler(req, res) {
             payment_status: 'completed'
           })
           .eq('stripe_session_id', session.id)
-          .select()
+          .select('id, application_type')
           .single();
 
-        // Send payment confirmation email using existing email service
+        // Get receipt and send receipt email
         if (updatedApp) {
           try {
-            const { sendPaymentConfirmationEmail } = require('../../../lib/emailService');
+            // Get receipt from payment intent (Stripe automatically generates receipts)
+            let receiptUrl = null;
+            let receiptNumber = null;
+            let paymentMethod = null;
+            let lineItems = [];
             
-            await sendPaymentConfirmationEmail({
-              to: session.customer_email || session.metadata.customerEmail,
-              applicationId: updatedApp.id,
-              customerName: session.metadata.customerName,
-              propertyAddress: session.metadata.propertyAddress,
-              packageType: session.metadata.packageType,
-              totalAmount: (session.amount_total / 100).toFixed(2),
-              stripeChargeId: session.payment_intent,
-            });
+            if (session.payment_intent) {
+              try {
+                const paymentIntent = await stripe.paymentIntents.retrieve(session.payment_intent);
+                // Get the charge to access receipt and payment method
+                if (paymentIntent.latest_charge) {
+                  const charge = await stripe.charges.retrieve(paymentIntent.latest_charge);
+                  receiptUrl = charge.receipt_url;
+                  receiptNumber = charge.receipt_number;
+                  
+                  // Get payment method details
+                  if (charge.payment_method_details?.card) {
+                    const card = charge.payment_method_details.card;
+                    const brand = card.brand?.toUpperCase() || 'CARD';
+                    const last4 = card.last4 || '****';
+                    paymentMethod = `${brand} - ${last4}`;
+                    console.log(`[Webhook] Payment method retrieved: ${paymentMethod}`);
+                  } else {
+                    console.warn('[Webhook] No payment method details found in charge');
+                  }
+                }
+              } catch (receiptError) {
+                console.warn('[Webhook] Could not retrieve receipt URL:', receiptError.message);
+              }
+            }
 
-            console.log('Payment confirmation email sent successfully');
-          } catch (emailError) {
-            console.error('Failed to send payment confirmation email:', emailError);
-            // Don't fail the webhook if email fails
+            // Get line items from checkout session
+            try {
+              const sessionLineItems = await stripe.checkout.sessions.listLineItems(session.id, {
+                expand: ['data.price.product']
+              });
+              
+              if (sessionLineItems?.data && sessionLineItems.data.length > 0) {
+                lineItems = sessionLineItems.data.map(item => {
+                  // Get product name - prioritize product name over description
+                  let itemName = null;
+                  
+                  // First try to get product name (if product is expanded)
+                  if (item.price?.product) {
+                    const product = typeof item.price.product === 'string' 
+                      ? null 
+                      : item.price.product;
+                    itemName = product?.name || null;
+                  }
+                  
+                  // Fallback to description if product name not available
+                  if (!itemName) {
+                    itemName = item.description || null;
+                  }
+                  
+                  // Final fallback
+                  if (!itemName) {
+                    itemName = 'Service';
+                  }
+                  
+                  return {
+                    name: itemName,
+                    amount: (item.amount_total / 100).toFixed(2),
+                    quantity: item.quantity || 1
+                  };
+                });
+                
+                console.log(`[Webhook] Retrieved ${lineItems.length} line items for session ${session.id}`);
+              } else {
+                console.warn(`[Webhook] No line items found for session ${session.id}`);
+              }
+            } catch (lineItemsError) {
+              console.warn('[Webhook] Could not retrieve line items:', lineItemsError.message);
+            }
+
+            // Send receipt email
+            const recipientEmail = session.customer_email || session.metadata.customerEmail;
+            
+            console.log(`[Webhook] Sending receipt email with paymentMethod: ${paymentMethod}, lineItems count: ${lineItems.length}`);
+            
+            await sendInvoiceReceiptEmail({
+              to: recipientEmail,
+              applicationId: updatedApp.id,
+              customerName: session.metadata.customerName || 'Customer',
+              propertyAddress: session.metadata.propertyAddress || '',
+              packageType: session.metadata.packageType || 'standard',
+              totalAmount: (session.amount_total / 100).toFixed(2),
+              invoiceNumber: receiptNumber || `PAY-${updatedApp.id}`, // Use receipt number or generate one
+              invoicePdfUrl: receiptUrl, // Use Stripe receipt URL
+              hostedInvoiceUrl: receiptUrl, // Same URL for hosted view
+              stripeChargeId: session.payment_intent,
+              invoiceDate: new Date().toISOString(),
+              applicationType: updatedApp.application_type || 'single_property', // Pass application type for dynamic content
+              paymentMethod: paymentMethod, // Payment method (e.g., "VISA - 8008")
+              lineItems: lineItems, // Itemized breakdown
+            });
+          } catch (receiptError) {
+            console.error('[Webhook] Failed to get receipt or send receipt email:', receiptError);
+            // Fallback to payment confirmation email
+            try {
+              await sendPaymentConfirmationEmail({
+                to: session.customer_email || session.metadata.customerEmail,
+                applicationId: updatedApp.id,
+                customerName: session.metadata.customerName,
+                propertyAddress: session.metadata.propertyAddress,
+                packageType: session.metadata.packageType,
+                totalAmount: (session.amount_total / 100).toFixed(2),
+                stripeChargeId: session.payment_intent,
+              });
+            } catch (emailError) {
+              console.error('[Webhook] Failed to send payment confirmation email (fallback):', emailError);
+              // Don't fail the webhook if email fails
+            }
           }
         }
         break;
 
       case 'payment_intent.succeeded':
         const paymentIntent = event.data.object;
-        console.log('Payment succeeded:', paymentIntent.id);
         
         // Update application status and correct total amount
         const updateData = {
@@ -124,7 +249,8 @@ export default async function handler(req, res) {
             submitter_name,
             property_address,
             package_type,
-            total_amount
+            total_amount,
+            application_type
           `)
           .single();
 
@@ -132,28 +258,116 @@ export default async function handler(req, res) {
         const applicationId = paymentIntent.metadata.applicationId || updatedApplication?.id;
         const isMultiCommunity = paymentIntent.metadata.isMultiCommunity === 'true';
         
-        // Send payment confirmation email
+        // Get receipt and send receipt email
         if (updatedApplication && updatedApplication.submitter_email) {
           try {
-            const { sendPaymentConfirmationEmail } = require('../../../lib/emailService');
+            // Get receipt from charge (Stripe automatically generates receipts)
+            let receiptUrl = null;
+            let receiptNumber = null;
+            let paymentMethod = null;
+            let lineItems = [];
             
-            await sendPaymentConfirmationEmail({
+            if (paymentIntent.latest_charge) {
+              try {
+                const charge = await stripe.charges.retrieve(paymentIntent.latest_charge);
+                receiptUrl = charge.receipt_url;
+                receiptNumber = charge.receipt_number;
+                
+                // Get payment method details
+                if (charge.payment_method_details?.card) {
+                  const card = charge.payment_method_details.card;
+                  const brand = card.brand?.toUpperCase() || 'CARD';
+                  const last4 = card.last4 || '****';
+                  paymentMethod = `${brand} - ${last4}`;
+                  console.log(`[Webhook] Payment method retrieved: ${paymentMethod}`);
+                } else {
+                  console.warn('[Webhook] No payment method details found in charge');
+                }
+              } catch (receiptError) {
+                console.warn('[Webhook] Could not retrieve receipt URL:', receiptError.message);
+              }
+            }
+
+            // Try to get line items from checkout session if available
+            // PaymentIntent might have been created via CheckoutSession
+            try {
+              // Search for checkout sessions with this payment intent
+              const sessions = await stripe.checkout.sessions.list({
+                payment_intent: paymentIntent.id,
+                limit: 1
+              });
+              
+              if (sessions.data.length > 0) {
+                const sessionLineItems = await stripe.checkout.sessions.listLineItems(sessions.data[0].id, {
+                  expand: ['data.price.product']
+                });
+                
+                if (sessionLineItems?.data && sessionLineItems.data.length > 0) {
+                  lineItems = sessionLineItems.data.map(item => {
+                    // Get product name - prioritize product name over description
+                    let itemName = null;
+                    
+                    // First try to get product name (if product is expanded)
+                    if (item.price?.product) {
+                      const product = typeof item.price.product === 'string' 
+                        ? null 
+                        : item.price.product;
+                      itemName = product?.name || null;
+                    }
+                    
+                    // Fallback to description if product name not available
+                    if (!itemName) {
+                      itemName = item.description || null;
+                    }
+                    
+                    // Final fallback
+                    if (!itemName) {
+                      itemName = 'Service';
+                    }
+                    
+                    return {
+                      name: itemName,
+                      amount: (item.amount_total / 100).toFixed(2),
+                      quantity: item.quantity || 1
+                    };
+                  });
+                  
+                  console.log(`[Webhook] Retrieved ${lineItems.length} line items for payment intent ${paymentIntent.id}`);
+                } else {
+                  console.warn(`[Webhook] No line items found for payment intent ${paymentIntent.id}`);
+                }
+              }
+            } catch (lineItemsError) {
+              console.warn('[Webhook] Could not retrieve line items:', lineItemsError.message);
+              // If we can't get line items, we'll construct a basic one from metadata
+              // This is a fallback for PaymentIntents created directly (not via CheckoutSession)
+            }
+
+            // Send receipt email
+            console.log(`[Webhook] Sending receipt email with paymentMethod: ${paymentMethod}, lineItems count: ${lineItems.length}`);
+            
+            await sendInvoiceReceiptEmail({
               to: updatedApplication.submitter_email,
               applicationId: updatedApplication.id,
               customerName: updatedApplication.submitter_name || paymentIntent.metadata.customerName || 'Customer',
               propertyAddress: updatedApplication.property_address || paymentIntent.metadata.propertyAddress || 'Unknown',
               packageType: updatedApplication.package_type || paymentIntent.metadata.packageType || 'standard',
-              totalAmount: updatedApplication.total_amount || (paymentIntent.amount_total / 100).toFixed(2),
+              totalAmount: (updatedApplication.total_amount || (paymentIntent.amount_total / 100)).toFixed(2),
+              invoiceNumber: receiptNumber || `PAY-${updatedApplication.id}`, // Use receipt number or generate one
+              invoicePdfUrl: receiptUrl, // Use Stripe receipt URL
+              hostedInvoiceUrl: receiptUrl, // Same URL for hosted view
               stripeChargeId: paymentIntent.id,
+              invoiceDate: new Date().toISOString(),
+              applicationType: updatedApplication.application_type || 'single_property', // Pass application type for dynamic content
+              paymentMethod: paymentMethod, // Payment method (e.g., "VISA - 8008")
+              lineItems: lineItems, // Itemized breakdown
             });
-
-            console.log(`[Webhook] Payment confirmation email sent successfully to ${updatedApplication.submitter_email}`);
           } catch (emailError) {
-            console.error('[Webhook] Failed to send payment confirmation email:', emailError);
+            console.error('[Webhook] Failed to send receipt email:', emailError);
             // Don't fail the webhook if email fails
           }
         } else {
-          console.warn(`[Webhook] Cannot send payment confirmation email - missing submitter_email for application ${applicationId}`);
+          console.warn(`[Webhook] Cannot send receipt email - missing submitter_email for application ${applicationId}`);
         }
         
         if (applicationId) {

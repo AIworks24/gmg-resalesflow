@@ -400,11 +400,11 @@ export default async function handler(req, res) {
     } else {
       // Single property: Add base price item
       if (basePriceCents > 0) {
-        // Only use Stripe Price IDs for standard application types (single_property, multi_community)
-        // Special application types (settlement_nc, settlement_va, lender_questionnaire, public_offering)
-        // should always use price_data to ensure correct pricing
+        // Only use Stripe Price IDs for multi_community (single_property now uses price_data for custom naming)
+        // Special application types (settlement_nc, settlement_va, lender_questionnaire, public_offering, single_property)
+        // should always use price_data to ensure correct pricing and custom product names
         // IMPORTANT: Never use Price IDs when forced price is enabled, as Price IDs have fixed amounts
-        const shouldUsePriceIds = (applicationType === 'single_property' || applicationType === 'multi_community') && !hasForcedPrice;
+        const shouldUsePriceIds = (applicationType === 'multi_community') && !hasForcedPrice;
         
         let usePriceId = false;
         
@@ -507,11 +507,16 @@ export default async function handler(req, res) {
             deliveryTime = packageType === 'rush' ? '5 business days' : '10-15 business days';
           }
           
+          // For single property, use "Single Property" instead of formType
+          const productName = applicationType === 'single_property' 
+            ? `Single Property - ${packageType === 'rush' ? 'Rush' : 'Standard'} Processing`
+            : `${messaging.formType} - ${packageType === 'rush' ? 'Rush' : 'Standard'} Processing`;
+          
           lineItems.push({
             price_data: {
               currency: 'usd',
               product_data: {
-                name: `${messaging.formType} - ${packageType === 'rush' ? 'Rush' : 'Standard'} Processing`,
+                name: productName,
                 description: `${messaging.formType} for ${formData.propertyAddress || 'your property'} (${deliveryTime})`,
               },
               unit_amount: basePriceCents, // This already includes rush fee if rush is selected

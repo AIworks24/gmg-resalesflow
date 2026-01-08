@@ -95,15 +95,14 @@ export default async function handler(req, res) {
       .neq('status', 'draft')
       .neq('status', 'pending_payment');
 
-    // Apply role-based filtering
-    if (profile.role === 'accounting') {
-      // Accounting users can only see settlement applications
-      query = query.or('submitter_type.eq.settlement,application_type.like.settlement%');
-    }
-    // Admin and staff users can see all applications (no additional filtering)
+    // All admin, staff, and accounting users can see all applications
+    // (No role-based filtering - accounting users now have full visibility)
 
     // Apply status filter
-    if (status !== 'all') {
+    // Note: 'completed', 'pending', 'urgent', 'ongoing', 'payment_confirmed', and 'approved' 
+    // are computed statuses that use custom logic, so we'll filter after fetching for those cases
+    const computedStatuses = ['completed', 'pending', 'urgent', 'ongoing', 'payment_confirmed', 'approved'];
+    if (status !== 'all' && !computedStatuses.includes(status)) {
       query = query.eq('status', status);
     }
 
@@ -124,11 +123,21 @@ export default async function handler(req, res) {
     const validSortBy = allowedSortFields.includes(sortBy) ? sortBy : 'created_at';
     const isAscending = sortOrder === 'asc';
 
-    // Apply pagination and sorting
-    const startIndex = (pageNum - 1) * limitNum;
-    query = query
-      .range(startIndex, startIndex + limitNum - 1)
-      .order(validSortBy, { ascending: isAscending });
+    // For computed statuses that can be calculated server-side, we need to fetch all applications first
+    // Statuses that require workflow steps (ongoing, payment_confirmed, approved) are handled client-side
+    const serverSideComputedStatuses = ['completed', 'pending', 'urgent'];
+    const needsPostFiltering = serverSideComputedStatuses.includes(status);
+    
+    if (!needsPostFiltering) {
+      // Apply pagination and sorting normally for standard statuses and client-side computed statuses
+      const startIndex = (pageNum - 1) * limitNum;
+      query = query
+        .range(startIndex, startIndex + limitNum - 1)
+        .order(validSortBy, { ascending: isAscending });
+    } else {
+      // For server-side computed statuses, fetch all (no pagination yet) but still apply sorting
+      query = query.order(validSortBy, { ascending: isAscending });
+    }
 
     // Execute query
     const { data: applications, error: queryError, count } = await query;
@@ -138,8 +147,65 @@ export default async function handler(req, res) {
       throw queryError;
     }
 
+    // Apply custom status filters if needed (using same logic as dashboard)
+    let filteredApplications = applications || [];
+    let finalCount = count || 0;
+    
+    if (status === 'completed') {
+      filteredApplications = filteredApplications.filter(app => {
+        // Check both notification and application status (same logic as dashboard-summary.js)
+        const hasApprovalEmail = app.notifications?.some(n => n.notification_type === 'application_approved');
+        const hasEmailCompletedAt = !!app.email_completed_at;
+        const isCompletedStatus = app.status === 'completed';
+        return hasApprovalEmail || hasEmailCompletedAt || isCompletedStatus;
+      });
+    } else if (status === 'pending') {
+      // Pending = all non-completed applications (same logic as dashboard: total - completed)
+      filteredApplications = filteredApplications.filter(app => {
+        const hasApprovalEmail = app.notifications?.some(n => n.notification_type === 'application_approved');
+        const hasEmailCompletedAt = !!app.email_completed_at;
+        const isCompletedStatus = app.status === 'completed';
+        const isCompleted = hasApprovalEmail || hasEmailCompletedAt || isCompletedStatus;
+        return !isCompleted;
+      });
+    } else if (status === 'urgent') {
+      // Urgent = applications that are overdue or within 24 hours of deadline (same logic as dashboard)
+      const now = new Date();
+      filteredApplications = filteredApplications.filter(app => {
+        // Skip completed applications
+        const hasApprovalEmail = app.notifications?.some(n => n.notification_type === 'application_approved');
+        const hasEmailCompletedAt = !!app.email_completed_at;
+        const isCompletedStatus = app.status === 'completed';
+        if (hasApprovalEmail || hasEmailCompletedAt || isCompletedStatus) {
+          return false;
+        }
+
+        // Calculate deadline (7 days from submission, same as dashboard)
+        const submittedDate = new Date(app.created_at);
+        const deadline = new Date(submittedDate);
+        deadline.setDate(deadline.getDate() + 7);
+
+        const hoursUntilDeadline = (deadline - now) / (1000 * 60 * 60);
+
+        // Urgent if overdue or within 24 hours of deadline
+        return hoursUntilDeadline < 24;
+      });
+    }
+    
+    // Recalculate count and apply pagination for custom statuses
+    if (needsPostFiltering) {
+      finalCount = filteredApplications.length;
+      
+      // Apply pagination manually after filtering
+      const startIndex = (pageNum - 1) * limitNum;
+      filteredApplications = filteredApplications.slice(startIndex, startIndex + limitNum);
+    }
+
+    // Use filtered applications for processing
+    const paginatedApplications = filteredApplications;
+
     // Process the data to group forms by application
-    const processedApplications = (applications || []).map((app) => {
+    const processedApplications = paginatedApplications.map((app) => {
       const inspectionForm = app.property_owner_forms?.find(
         (f) => f.form_type === 'inspection_form'
       );
@@ -166,10 +232,10 @@ export default async function handler(req, res) {
     // Prepare response data
     const responseData = {
       data: processedApplications,
-      count: count || 0,
+      count: finalCount,
       page: pageNum,
       limit: limitNum,
-      totalPages: Math.ceil((count || 0) / limitNum)
+      totalPages: Math.ceil(finalCount / limitNum)
     };
 
     // Store in cache with short TTL (2 minutes) for real-time compatibility

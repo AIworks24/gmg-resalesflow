@@ -225,12 +225,8 @@ const AdminDashboard = ({ userRole }) => {
         .select('*', { count: 'exact', head: true })
         .is('deleted_at', null); // Only count non-deleted applications
 
-      // Apply role-based filtering
-      if (userRole === 'accounting') {
-        // Accounting users can only see settlement applications
-        countQuery = countQuery.or('submitter_type.eq.settlement,application_type.like.settlement%');
-      }
-      // Admin and staff users can see all applications (no additional filtering)
+      // All admin, staff, and accounting users can see all applications
+      // (No role-based filtering - accounting users now have full visibility)
 
       // Apply filters to count query
       const dateRange = getDateRange();
@@ -266,12 +262,8 @@ const AdminDashboard = ({ userRole }) => {
         )
         .is('deleted_at', null); // Only get non-deleted applications
 
-      // Apply role-based filtering
-      if (userRole === 'accounting') {
-        // Accounting users can only see settlement applications
-        query = query.or('submitter_type.eq.settlement,application_type.like.settlement%');
-      }
-      // Admin and staff users can see all applications (no additional filtering)
+      // All admin, staff, and accounting users can see all applications
+      // (No role-based filtering - accounting users now have full visibility)
 
       // Apply all filters to data query
       if (dateRange) {
@@ -1216,9 +1208,9 @@ const AdminDashboard = ({ userRole }) => {
                               {sendingEmail ? 'Sending...' : 'Send Email'}
                             </button>
                           </div>
-                          {selectedApplication.notifications?.find(n => n.notification_type === 'application_approved')?.sent_at && (
+                          {selectedApplication.email_completed_at && (
                             <div className='mt-2 text-sm opacity-75'>
-                              Sent: {new Date(selectedApplication.notifications.find(n => n.notification_type === 'application_approved').sent_at).toLocaleString()}
+                              Sent: {new Date(selectedApplication.email_completed_at).toLocaleString()}
                             </div>
                           )}
                         </div>
@@ -1388,9 +1380,9 @@ const AdminDashboard = ({ userRole }) => {
                               </button>
                             </div>
                           </div>
-                          {selectedApplication.notifications?.find(n => n.notification_type === 'application_approved')?.sent_at && (
+                          {selectedApplication.email_completed_at && (
                             <div className='mt-2 text-sm opacity-75'>
-                              Sent: {new Date(selectedApplication.notifications.find(n => n.notification_type === 'application_approved').sent_at).toLocaleString()}
+                              Sent: {new Date(selectedApplication.email_completed_at).toLocaleString()}
                             </div>
                           )}
                         </div>

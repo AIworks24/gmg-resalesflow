@@ -115,6 +115,18 @@ export default async function handler(req, res) {
       }
     }
 
+    // Parse buyer emails from comma-separated string or single email
+    const parseBuyerEmails = (buyerEmail) => {
+      if (!buyerEmail) return [];
+      // Check if it's already a comma-separated string
+      if (buyerEmail.includes(',')) {
+        return buyerEmail.split(',').map(email => email.trim()).filter(email => email);
+      }
+      return [buyerEmail.trim()].filter(email => email);
+    };
+
+    const buyerEmails = parseBuyerEmails(application.buyer_email);
+
     // Use sendApprovalEmail from emailService for consistent email formatting
     const { sendApprovalEmail } = await import('../../lib/emailService');
     
@@ -131,9 +143,14 @@ export default async function handler(req, res) {
         customSubject: `Lender Questionnaire Ready - ${application.property_address}`,
         customTitle: 'Lender Questionnaire Ready',
         customMessage: `Your lender questionnaire for <strong>${application.property_address}</strong> has been completed and is ready for download.`,
-        comments: application.comments || null
+        comments: application.comments || null,
+        cc: buyerEmails // Include buyer emails as CC recipients
       });
-      console.log('Lender questionnaire email sent successfully');
+      if (buyerEmails.length > 0) {
+        console.log(`Lender questionnaire email sent successfully to submitter: ${application.submitter_email} (CC: ${buyerEmails.join(', ')})`);
+      } else {
+        console.log('Lender questionnaire email sent successfully to submitter');
+      }
     } catch (emailError) {
       console.error('Failed to send lender questionnaire email:', emailError);
       // Don't throw - continue with status updates even if email fails

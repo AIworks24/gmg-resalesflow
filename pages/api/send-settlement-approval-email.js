@@ -241,6 +241,18 @@ export default async function handler(req, res) {
     // Use property group data if available (already loaded above)
     const { sendApprovalEmail } = await import('../../lib/emailService');
     
+    // Parse buyer emails from comma-separated string or single email
+    const parseBuyerEmails = (buyerEmail) => {
+      if (!buyerEmail) return [];
+      // Check if it's already a comma-separated string
+      if (buyerEmail.includes(',')) {
+        return buyerEmail.split(',').map(email => email.trim()).filter(email => email);
+      }
+      return [buyerEmail.trim()].filter(email => email);
+    };
+
+    const buyerEmails = parseBuyerEmails(application.buyer_email);
+
     // Wrap email sending in try-catch so errors don't interrupt the process
     try {
       await sendApprovalEmail({
@@ -256,9 +268,14 @@ export default async function handler(req, res) {
         customSubject: `Thank You Submitting Your Request For ${propertyAddress}`,
         customTitle: 'Thank you for submitting in your request',
         customMessage: `Your document(s) for <strong>${propertyAddress}</strong> in <strong>${hoaName}</strong> are now ready for download.`,
-        comments: application.comments || null
+        comments: application.comments || null,
+        cc: buyerEmails // Include buyer emails as CC recipients
       });
-      console.log('Settlement approval email sent successfully');
+      if (buyerEmails.length > 0) {
+        console.log(`Settlement approval email sent successfully to submitter: ${application.submitter_email} (CC: ${buyerEmails.join(', ')})`);
+      } else {
+        console.log('Settlement approval email sent successfully to submitter');
+      }
     } catch (emailError) {
       console.error('Failed to send settlement approval email:', emailError);
       // Don't throw - continue with status updates even if email fails
