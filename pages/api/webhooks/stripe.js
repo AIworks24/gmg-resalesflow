@@ -298,8 +298,24 @@ export default async function handler(req, res) {
         const applicationId = paymentIntent.metadata.applicationId || updatedApplication?.id;
         const isMultiCommunity = paymentIntent.metadata.isMultiCommunity === 'true';
         
-        // Get receipt and send receipt email
-        if (updatedApplication && updatedApplication.submitter_email) {
+        // Check if this payment intent came from a checkout session
+        // If so, skip sending receipt email here (checkout.session.completed already sent it)
+        let cameFromCheckoutSession = false;
+        try {
+          const sessions = await stripe.checkout.sessions.list({
+            payment_intent: paymentIntent.id,
+            limit: 1
+          });
+          cameFromCheckoutSession = sessions.data.length > 0;
+          if (cameFromCheckoutSession) {
+            console.log(`[Webhook] PaymentIntent ${paymentIntent.id} came from checkout session, skipping receipt email (already sent by checkout.session.completed)`);
+          }
+        } catch (checkError) {
+          console.warn('[Webhook] Could not check if payment intent came from checkout session:', checkError.message);
+        }
+
+        // Get receipt and send receipt email (only if not from checkout session)
+        if (updatedApplication && updatedApplication.submitter_email && !cameFromCheckoutSession) {
           try {
             // Get receipt from charge (Stripe automatically generates receipts)
             let receiptUrl = null;
@@ -407,7 +423,10 @@ export default async function handler(req, res) {
             // Don't fail the webhook if email fails
           }
         } else {
-          if (!updatedApplication) {
+          if (cameFromCheckoutSession) {
+            // Receipt email already sent by checkout.session.completed, skip silently
+            console.log(`[Webhook] Skipping receipt email for payment_intent.succeeded - already sent by checkout.session.completed`);
+          } else if (!updatedApplication) {
             console.warn(`[Webhook] Application not found for payment intent ${paymentIntent.id}. Metadata:`, paymentIntent.metadata);
             console.warn(`[Webhook] Tried to find by: stripe_payment_intent_id=${paymentIntent.id}`);
           } else if (!updatedApplication.submitter_email) {
