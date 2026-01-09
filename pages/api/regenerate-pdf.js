@@ -96,6 +96,14 @@ export default async function handler(req, res) {
     // Start with the extracted formData and enrich it
     let enrichedFormData = actualFormData || {};
     
+    // Debug logging for checkbox #11 (can be removed after verification)
+    if (process.env.NODE_ENV === 'development') {
+      console.log('[regenerate-pdf] Check Box11 data check:');
+      console.log('  - actualFormData.disclosures?.operatingBudget?.budgetAttached:', actualFormData?.disclosures?.operatingBudget?.budgetAttached);
+      console.log('  - type:', typeof actualFormData?.disclosures?.operatingBudget?.budgetAttached);
+      console.log('  - full operatingBudget object:', actualFormData?.disclosures?.operatingBudget);
+    }
+    
     if (applicationData) {
       // Helper function to get value or fallback (handles empty strings)
       const getValueOrFallback = (value, fallback) => {
