@@ -241,7 +241,7 @@ const AdminDashboard = ({ userRole }) => {
       }
 
       if (searchTerm) {
-        countQuery = countQuery.or(`property_address.ilike.%${searchTerm}%,submitter_name.ilike.%${searchTerm}%,hoa_properties.name.ilike.%${searchTerm}%`);
+        countQuery = countQuery.or(`property_address.ilike.%${searchTerm}%,submitter_name.ilike.%${searchTerm}%,hoa_properties.name.ilike.%${searchTerm}%,id::text.ilike.%${searchTerm}%`);
       }
 
       const { count, error: countError } = await countQuery;
@@ -277,7 +277,7 @@ const AdminDashboard = ({ userRole }) => {
       }
 
       if (searchTerm) {
-        query = query.or(`property_address.ilike.%${searchTerm}%,submitter_name.ilike.%${searchTerm}%,hoa_properties.name.ilike.%${searchTerm}%`);
+        query = query.or(`property_address.ilike.%${searchTerm}%,submitter_name.ilike.%${searchTerm}%,hoa_properties.name.ilike.%${searchTerm}%,id::text.ilike.%${searchTerm}%`);
       }
 
       // Apply pagination
@@ -2295,7 +2295,7 @@ const AdminDashboard = ({ userRole }) => {
               <Search className='w-4 h-4 text-gray-500' />
               <input
                 type='text'
-                placeholder='Search by property address, submitter, or HOA...'
+                placeholder='Search by property address, submitter, HOA, or application number...'
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 className='flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500'

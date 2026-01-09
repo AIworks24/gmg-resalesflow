@@ -943,10 +943,12 @@ const AdminApplications = ({ userRole }) => {
     // Apply search filter
     if (searchTerm) {
       const searchLower = searchTerm.toLowerCase();
+      const searchNum = searchTerm.trim();
       filtered = filtered.filter(app =>
         app.property_address?.toLowerCase().includes(searchLower) ||
         app.submitter_name?.toLowerCase().includes(searchLower) ||
-        app.hoa_properties?.name?.toLowerCase().includes(searchLower)
+        app.hoa_properties?.name?.toLowerCase().includes(searchLower) ||
+        app.id?.toString().includes(searchNum)
       );
     }
 
@@ -2792,7 +2794,7 @@ const AdminApplications = ({ userRole }) => {
                 <Search className='w-5 h-5 absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400' />
                 <input
                   type='text'
-                  placeholder='Search by property address, submitter name, or HOA...'
+                  placeholder='Search by property address, submitter name, HOA, or application number...'
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                   className='w-full pl-10 pr-4 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all'

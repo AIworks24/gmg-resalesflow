@@ -108,7 +108,7 @@ export default async function handler(req, res) {
 
     // Apply search filter
     if (search) {
-      query = query.or(`property_address.ilike.%${search}%,submitter_name.ilike.%${search}%,hoa_properties.name.ilike.%${search}%`);
+      query = query.or(`property_address.ilike.%${search}%,submitter_name.ilike.%${search}%,hoa_properties.name.ilike.%${search}%,id::text.ilike.%${search}%`);
     }
 
     // Apply date range filter
