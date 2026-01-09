@@ -1949,6 +1949,9 @@ const AdminApplications = ({ userRole }) => {
         return;
       }
 
+      // Get user's timezone
+      const userTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+      
       // Call the settlement PDF generation API
       const response = await fetch('/api/generate-settlement-pdf', {
         method: 'POST',
@@ -1957,6 +1960,7 @@ const AdminApplications = ({ userRole }) => {
           applicationId,
           formData: settlementForm.form_data || settlementForm.response_data,
           propertyGroupId: group?.id || null,
+          timezone: userTimezone,
         }),
       });
       
@@ -4258,7 +4262,11 @@ const AdminApplications = ({ userRole }) => {
                                 </div>
                              </TaskCard>
                              
+<<<<<<< Updated upstream
                              <TaskCard step="3" status={taskStatuses.email} title="Send Email" description="Send details to settlement agent" completedAt={selectedApplication.email_completed_at}>
+=======
+                             <TaskCard step="3" status={taskStatuses.email} title="Send Email" description="Send details to settlement agent" completedAt={selectedApplication.email_completed_at || selectedApplication.notifications?.find(n => n.notification_type === 'application_approved')?.sent_at}>
+>>>>>>> Stashed changes
                                 <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2">
                                    <button onClick={() => handleSendApprovalEmail(selectedApplication.id)} disabled={!emailCanBeSent || sendingEmail} className="w-full sm:w-auto px-3 sm:px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 active:bg-blue-800 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed shadow-sm">
                                       {sendingEmail ? (

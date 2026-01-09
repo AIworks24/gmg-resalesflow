@@ -118,9 +118,12 @@ const ResaleCertificateForm = ({ applicationId, token }) => {
         throw new Error('Either applicationId or token is required');
       }
       
-      // Optionally generate PDF using original Supabase data
-      const dataForPDF = originalSupabaseData || formData;
+      // Optionally generate PDF using current form data
+      const dataForPDF = formData; // Use current formData (the data being saved)
       // New PDF.co + Supabase upload flow should be implemented here
+      
+      // Update originalSupabaseData to reflect the saved state
+      setOriginalSupabaseData(formData);
       setSuccess(true);
     } catch (err) {
       setError(err.message || 'Error saving form');
@@ -139,7 +142,7 @@ const ResaleCertificateForm = ({ applicationId, token }) => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          formData: originalSupabaseData || formData,
+          formData: formData, // Use current formData with user's edits instead of originalSupabaseData
           applicationId,
           timezone: userTimezone,
         }),

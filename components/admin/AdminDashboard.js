@@ -835,6 +835,9 @@ const AdminDashboard = ({ userRole }) => {
         throw new Error('Settlement form not found');
       }
 
+      // Get user's timezone
+      const userTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+      
       // Call the settlement PDF generation API
       const response = await fetch('/api/generate-settlement-pdf', {
         method: 'POST',
@@ -842,6 +845,7 @@ const AdminDashboard = ({ userRole }) => {
         body: JSON.stringify({
           applicationId,
           formData: settlementForm.form_data || settlementForm.response_data,
+          timezone: userTimezone,
         }),
       });
       

@@ -38,6 +38,7 @@ export default async function handler(req, res) {
       managerName,
       managerEmail,
       managerPhone,
+      propertyGroupId,
     } = req.body;
 
     // Validate required fields
@@ -302,6 +303,50 @@ export default async function handler(req, res) {
       console.error('Failed to send settlement form email:', error);
       // Don't throw - continue with response even if email fails
       // The process should complete successfully even if email delivery fails
+    }
+
+    // Mark email task as completed if email was sent successfully
+    // This ensures the completion status shows correctly in the dashboard
+    if (!emailError && emailResult) {
+      const timestamp = new Date().toISOString();
+      const { propertyGroupId } = req.body;
+      
+      try {
+        if (propertyGroupId) {
+          // Multi-community: update the property group with email status
+          const { error: groupUpdateError } = await supabase
+            .from('application_property_groups')
+            .update({
+              email_status: 'completed',
+              email_completed_at: timestamp,
+              updated_at: timestamp
+            })
+            .eq('id', propertyGroupId)
+            .eq('application_id', applicationId);
+
+          if (groupUpdateError) {
+            console.error('Failed to mark email task as completed for property group:', groupUpdateError);
+            // Don't throw - email was sent successfully
+          }
+        } else {
+          // Single property: update application with email completion
+          const { error: emailTaskError } = await supabase
+            .from('applications')
+            .update({
+              email_completed_at: timestamp,
+              updated_at: timestamp
+            })
+            .eq('id', applicationId);
+
+          if (emailTaskError) {
+            console.error('Failed to mark email task as completed:', emailTaskError);
+            // Don't throw - email was sent successfully
+          }
+        }
+      } catch (updateError) {
+        console.error('Error updating email completion status:', updateError);
+        // Don't throw - email was sent successfully
+      }
     }
 
     // Return success even if email failed - the form was processed successfully

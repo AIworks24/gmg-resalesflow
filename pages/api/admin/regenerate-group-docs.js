@@ -80,13 +80,17 @@ export default async function handler(req, res) {
       property_owner_email: property.property_owner_email
     };
 
+    // Get user's timezone
+    const userTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+    
     // Generate documents for this specific property group
     const requiredForms = ['resale_certificate']; // Default forms, can be expanded
     const generatedDocs = await generateMultiCommunityDocuments(
       application,
       [singleProperty],
       null, // accountantUser - can be added later
-      requiredForms
+      requiredForms,
+      userTimezone
     );
 
     // Update group with generated documents

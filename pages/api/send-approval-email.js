@@ -143,14 +143,18 @@ export default async function handler(req, res) {
           console.warn('Could not load company logo:', error);
         }
         
+        // Get user's timezone
+        const userTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+        
         const pdfElement = React.createElement(InspectionFormPdfDocument, {
           propertyAddress: application.property_address,
           hoaName: application.hoa_properties.name,
-          generatedDate: new Date().toLocaleDateString(),
+          generatedDate: null, // Let component format with timezone
           formStatus: inspectionForm.status,
           completedAt: inspectionForm.completed_at,
           formData: formData,
-          logoBase64: logoBase64
+          logoBase64: logoBase64,
+          timezone: userTimezone
         });
         
         const stream = await ReactPDF.default.renderToStream(pdfElement);

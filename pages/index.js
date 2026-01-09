@@ -4573,12 +4573,12 @@ export default function GMGResaleFlow() {
       let existingApplicationId = applicationId;
       
       if (!existingApplicationId) {
-        // Try to find a pending payment application for this user with matching details
+        // Try to find a pending payment or payment_completed application for this user with matching details
         const { data: pendingApps, error: searchError } = await supabase
           .from('applications')
           .select('id')
           .eq('user_id', user.id)
-          .eq('status', 'pending_payment')
+          .in('status', ['pending_payment', 'payment_completed'])
           .eq('submitter_email', formData.submitterEmail)
           .eq('property_address', formData.propertyAddress)
           .order('created_at', { ascending: false })
@@ -4596,6 +4596,7 @@ export default function GMGResaleFlow() {
 
       if (existingApplicationId) {
         // Update existing application to under_review status
+        // This works for both pending_payment and payment_completed statuses
         const { data, error } = await supabase
           .from('applications')
           .update({
@@ -4867,6 +4868,11 @@ export default function GMGResaleFlow() {
         color: 'bg-yellow-100 text-yellow-800',
         icon: DollarSign,
         label: 'Pending Payment',
+      },
+      payment_completed: {
+        color: 'bg-green-100 text-green-800',
+        icon: CheckCircle,
+        label: 'Payment Completed',
       },
       submitted: {
         color: 'bg-blue-100 text-blue-800',
@@ -5212,8 +5218,19 @@ export default function GMGResaleFlow() {
                     <div className='space-y-4 max-h-[600px] overflow-y-auto pr-2 custom-scrollbar'>
                     {visibleApplications.length > 0 ? (
                       visibleApplications.map((app) => {
+                      // Check if payment was actually completed (verify from database)
+                      const paymentCompleted = app.payment_completed_at || 
+                                              app.status === 'payment_completed' ||
+                                              app.payment_status === 'completed';
+                      
                       // Fix for premature "Completed" status when PDF is not generated
                       let displayStatus = app.status;
+                      
+                      // Override status if payment was completed but status still shows pending_payment
+                      if (paymentCompleted && displayStatus === 'pending_payment') {
+                        displayStatus = 'payment_completed';
+                      }
+                      
                       const propertyGroups = app.application_property_groups || [];
                       const isMultiCommunity = app.application_type === 'multi_community' || 
                                                 (app.application_type?.startsWith('settlement') && propertyGroups.length > 1) ||
@@ -5260,7 +5277,7 @@ export default function GMGResaleFlow() {
                           displayStatus = 'completed';
                         } else {
                           // If not all are completed, show as under_review (or keep current status if it's already in progress)
-                          if (displayStatus !== 'draft' && displayStatus !== 'pending_payment' && displayStatus !== 'submitted') {
+                          if (displayStatus !== 'draft' && displayStatus !== 'pending_payment' && displayStatus !== 'payment_completed' && displayStatus !== 'submitted') {
                             displayStatus = 'under_review';
                           }
                         }
@@ -5288,10 +5305,12 @@ export default function GMGResaleFlow() {
                         statusClasses = 'bg-gray-50 text-gray-600 border-gray-200';
                       } else if (displayStatus === 'pending_payment') {
                         statusClasses = 'bg-amber-50 text-amber-700 border-amber-200';
+                      } else if (displayStatus === 'payment_completed') {
+                        statusClasses = 'bg-green-50 text-green-700 border-green-200';
                       }
 
-                      // Check if application can be deleted (draft or pending_payment)
-                      const canDelete = app.status === 'draft' || app.status === 'pending_payment';
+                      // Check if application can be deleted (draft or pending_payment, but not if payment is completed)
+                      const canDelete = (app.status === 'draft' || app.status === 'pending_payment') && !paymentCompleted;
                       const isCompleted = displayStatus === 'completed' || displayStatus === 'approved';
                       const isExpanded = expandedAppId === app.id;
 
@@ -5303,6 +5322,7 @@ export default function GMGResaleFlow() {
                           {/* Status bar accent on left */}
                           <div className={`absolute left-0 top-0 bottom-0 w-1 ${
                             displayStatus === 'approved' || displayStatus === 'completed' ? 'bg-green-500' :
+                            displayStatus === 'payment_completed' ? 'bg-green-500' :
                             displayStatus === 'pending_payment' ? 'bg-amber-500' :
                             displayStatus === 'draft' ? 'bg-gray-300' :
                             'bg-blue-500'
@@ -5363,11 +5383,25 @@ export default function GMGResaleFlow() {
                                 </span>
                                 
                                 <div className='flex items-center gap-2'>
-                                  {(app.status === 'draft' || app.status === 'pending_payment') && (
+                                  {(app.status === 'draft' || app.status === 'pending_payment' || app.status === 'payment_completed') && (
                                     <button
                                       onClick={() => {
-                                        loadDraftApplication(app.id).then(() => {
-                                          setCurrentStep(app.status === 'pending_payment' ? 4 : 1);
+                                        loadDraftApplication(app.id).then((applicationData) => {
+                                          // Check if payment was completed
+                                          const paymentCompleted = applicationData?.payment_completed_at || 
+                                                                    applicationData?.status === 'payment_completed' ||
+                                                                    applicationData?.payment_status === 'completed';
+                                          
+                                          if (paymentCompleted) {
+                                            // Payment completed - go to review step
+                                            setCurrentStep(5);
+                                          } else if (app.status === 'pending_payment') {
+                                            // Payment pending - go to payment step
+                                            setCurrentStep(4);
+                                          } else {
+                                            // Draft - go to first step
+                                            setCurrentStep(1);
+                                          }
                                         });
                                       }}
                                       className='flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-white bg-green-600 hover:bg-green-700 rounded-lg transition-colors shadow-sm hover:shadow'
@@ -5857,13 +5891,26 @@ export default function GMGResaleFlow() {
                       </td>
                       <td className='px-6 py-4 whitespace-nowrap text-sm font-medium'>
                                                 <div className='flex space-x-2'>
-                          {(app.status === 'draft' || app.status === 'pending_payment') && (
+                          {(app.status === 'draft' || app.status === 'pending_payment' || app.status === 'payment_completed') && (
                             <>
                               <button
                                 onClick={() => {
-                                  loadDraftApplication(app.id).then(() => {
-                                    // If pending payment, go to payment step; if draft, go to first step
-                                    setCurrentStep(app.status === 'pending_payment' ? 4 : 1);
+                                  loadDraftApplication(app.id).then((applicationData) => {
+                                    // Check if payment was completed
+                                    const paymentCompleted = applicationData?.payment_completed_at || 
+                                                              applicationData?.status === 'payment_completed' ||
+                                                              applicationData?.payment_status === 'completed';
+                                    
+                                    if (paymentCompleted) {
+                                      // Payment completed - go to review step
+                                      setCurrentStep(5);
+                                    } else if (app.status === 'pending_payment') {
+                                      // Payment pending - go to payment step
+                                      setCurrentStep(4);
+                                    } else {
+                                      // Draft - go to first step
+                                      setCurrentStep(1);
+                                    }
                                   });
                                 }}
                                 className='text-green-600 hover:text-green-900 flex items-center'
