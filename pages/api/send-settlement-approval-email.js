@@ -265,9 +265,9 @@ export default async function handler(req, res) {
         downloadLinks: downloadLinks,
         // Custom settlement-specific email content
         isSettlement: true,
-        customSubject: `Thank You Submitting Your Request For ${propertyAddress}`,
-        customTitle: 'Thank you for submitting in your request',
-        customMessage: `Your document(s) for <strong>${propertyAddress}</strong> in <strong>${hoaName}</strong> are now ready for download.`,
+        customSubject: `Your Settlement Documents for ${propertyAddress} are Ready`,
+        customTitle: 'Your Settlement Documents are Ready!',
+        customMessage: `Your settlement documents for <strong>${propertyAddress}</strong> in <strong>${hoaName}</strong> have been processed and are ready for download.`,
         comments: application.comments || null,
         cc: buyerEmails // Include buyer emails as CC recipients
       });

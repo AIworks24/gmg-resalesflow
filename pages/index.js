@@ -50,6 +50,8 @@ import {
   ArrowRight,
   Mail,
   Loader2,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 
 // Initialize Stripe with error handling
@@ -2305,6 +2307,7 @@ const AuthModal = ({ authMode, setAuthMode, setShowAuthModal, handleAuth, resetP
   const supabase = createClientComponentClient();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [repeatPassword, setRepeatPassword] = useState('');
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [showForgotPassword, setShowForgotPassword] = useState(false);
@@ -2312,6 +2315,11 @@ const AuthModal = ({ authMode, setAuthMode, setShowAuthModal, handleAuth, resetP
   const [isResetting, setIsResetting] = useState(false);
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [authError, setAuthError] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [showRepeatPassword, setShowRepeatPassword] = useState(false);
+  
+  // Validation errors
+  const [validationErrors, setValidationErrors] = useState({});
   
   // New: verification waiting state
   const [showVerificationWaiting, setShowVerificationWaiting] = useState(false);
@@ -2323,10 +2331,69 @@ const AuthModal = ({ authMode, setAuthMode, setShowAuthModal, handleAuth, resetP
   const channelRef = React.useRef(null);
   const timeoutRef = React.useRef(null);
 
+  // Validation function
+  const validateForm = () => {
+    const errors = {};
+    
+    if (authMode === 'signup') {
+      // First Name validation
+      if (!firstName.trim()) {
+        errors.firstName = 'First name is required';
+      }
+      
+      // Last Name validation
+      if (!lastName.trim()) {
+        errors.lastName = 'Last name is required';
+      }
+      
+      // Email validation
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!email.trim()) {
+        errors.email = 'Email is required';
+      } else if (!emailRegex.test(email)) {
+        errors.email = 'Please enter a valid email address';
+      }
+      
+      // Password validation
+      if (!password) {
+        errors.password = 'Password is required';
+      } else if (password.length < 6) {
+        errors.password = 'Password must be at least 6 characters long';
+      }
+      
+      // Repeat Password validation
+      if (!repeatPassword) {
+        errors.repeatPassword = 'Please confirm your password';
+      } else if (password !== repeatPassword) {
+        errors.repeatPassword = 'Passwords do not match';
+      }
+    } else {
+      // Sign in validation
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!email.trim()) {
+        errors.email = 'Email is required';
+      } else if (!emailRegex.test(email)) {
+        errors.email = 'Please enter a valid email address';
+      }
+      
+      if (!password) {
+        errors.password = 'Password is required';
+      }
+    }
+    
+    setValidationErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
+
   // Clear error when switching modes or closing
   const handleModeSwitch = (newMode) => {
     setAuthError('');
     setResetMessage('');
+    setValidationErrors({});
+    setPassword('');
+    setRepeatPassword('');
+    setShowPassword(false);
+    setShowRepeatPassword(false);
     setAuthMode(newMode);
   };
 
@@ -2343,6 +2410,14 @@ const AuthModal = ({ authMode, setAuthMode, setShowAuthModal, handleAuth, resetP
     
     setAuthError('');
     setResetMessage('');
+    setValidationErrors({});
+    setEmail('');
+    setPassword('');
+    setRepeatPassword('');
+    setFirstName('');
+    setLastName('');
+    setShowPassword(false);
+    setShowRepeatPassword(false);
     setShowVerificationWaiting(false);
     setRegisteredUserId(null);
     setRegisteredEmail('');
@@ -2600,6 +2675,12 @@ const AuthModal = ({ authMode, setAuthMode, setShowAuthModal, handleAuth, resetP
           onSubmit={async (e) => {
             e.preventDefault();
             setAuthError('');
+            setValidationErrors({});
+            
+            // Validate form before submission
+            if (!validateForm()) {
+              return;
+            }
             
             if (showForgotPassword) {
               setIsResetting(true);
@@ -2646,6 +2727,7 @@ const AuthModal = ({ authMode, setAuthMode, setShowAuthModal, handleAuth, resetP
                     // Reset form fields
                     setEmail('');
                     setPassword('');
+                    setRepeatPassword('');
                     setFirstName('');
                     setLastName('');
                     setAuthError('');
@@ -2662,6 +2744,7 @@ const AuthModal = ({ authMode, setAuthMode, setShowAuthModal, handleAuth, resetP
                     // Reset form fields
                     setEmail('');
                     setPassword('');
+                    setRepeatPassword('');
                     setFirstName('');
                     setLastName('');
                     setAuthError('');
@@ -2714,54 +2797,169 @@ const AuthModal = ({ authMode, setAuthMode, setShowAuthModal, handleAuth, resetP
 
               {authMode === 'signup' && (
                 <div className='grid grid-cols-2 gap-4 mb-4'>
-                  <input
-                    type='text'
-                    placeholder='First Name'
-                    value={firstName}
-                    onChange={(e) => setFirstName(e.target.value)}
-                    disabled={isAuthenticating}
-                    className={`px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 ${
-                      isAuthenticating ? 'bg-gray-100 cursor-not-allowed' : ''
-                    }`}
-                    required
-                  />
-                  <input
-                    type='text'
-                    placeholder='Last Name'
-                    value={lastName}
-                    onChange={(e) => setLastName(e.target.value)}
-                    disabled={isAuthenticating}
-                    className={`px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 ${
-                      isAuthenticating ? 'bg-gray-100 cursor-not-allowed' : ''
-                    }`}
-                    required
-                  />
+                  <div>
+                    <input
+                      type='text'
+                      placeholder='First Name'
+                      value={firstName}
+                      onChange={(e) => {
+                        setFirstName(e.target.value);
+                        if (validationErrors.firstName) {
+                          setValidationErrors({ ...validationErrors, firstName: '' });
+                        }
+                      }}
+                      disabled={isAuthenticating}
+                      className={`w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 ${
+                        validationErrors.firstName
+                          ? 'border-red-500 focus:ring-red-500'
+                          : 'border-gray-300 focus:ring-green-500'
+                      } ${
+                        isAuthenticating ? 'bg-gray-100 cursor-not-allowed' : ''
+                      }`}
+                      required
+                    />
+                    {validationErrors.firstName && (
+                      <p className='text-red-500 text-xs mt-1'>{validationErrors.firstName}</p>
+                    )}
+                  </div>
+                  <div>
+                    <input
+                      type='text'
+                      placeholder='Last Name'
+                      value={lastName}
+                      onChange={(e) => {
+                        setLastName(e.target.value);
+                        if (validationErrors.lastName) {
+                          setValidationErrors({ ...validationErrors, lastName: '' });
+                        }
+                      }}
+                      disabled={isAuthenticating}
+                      className={`w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 ${
+                        validationErrors.lastName
+                          ? 'border-red-500 focus:ring-red-500'
+                          : 'border-gray-300 focus:ring-green-500'
+                      } ${
+                        isAuthenticating ? 'bg-gray-100 cursor-not-allowed' : ''
+                      }`}
+                      required
+                    />
+                    {validationErrors.lastName && (
+                      <p className='text-red-500 text-xs mt-1'>{validationErrors.lastName}</p>
+                    )}
+                  </div>
                 </div>
               )}
 
               <div className='space-y-4'>
-                <input
-                  type='email'
-                  placeholder='Email Address'
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  disabled={isAuthenticating}
-                  className={`w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 ${
-                    isAuthenticating ? 'bg-gray-100 cursor-not-allowed' : ''
-                  }`}
-                  required
-                />
-                <input
-                  type='password'
-                  placeholder='Password'
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  disabled={isAuthenticating}
-                  className={`w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 ${
-                    isAuthenticating ? 'bg-gray-100 cursor-not-allowed' : ''
-                  }`}
-                  required
-                />
+                <div>
+                  <input
+                    type='email'
+                    placeholder='Email Address'
+                    value={email}
+                    onChange={(e) => {
+                      setEmail(e.target.value);
+                      if (validationErrors.email) {
+                        setValidationErrors({ ...validationErrors, email: '' });
+                      }
+                    }}
+                    disabled={isAuthenticating}
+                    className={`w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 ${
+                      validationErrors.email
+                        ? 'border-red-500 focus:ring-red-500'
+                        : 'border-gray-300 focus:ring-green-500'
+                    } ${
+                      isAuthenticating ? 'bg-gray-100 cursor-not-allowed' : ''
+                    }`}
+                    required
+                  />
+                  {validationErrors.email && (
+                    <p className='text-red-500 text-xs mt-1'>{validationErrors.email}</p>
+                  )}
+                </div>
+                <div>
+                  <div className='relative'>
+                    <input
+                      type={showPassword ? 'text' : 'password'}
+                      placeholder='Password'
+                      value={password}
+                      onChange={(e) => {
+                        setPassword(e.target.value);
+                        if (validationErrors.password) {
+                          setValidationErrors({ ...validationErrors, password: '' });
+                        }
+                        // Clear repeat password error if passwords now match
+                        if (validationErrors.repeatPassword && e.target.value === repeatPassword) {
+                          setValidationErrors({ ...validationErrors, repeatPassword: '' });
+                        }
+                      }}
+                      disabled={isAuthenticating}
+                      className={`w-full px-4 py-3 pr-10 border rounded-lg focus:outline-none focus:ring-2 ${
+                        validationErrors.password
+                          ? 'border-red-500 focus:ring-red-500'
+                          : 'border-gray-300 focus:ring-green-500'
+                      } ${
+                        isAuthenticating ? 'bg-gray-100 cursor-not-allowed' : ''
+                      }`}
+                      required
+                    />
+                    <button
+                      type='button'
+                      onClick={() => setShowPassword(!showPassword)}
+                      className='absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-500 hover:text-gray-700 focus:outline-none'
+                      tabIndex={-1}
+                    >
+                      {showPassword ? (
+                        <EyeOff className='h-5 w-5' />
+                      ) : (
+                        <Eye className='h-5 w-5' />
+                      )}
+                    </button>
+                  </div>
+                  {validationErrors.password && (
+                    <p className='text-red-500 text-xs mt-1'>{validationErrors.password}</p>
+                  )}
+                </div>
+                {authMode === 'signup' && (
+                  <div>
+                    <div className='relative'>
+                      <input
+                        type={showRepeatPassword ? 'text' : 'password'}
+                        placeholder='Repeat Password'
+                        value={repeatPassword}
+                        onChange={(e) => {
+                          setRepeatPassword(e.target.value);
+                          if (validationErrors.repeatPassword) {
+                            setValidationErrors({ ...validationErrors, repeatPassword: '' });
+                          }
+                        }}
+                        disabled={isAuthenticating}
+                        className={`w-full px-4 py-3 pr-10 border rounded-lg focus:outline-none focus:ring-2 ${
+                          validationErrors.repeatPassword
+                            ? 'border-red-500 focus:ring-red-500'
+                            : 'border-gray-300 focus:ring-green-500'
+                        } ${
+                          isAuthenticating ? 'bg-gray-100 cursor-not-allowed' : ''
+                        }`}
+                        required
+                      />
+                      <button
+                        type='button'
+                        onClick={() => setShowRepeatPassword(!showRepeatPassword)}
+                        className='absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-500 hover:text-gray-700 focus:outline-none'
+                        tabIndex={-1}
+                      >
+                        {showRepeatPassword ? (
+                          <EyeOff className='h-5 w-5' />
+                        ) : (
+                          <Eye className='h-5 w-5' />
+                        )}
+                      </button>
+                    </div>
+                    {validationErrors.repeatPassword && (
+                      <p className='text-red-500 text-xs mt-1'>{validationErrors.repeatPassword}</p>
+                    )}
+                  </div>
+                )}
               </div>
             </>
           )}

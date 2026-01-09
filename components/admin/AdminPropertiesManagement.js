@@ -98,6 +98,10 @@ const AdminPropertiesManagement = () => {
     management_contact: '',
     phone: '',
     email: '',
+    insurance_company_name: '',
+    insurance_agent_name: '',
+    insurance_agent_phone: '',
+    insurance_agent_email: '',
     special_requirements: '',
     is_multi_community: false,
     allow_public_offering: false,
@@ -181,6 +185,10 @@ const AdminPropertiesManagement = () => {
       management_contact: '',
       phone: '',
       email: '',
+      insurance_company_name: '',
+      insurance_agent_name: '',
+      insurance_agent_phone: '',
+      insurance_agent_email: '',
       special_requirements: '',
       is_multi_community: false,
       allow_public_offering: false,
@@ -215,6 +223,10 @@ const AdminPropertiesManagement = () => {
       management_contact: property.management_contact || '',
       phone: property.phone || '',
       email: property.email || '',
+      insurance_company_name: property.insurance_company_name || '',
+      insurance_agent_name: property.insurance_agent_name || '',
+      insurance_agent_phone: property.insurance_agent_phone || '',
+      insurance_agent_email: property.insurance_agent_email || '',
       special_requirements: property.special_requirements || '',
       is_multi_community: actuallyMultiCommunity,
       allow_public_offering: property.allow_public_offering || false,
@@ -255,6 +267,10 @@ const AdminPropertiesManagement = () => {
             management_contact: formData.management_contact,
             phone: formData.phone,
             email: formData.email,
+            insurance_company_name: formData.insurance_company_name || null,
+            insurance_agent_name: formData.insurance_agent_name || null,
+            insurance_agent_phone: formData.insurance_agent_phone || null,
+            insurance_agent_email: formData.insurance_agent_email || null,
             special_requirements: formData.special_requirements,
             // is_multi_community is automatically managed by linked properties
             // When properties are linked/unlinked, it's automatically updated in the database
@@ -1419,6 +1435,64 @@ const AdminPropertiesManagement = () => {
                 </div>
 
                 {/* Management Information removed per request */}
+
+                {/* Insurance Information */}
+                <div className="border-t pt-4">
+                  <h3 className="text-md font-medium text-gray-900 mb-3">Insurance Information</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Insurance Company Name
+                      </label>
+                      <input
+                        type="text"
+                        value={formData.insurance_company_name}
+                        onChange={(e) => setFormData({...formData, insurance_company_name: e.target.value})}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        placeholder="Enter insurance company name"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Insurance Agent Name
+                      </label>
+                      <input
+                        type="text"
+                        value={formData.insurance_agent_name}
+                        onChange={(e) => setFormData({...formData, insurance_agent_name: e.target.value})}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        placeholder="Enter agent name"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Insurance Agent Phone
+                      </label>
+                      <input
+                        type="tel"
+                        value={formData.insurance_agent_phone}
+                        onChange={(e) => setFormData({...formData, insurance_agent_phone: e.target.value})}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        placeholder="Enter agent phone"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Insurance Agent Email
+                      </label>
+                      <input
+                        type="email"
+                        value={formData.insurance_agent_email}
+                        onChange={(e) => setFormData({...formData, insurance_agent_email: e.target.value})}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        placeholder="Enter agent email"
+                      />
+                    </div>
+                  </div>
+                </div>
 
                 {/* Public Offering Statement Settings */}
                 <div className="border-t pt-4">

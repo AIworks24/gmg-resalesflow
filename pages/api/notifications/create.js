@@ -374,17 +374,26 @@ export async function createNotifications(applicationId, supabaseClient) {
       const isRush = application.package_type === 'rush';
       
       // Get linked properties if multi-community
+      // Note: Check for property groups regardless of applicationType because
+      // settlement agents can have settlement_va/settlement_nc type even for multi-community properties
       let linkedProperties = [];
-      if (isMultiCommunity) {
+      // Check if property is multi-community or if there are property groups
+      const isPropertyMultiCommunity = application.hoa_properties?.is_multi_community || false;
+      if (isPropertyMultiCommunity || isMultiCommunity) {
         const { data: linkedProps } = await supabaseClient
-          .from('application_properties')
+          .from('application_property_groups')
           .select(`
             property_name,
-            location,
+            property_location,
             property_id
           `)
-          .eq('application_id', applicationId);
-        linkedProperties = linkedProps || [];
+          .eq('application_id', applicationId)
+          .eq('is_primary', false); // Only get non-primary properties
+        linkedProperties = (linkedProps || []).map(prop => ({
+          property_name: prop.property_name,
+          location: prop.property_location, // Map property_location to location for consistency
+          property_id: prop.property_id
+        }));
       }
 
       // Send emails to all notification recipients (with error handling)

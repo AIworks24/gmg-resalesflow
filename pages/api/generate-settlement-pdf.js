@@ -73,6 +73,7 @@ export default async function handler(req, res) {
     if (!formData || Object.keys(formData).length === 0) {
       return res.status(400).json({ error: 'Settlement form has not been completed yet' });
     }
+    
 
     // Determine property state - check for VA/Virginia or NC/North Carolina
     const location = application.hoa_properties?.location?.toUpperCase() || '';
@@ -134,20 +135,16 @@ export default async function handler(req, res) {
 
     // Define fee fields that should be grouped together (but not in comments)
     const feeFields = {
-      VA: ['transferFee', 'resaleCertificateFee', 'capitalContribution', 'prepaidAssessments', 'adminFee', 'totalAmountDue'],
+      VA: ['ownerCurrentBalance', 'transferFee', 'resaleCertificateFee', 'capitalContribution', 'prepaidAssessments', 'adminFee', 'totalAmountDue'],
       NC: ['lateFees', 'interestCharges', 'attorneyFees', 'otherCharges', 'totalAmountDue', 'resaleCertificateFee']
     };
-
-    // Define comment fields that should be at the very bottom
-    const commentFields = ['assessmentComments', 'feeComments', 'goodThroughDate'];
 
     // Get sections for the property state
     const sections = settlementFormFields.forms[propertyState]?.sections || [];
     
-    // Organize fields by section, separating fees and comments
+    // Organize fields by section, separating fees
     const organizedSections = [];
     const feesSection = { section: 'Fees', fields: [] };
-    const commentsSection = { section: 'Comments', fields: [] };
     
     for (const section of sections) {
       const sectionFields = [];
@@ -162,25 +159,44 @@ export default async function handler(req, res) {
         // Skip empty/null/undefined values
         if (!fieldValue && fieldValue !== 0 && fieldValue !== false) continue;
         
-        // Check if it's a comment field - add to comments section
-        if (commentFields.includes(fieldKey)) {
-          commentsSection.fields.push({
-            key: fieldKey,
-            label: field.label || formatLabel(fieldKey),
-            value: formatValue(fieldValue, field.type),
-            type: field.type
-          });
-          continue;
-        }
-        
-        // Check if it's a fee field - add to fees section
+        // Check if it's a fee field - add to fees section with payableTo
         if (feeFields[propertyState].includes(fieldKey)) {
-          feesSection.fields.push({
-            key: fieldKey,
-            label: field.label || formatLabel(fieldKey),
-            value: formatValue(fieldValue, field.type),
-            type: field.type
-          });
+          // Skip totalAmountDue from the table (it will be shown separately)
+          if (fieldKey !== 'totalAmountDue') {
+            const payableToKey = `${fieldKey}_payableTo`;
+            let payableToValue = formData[payableToKey] || '';
+            
+            // Remove "Payable to " prefix if present
+            if (payableToValue && payableToValue.startsWith('Payable to ')) {
+              payableToValue = payableToValue.replace(/^Payable to /i, '');
+            }
+            
+            // Normalize "Goodman Management" to "Goodman Management Group" for consistency
+            if (payableToValue && (payableToValue === 'Goodman Management' || payableToValue.toLowerCase() === 'goodman management')) {
+              payableToValue = 'Goodman Management Group';
+            }
+            
+            // Format the value - ensure it has $ prefix
+            let formattedValue = formatValue(fieldValue, field.type);
+            if (formattedValue && !formattedValue.startsWith('$')) {
+              // Try to parse as number and format
+              const numValue = parseFloat(formattedValue.replace(/[^0-9.]/g, ''));
+              if (!isNaN(numValue)) {
+                formattedValue = `$${numValue.toFixed(2)}`;
+              } else if (formattedValue) {
+                formattedValue = `$${formattedValue}`;
+              }
+            }
+            
+            feesSection.fields.push({
+              key: fieldKey,
+              label: field.label || formatLabel(fieldKey),
+              value: formattedValue,
+              payableTo: payableToValue,
+              type: 'fee',
+              numericValue: parseFloat(formattedValue.replace(/[^0-9.]/g, '')) || 0 // Store numeric value for totaling
+            });
+          }
           continue;
         }
         
@@ -213,15 +229,97 @@ export default async function handler(req, res) {
       }
     }
     
-    // Add fees section before comments if it has fields
+    // Process custom fee fields and add them to fees section
+    if (formData.customFields && Array.isArray(formData.customFields) && formData.customFields.length > 0) {
+      formData.customFields.forEach(customField => {
+        if (customField.name && customField.type === 'fee' && customField.value) {
+          let payableToValue = customField.payableTo || '';
+          // Remove "Payable to " prefix if present
+          if (payableToValue && payableToValue.startsWith('Payable to ')) {
+            payableToValue = payableToValue.replace(/^Payable to /i, '');
+          }
+          // Normalize "Goodman Management" to "Goodman Management Group"
+          if (payableToValue && (payableToValue === 'Goodman Management' || payableToValue.toLowerCase() === 'goodman management')) {
+            payableToValue = 'Goodman Management Group';
+          }
+          
+          // Format the value - ensure it has $ prefix
+          let formattedValue = customField.value || '';
+          if (formattedValue && !formattedValue.startsWith('$')) {
+            const numValue = parseFloat(formattedValue.replace(/[^0-9.]/g, ''));
+            if (!isNaN(numValue)) {
+              formattedValue = `$${numValue.toFixed(2)}`;
+            } else if (formattedValue) {
+              formattedValue = `$${formattedValue}`;
+            }
+          }
+          
+          feesSection.fields.push({
+            key: `custom_${customField.id}`,
+            label: customField.name,
+            value: formattedValue,
+            payableTo: payableToValue,
+            type: 'fee',
+            numericValue: parseFloat(formattedValue.replace(/[^0-9.]/g, '')) || 0
+          });
+        }
+      });
+    }
+    
+    // Add fees section if it has fields
     if (feesSection.fields.length > 0) {
+      // Calculate separate totals for GMG and Association
+      let totalGMG = 0;
+      let totalAssociation = 0;
+      
+      feesSection.fields.forEach(field => {
+        if (field.type === 'fee' && field.numericValue) {
+          const payableTo = (field.payableTo || '').toLowerCase();
+          // Match both "Goodman Management" and "Goodman Management Group" for backward compatibility
+          if (payableTo.includes('goodman management') || payableTo.includes('gmg')) {
+            totalGMG += field.numericValue;
+          } else if (payableTo.includes('association')) {
+            totalAssociation += field.numericValue;
+          }
+        }
+      });
+      
+      // Add totals to fees section
+      if (totalGMG > 0) {
+        feesSection.fields.push({
+          key: 'totalGMG',
+          label: 'Total for Goodman Management Group',
+          value: `$${totalGMG.toFixed(2)}`,
+          type: 'total',
+          payableTo: 'Goodman Management Group'
+        });
+      }
+      
+      if (totalAssociation > 0) {
+        feesSection.fields.push({
+          key: 'totalAssociation',
+          label: 'Total for Association',
+          value: `$${totalAssociation.toFixed(2)}`,
+          type: 'total',
+          payableTo: 'Association'
+        });
+      }
+      
+      // Add overall total (sum of both)
+      const overallTotal = totalGMG + totalAssociation;
+      if (overallTotal > 0) {
+        feesSection.fields.push({
+          key: 'overallTotal',
+          label: 'Overall Total',
+          value: `$${overallTotal.toFixed(2)}`,
+          type: 'total',
+          payableTo: 'Overall'
+        });
+      }
+      
       organizedSections.push(feesSection);
     }
     
-    // Add comments section at the very end if it has fields
-    if (commentsSection.fields.length > 0) {
-      organizedSections.push(commentsSection);
-    }
 
     // Handle Assessment Information section with custom fields and proper ordering
     const assessmentSection = organizedSections.find(s => s.section === 'Assessment Information');
@@ -232,11 +330,12 @@ export default async function handler(req, res) {
         isCustom: false
       }));
       
-      // Get custom fields with their order
+      // Get custom fields with their order (exclude fee fields as they're handled separately)
       const customFields = [];
       if (formData.customFields && Array.isArray(formData.customFields) && formData.customFields.length > 0) {
         formData.customFields.forEach(customField => {
-          if (customField.name) {
+          if (customField.name && customField.type !== 'fee') {
+            // Regular custom fields go to Assessment Information
             let displayValue = customField.value || '—';
             
             // Format based on field type
@@ -304,109 +403,51 @@ export default async function handler(req, res) {
       const logoPath = path.join(process.cwd(), 'assets', 'company_logo.png');
       if (fs.existsSync(logoPath)) {
         const logoBuffer = fs.readFileSync(logoPath);
-        logoBase64 = logoBuffer.toString('base64');
+        logoBase64 = `data:image/png;base64,${logoBuffer.toString('base64')}`;
       }
     } catch (error) {
       console.warn('Could not load company logo:', error);
     }
 
-    // Generate HTML sections
-    const sectionsHTML = organizedSections.map(section => {
-      const fieldsHTML = section.fields.map(field => {
-        const escapedLabel = escapeHtml(formatLabel(field.key, field.label));
-        const escapedValue = escapeHtml(field.value);
-        
-        // Handle textarea fields (comments) differently
-        if (field.type === 'textarea') {
-          return `
-            <div class="field textarea-field">
-                <div class="label">${escapedLabel}:</div>
-                <div class="value textarea-value">${escapedValue}</div>
-            </div>
-          `;
-        }
-        return `
-          <div class="field">
-              <span class="label">${escapedLabel}:</span>
-              <span class="value">${escapedValue}</span>
-          </div>
-        `;
-      }).join('');
-      
-      const escapedSectionTitle = escapeHtml(section.section);
-      return `
-        <div class="section">
-            <div class="section-title">${escapedSectionTitle}</div>
-            ${fieldsHTML}
-        </div>
-      `;
-    }).join('');
+    // Convert organized sections to format expected by SettlementPdfDocument
+    const pdfSections = organizedSections.map(section => ({
+      title: section.section,
+      fields: section.fields.map(field => ({
+        label: formatLabel(field.key, field.label),
+        value: field.value,
+        type: field.type || 'text',
+        payableTo: field.payableTo || '', // Include payableTo for fee fields
+        key: field.key // Include key for reference
+      }))
+    }));
+    
 
-    // Generate HTML content for the PDF
-    const htmlContent = `
-<!DOCTYPE html>
-<html>
-<head>
-    <title>${documentType} - ${application.property_address}</title>
-    <style>
-        body { font-family: Arial, sans-serif; margin: 40px; line-height: 1.6; }
-        .company-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 30px; padding-bottom: 20px; border-bottom: 3px solid #166534; }
-        .company-logo { max-height: 80px; max-width: 200px; }
-        .company-info { text-align: right; color: #166534; font-size: 0.9em; }
-        .company-info h2 { margin: 0 0 5px 0; font-size: 1.2em; }
-        .company-info p { margin: 3px 0; }
-        h1 { color: #166534; border-bottom: 3px solid #166534; padding-bottom: 10px; margin: 30px 0; text-align: center; }
-        .header-info { background-color: #f9fafb; padding: 20px; border-radius: 5px; margin-bottom: 30px; }
-        .section { margin: 20px 0; }
-        .section-title { color: #059669; font-size: 1.3em; font-weight: bold; margin: 20px 0 10px 0; border-bottom: 1px solid #059669; padding-bottom: 5px; }
-        .field { margin: 8px 0; }
-        .label { font-weight: bold; color: #374151; display: inline-block; min-width: 200px; }
-        .value { color: #111827; }
-        .textarea-field { margin: 12px 0; }
-        .textarea-field .label { display: block; margin-bottom: 4px; }
-        .textarea-value { white-space: pre-wrap; padding-left: 0; }
-        .fees-divider { margin-top: 20px; padding-top: 20px; border-top: 2px solid #d1d5db; }
-        .footer { margin-top: 40px; padding-top: 20px; border-top: 2px solid #166534; color: #6b7280; font-size: 0.9em; text-align: center; }
-    </style>
-</head>
-<body>
-    ${logoBase64 ? `
-    <div class="company-header">
-        <img src="data:image/png;base64,${logoBase64}" alt="Goodman Management Group" class="company-logo" />
-        <div class="company-info">
-            <h2>Goodman Management Group</h2>
-            <p>Professional HOA Management & Settlement Services</p>
-            <p>Phone: (804) 404-8012</p>
-            <p>Email: resales@gmgva.com</p>
-        </div>
-    </div>
-    ` : ''}
-    
-    <h1>${escapeHtml(documentType)}</h1>
-    
-    <div class="header-info">
-        <p><strong>Property Address:</strong> ${escapeHtml(application.property_address)}</p>
-        <p><strong>HOA:</strong> ${escapeHtml(application.hoa_properties.name)}</p>
-        <p><strong>Generated:</strong> ${formatDateTimeInTimezone(new Date(), userTimezone)}</p>
-    </div>
-    
-    ${sectionsHTML}
-    
-    <div class="footer">
-        <p><strong>Goodman Management Group</strong></p>
-        <p>This document was generated on ${formatDateTimeInTimezone(new Date(), userTimezone)}</p>
-        <p>For questions or concerns, please contact GMG ResaleFlow at resales@gmgva.com or (804) 404-8012</p>
-    </div>
-</body>
-</html>`;
-
-    // Generate PDF from HTML using react-pdf/renderer
+    // Use dedicated React PDF component for settlement form (same approach as inspection form)
+    console.log('Creating settlement form PDF using React PDF component');
     const filename = `${documentType.replace(/[^a-zA-Z0-9]/g, '_')}_${application.property_address.replace(/[^a-zA-Z0-9]/g, '_')}.pdf`;
     
-    const { htmlToPdf } = await import('../../lib/reactPdfService.js');
-    const pdfBuffer = await htmlToPdf(htmlContent, {
-      format: 'LETTER'
+    const React = await import('react');
+    const ReactPDF = await import('@react-pdf/renderer');
+    const { SettlementPdfDocument } = await import('../../lib/components/SettlementPdfDocument.js');
+    
+    const pdfElement = React.createElement(SettlementPdfDocument, {
+      documentType: documentType,
+      propertyAddress: application.property_address,
+      hoaName: application.hoa_properties.name,
+      generatedDate: formatDateTimeInTimezone(new Date(), userTimezone),
+      logoBase64: logoBase64,
+      sections: pdfSections,
+      requestorName: formData.requestorName || application.submitter_name || '',
+      requestorCompany: formData.requestorCompany || application.submitter_company || '',
+      requestorPhone: formData.requestorPhone || application.submitter_phone || ''
     });
+    
+    const stream = await ReactPDF.default.renderToStream(pdfElement);
+    const chunks = [];
+    for await (const chunk of stream) {
+      chunks.push(chunk);
+    }
+    const pdfBuffer = Buffer.concat(chunks);
     
     // Validate PDF buffer is not empty
     if (!pdfBuffer || pdfBuffer.byteLength === 0) {

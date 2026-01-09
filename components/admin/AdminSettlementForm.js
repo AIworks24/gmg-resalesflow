@@ -52,8 +52,9 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
   const fieldRefs = useRef({});
   const [showFieldEditor, setShowFieldEditor] = useState(false);
   const [editingFieldIndex, setEditingFieldIndex] = useState(null);
-  const [fieldEditorData, setFieldEditorData] = useState({ name: '', type: 'text', value: '', width: 'half' });
+  const [fieldEditorData, setFieldEditorData] = useState({ name: '', type: 'text', value: '', width: 'half', payableTo: '' });
   const [fieldEditorErrors, setFieldEditorErrors] = useState({});
+  const [fieldEditorSection, setFieldEditorSection] = useState(null); // Track which section is adding the field: 'assessment' or 'fees'
   const [draggedIndex, setDraggedIndex] = useState(null);
   const [dragOverIndex, setDragOverIndex] = useState(null);
   const [draggedFieldType, setDraggedFieldType] = useState(null); // 'standard' or 'custom'
@@ -429,6 +430,39 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
               });
             }
             
+            // Auto-fill manager address with company address if not set
+            if (!existingData.managerAddress || existingData.managerAddress.trim() === '') {
+              existingData.managerAddress = '4101 Cox Rd., Suite 200-11, Glen Allen, VA 23060';
+            }
+            
+            // Auto-fill default "Pay To" values for specific fees (only if not already set)
+            if (!existingData.ownerCurrentBalance_payableTo) {
+              existingData.ownerCurrentBalance_payableTo = 'Payable to Association';
+            }
+            if (!existingData.transferFee_payableTo) {
+              existingData.transferFee_payableTo = 'Payable to Goodman Management Group';
+            }
+            if (!existingData.resaleCertificateFee_payableTo) {
+              existingData.resaleCertificateFee_payableTo = 'Payable to Goodman Management Group';
+            }
+            if (!existingData.capitalContribution_payableTo) {
+              existingData.capitalContribution_payableTo = 'Payable to Association';
+            }
+            
+            // Ensure all payableTo values from form_data are preserved
+            // Check all fee fields and preserve their payableTo values
+            const vaFeeFields = ['ownerCurrentBalance', 'transferFee', 'resaleCertificateFee', 'capitalContribution', 'prepaidAssessments', 'adminFee'];
+            const ncFeeFields = ['lateFees', 'interestCharges', 'attorneyFees', 'otherCharges', 'resaleCertificateFee'];
+            const allFeeFields = state === 'VA' ? vaFeeFields : ncFeeFields;
+            
+            allFeeFields.forEach(feeKey => {
+              const payableToKey = `${feeKey}_payableTo`;
+              // Preserve existing payableTo value if it exists in the loaded data
+              if (existingForm.form_data[payableToKey] && !existingData[payableToKey]) {
+                existingData[payableToKey] = existingForm.form_data[payableToKey];
+              }
+            });
+            
             // Calculate total amount due for existing data
             existingData.totalAmountDue = calculateTotalAmountDue(existingData, state);
             
@@ -519,11 +553,32 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
       buyerOccupant: appData.buyer_occupant || '',
       
       // Assessment fields - let the JSON initializer handle defaults
+      
+      // Insurance Information (from property data)
+      insuranceCompanyName: propertyManager.insurance_company_name || '',
+      insuranceAgentName: propertyManager.insurance_agent_name || '',
+      insuranceAgentPhone: propertyManager.insurance_agent_phone || '',
+      insuranceAgentEmail: propertyManager.insurance_agent_email || '',
+    };
+
+    // Helper function to get first email from comma-separated string or array
+    const getFirstEmail = (emailValue) => {
+      if (!emailValue) return '';
+      if (Array.isArray(emailValue)) {
+        return emailValue.length > 0 ? emailValue[0].trim() : '';
+      }
+      if (typeof emailValue === 'string') {
+        const emails = emailValue.split(',').map(e => e.trim()).filter(Boolean);
+        return emails.length > 0 ? emails[0] : '';
+      }
+      return '';
     };
 
     // Prepare manager information from property data first, then fallback to user data
     const managerFromProperty = propertyManager.management_contact || propertyManager.property_owner_name || '';
-    const managerEmailFromProperty = propertyManager.email || propertyManager.property_owner_email || '';
+    // Always use first email if multiple property owner emails exist
+    const propertyOwnerEmail = getFirstEmail(propertyManager.property_owner_email);
+    const managerEmailFromProperty = propertyManager.email || propertyOwnerEmail || '';
     const managerPhoneFromProperty = propertyManager.phone || propertyManager.property_owner_phone || '';
     
     const userData = {
@@ -533,7 +588,7 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
       managerCompany: userToUse?.company || 'Goodman Management Group',
       managerPhone: managerPhoneFromProperty || userToUse?.phone || '',
       managerEmail: managerEmailFromProperty || userToUse?.email || '',
-      managerAddress: userToUse?.address || '',
+      managerAddress: '4101 Cox Rd., Suite 200-11, Glen Allen, VA 23060',
       preparerSignature: userToUse?.name || managerFromProperty || '',
       preparerName: userToUse?.name || managerFromProperty || '',
     };
@@ -545,6 +600,20 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
     initialData.datePrepared = new Date().toISOString().split('T')[0];
     initialData.preparerSignature = userToUse?.name || managerFromProperty || '';
     initialData.preparerName = userToUse?.name || managerFromProperty || '';
+    
+    // Auto-fill default "Pay To" values for specific fees (only if not already set)
+    if (!initialData.ownerCurrentBalance_payableTo) {
+      initialData.ownerCurrentBalance_payableTo = 'Payable to Association';
+    }
+    if (!initialData.transferFee_payableTo) {
+      initialData.transferFee_payableTo = 'Payable to Goodman Management Group';
+    }
+    if (!initialData.resaleCertificateFee_payableTo) {
+      initialData.resaleCertificateFee_payableTo = 'Payable to Goodman Management Group';
+    }
+    if (!initialData.capitalContribution_payableTo) {
+      initialData.capitalContribution_payableTo = 'Payable to Association';
+    }
 
     // Initialize custom fields from saved form data if available
     if (initialData.customFields && Array.isArray(initialData.customFields)) {
@@ -584,6 +653,61 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
     return isNaN(parsed) ? 0 : parsed;
   };
 
+  // Calculate totals for GMG, Association, and Overall
+  const calculateFeeTotals = (data, state = null) => {
+    const effectiveState = state || propertyState;
+    let totalGMG = 0;
+    let totalAssociation = 0;
+    
+    // Get fee fields based on state
+    const vaFeeFields = ['ownerCurrentBalance', 'transferFee', 'resaleCertificateFee', 'capitalContribution', 'prepaidAssessments', 'adminFee'];
+    const ncFeeFields = ['lateFees', 'interestCharges', 'attorneyFees', 'otherCharges', 'resaleCertificateFee'];
+    const feeFields = effectiveState === 'VA' ? vaFeeFields : ncFeeFields;
+    
+    // Calculate totals from standard fee fields
+    feeFields.forEach(fieldKey => {
+      const value = parseCurrencyValue(data[fieldKey] || '');
+      if (value > 0) {
+        const payableToKey = `${fieldKey}_payableTo`;
+        const payableTo = (data[payableToKey] || '').toLowerCase();
+        
+        if (payableTo.includes('goodman management') || payableTo.includes('gmg')) {
+          totalGMG += value;
+        } else if (payableTo.includes('association')) {
+          totalAssociation += value;
+        }
+      }
+    });
+    
+    // Add custom fee field values
+    if (data.customFields && Array.isArray(data.customFields)) {
+      data.customFields.forEach(customField => {
+        if (customField.type === 'fee' && customField.value) {
+          const value = parseCurrencyValue(customField.value);
+          if (value > 0) {
+            const payableTo = (customField.payableTo || '').toLowerCase();
+            if (payableTo.includes('goodman management') || payableTo.includes('gmg')) {
+              totalGMG += value;
+            } else if (payableTo.includes('association')) {
+              totalAssociation += value;
+            }
+          }
+        }
+      });
+    }
+    
+    const overallTotal = totalGMG + totalAssociation;
+    
+    return {
+      totalGMG: totalGMG > 0 ? `$${totalGMG.toFixed(2)}` : '$0.00',
+      totalAssociation: totalAssociation > 0 ? `$${totalAssociation.toFixed(2)}` : '$0.00',
+      overallTotal: overallTotal > 0 ? `$${overallTotal.toFixed(2)}` : '$0.00',
+      totalGMGNumeric: totalGMG,
+      totalAssociationNumeric: totalAssociation,
+      overallTotalNumeric: overallTotal
+    };
+  };
+
   // Calculate total amount due based on property state
   const calculateTotalAmountDue = (data, state = null) => {
     let total = 0;
@@ -620,10 +744,10 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
       });
     }
     
-    // Add custom field values (only number type fields)
+    // Add custom field values (number and fee type fields)
     if (data.customFields && Array.isArray(data.customFields)) {
       data.customFields.forEach(customField => {
-        if (customField.value && customField.type === 'number') {
+        if (customField.value && (customField.type === 'number' || customField.type === 'fee')) {
           total += parseCurrencyValue(customField.value);
         }
       });
@@ -646,6 +770,11 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
         : ['unpaidRegularAssessments', 'unpaidSpecialAssessments', 'lateFees', 'interestCharges', 'attorneyFees', 'otherCharges'];
       
       if (assessmentFields.includes(field) || field.startsWith('customField_')) {
+        updated.totalAmountDue = calculateTotalAmountDue(updated);
+      }
+      
+      // Recalculate totals when payableTo fields change
+      if (field.endsWith('_payableTo')) {
         updated.totalAmountDue = calculateTotalAmountDue(updated);
       }
       
@@ -674,8 +803,8 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
         customFields: updated
       };
       
-      // Recalculate total if value changed
-      if (field === 'value') {
+      // Recalculate total if value or payableTo changed
+      if (field === 'value' || field === 'payableTo') {
         updatedData.totalAmountDue = calculateTotalAmountDue(updatedData);
       }
       
@@ -732,7 +861,7 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
 
   // Open field editor (for new field)
   const openFieldEditor = () => {
-    setFieldEditorData({ name: '', type: 'text', value: '', width: 'half' });
+    setFieldEditorData({ name: '', type: 'text', value: '', width: 'half', payableTo: '' });
     setFieldEditorErrors({});
     setEditingFieldIndex(null);
     setShowFieldEditor(true);
@@ -745,19 +874,23 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
       name: field.name || '',
       type: field.type || 'text',
       value: field.value || '',
-      width: field.width || 'half'
+      width: field.width || 'half',
+      payableTo: field.payableTo || ''
     });
     setFieldEditorErrors({});
     setEditingFieldIndex(index);
+    // Set section based on field type - fee fields belong to fees section
+    setFieldEditorSection(field.type === 'fee' ? 'fees' : 'assessment');
     setShowFieldEditor(true);
   };
 
   // Close field editor
   const closeFieldEditor = () => {
     setShowFieldEditor(false);
-    setFieldEditorData({ name: '', type: 'text', value: '', width: 'half' });
+    setFieldEditorData({ name: '', type: 'text', value: '', width: 'half', payableTo: '' });
     setFieldEditorErrors({});
     setEditingFieldIndex(null);
+    setFieldEditorSection(null);
   };
 
   // Save field from editor
@@ -772,6 +905,7 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
       type: fieldEditorData.type,
       value: fieldEditorData.value || '',
       width: fieldEditorData.width || 'half',
+      payableTo: fieldEditorData.payableTo || '', // For fee type fields
       order: editingFieldIndex !== null ? customFields[editingFieldIndex].order : (customFields.length > 0 ? Math.max(...customFields.map(f => f.order || 0)) + 1 : 0)
     };
 
@@ -794,8 +928,8 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
         ...prev,
         customFields: updated
       };
-      // Recalculate total if it's a number/currency field
-      if (fieldData.type === 'number' && fieldData.value) {
+      // Recalculate total if it's a number/currency field or fee field
+      if ((fieldData.type === 'number' || fieldData.type === 'fee') && fieldData.value) {
         updatedData.totalAmountDue = calculateTotalAmountDue(updatedData);
       }
       return updatedData;
@@ -810,7 +944,15 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
 
   // Add new custom field (opens editor)
   const addCustomField = () => {
+    setFieldEditorSection('assessment');
     openFieldEditor();
+  };
+
+  // Add new fee field (opens editor with fee type pre-selected)
+  const addCustomFeeField = () => {
+    setFieldEditorSection('fees');
+    setFieldEditorData({ name: '', type: 'fee', value: '', width: 'half', payableTo: '' });
+    setShowFieldEditor(true);
   };
 
   // Remove custom field
@@ -835,6 +977,43 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
     });
   };
 
+  // Get all Fees section fields (standard + custom fee fields) in order
+  const getAllFeesFields = useMemo(() => {
+    const feesSection = sections.find(s => s.section === 'Fees');
+    if (!feesSection) return [];
+    
+    // Get standard fee fields (excluding totalAmountDue for now)
+    const standardFields = feesSection.fields
+      .filter(f => f.key !== 'totalAmountDue')
+      .map((field, index) => ({
+        ...field,
+        isCustom: false,
+        order: index
+      }));
+    
+    // Get custom fee fields only
+    const customFeeFields = customFields
+      .filter(field => field.type === 'fee')
+      .map((field, index) => ({
+        ...field,
+        isCustom: true,
+        key: `custom_${field.id}`,
+        label: field.name,
+        order: field.order !== undefined ? field.order : (standardFields.length + index)
+      }));
+    
+    // Combine standard fields with custom fee fields, but keep totalAmountDue at the end
+    const allFields = [...standardFields, ...customFeeFields].sort((a, b) => (a.order || 0) - (b.order || 0));
+    
+    // Add totalAmountDue at the end
+    const totalField = feesSection.fields.find(f => f.key === 'totalAmountDue');
+    if (totalField) {
+      allFields.push({ ...totalField, isCustom: false });
+    }
+    
+    return allFields;
+  }, [sections, customFields]);
+
   // Get all Assessment Information fields (standard + custom) in order
   const getAllAssessmentFields = useMemo(() => {
     const assessmentSection = sections.find(s => s.section === 'Assessment Information');
@@ -848,12 +1027,14 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
       width: formData[`${field.key}_width`] || (field.type === 'textarea' || field.key === 'totalAmountDue' ? 'full' : 'half')
     }));
     
-    // Get custom fields
-    const customFieldsWithOrder = customFields.map(field => ({
-      ...field,
-      isCustom: true,
-      width: field.width || 'half'
-    }));
+    // Get custom fields (excluding fee type fields - those belong to Fees section)
+    const customFieldsWithOrder = customFields
+      .filter(field => field.type !== 'fee')
+      .map(field => ({
+        ...field,
+        isCustom: true,
+        width: field.width || 'half'
+      }));
     
     // Combine and sort by order
     const allFields = [...standardFields, ...customFieldsWithOrder].sort((a, b) => (a.order || 0) - (b.order || 0));
@@ -958,6 +1139,67 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
     };
 
     switch (customField.type) {
+      case 'fee':
+        // Extract numeric value for input (remove $ and format)
+        let numericValue = '';
+        if (customField.value) {
+          const cleaned = customField.value.toString().replace(/[^0-9.]/g, '');
+          if (cleaned) {
+            const num = parseFloat(cleaned);
+            if (!isNaN(num)) {
+              numericValue = num.toString();
+            }
+          }
+        }
+        
+        return (
+          <div className="space-y-2">
+            <div className="flex">
+              <span className="inline-flex items-center px-3 py-2.5 border border-r-0 border-gray-200 bg-gray-50 text-gray-700 text-sm rounded-l-lg">$</span>
+              <input
+                type="number"
+                step="0.01"
+                min="0"
+                value={numericValue}
+                onChange={(e) => {
+                  const inputValue = e.target.value;
+                  if (inputValue === '' || inputValue === null || inputValue === undefined) {
+                    handleCustomFieldChange(customIndex, 'value', '');
+                    return;
+                  }
+                  const num = parseFloat(inputValue);
+                  if (!isNaN(num) && num >= 0) {
+                    handleCustomFieldChange(customIndex, 'value', `$${num.toFixed(2)}`);
+                  } else {
+                    handleCustomFieldChange(customIndex, 'value', inputValue);
+                  }
+                }}
+                onBlur={(e) => {
+                  const inputValue = e.target.value;
+                  if (inputValue && inputValue !== '') {
+                    const num = parseFloat(inputValue);
+                    if (!isNaN(num) && num >= 0) {
+                      handleCustomFieldChange(customIndex, 'value', `$${num.toFixed(2)}`);
+                    }
+                  }
+                }}
+                className="flex-1 px-3 py-2.5 border border-gray-200 rounded-r-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-gray-400 disabled:opacity-60 disabled:cursor-not-allowed"
+                placeholder="0.00"
+                disabled={isCompleted}
+              />
+            </div>
+            <select
+              value={customField.payableTo || ''}
+              onChange={(e) => handleCustomFieldChange(customIndex, 'payableTo', e.target.value)}
+              className="w-full px-3 py-2.5 bg-white border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all disabled:opacity-60 disabled:cursor-not-allowed"
+              disabled={isCompleted}
+            >
+              <option value="">Select Pay To...</option>
+              <option value="Payable to Association">Payable to Association</option>
+              <option value="Payable to Goodman Management Group">Payable to Goodman Management Group</option>
+            </select>
+          </div>
+        );
       case 'number':
         return <input type="number" step="0.01" {...commonProps} placeholder="0.00" />;
       case 'date':
@@ -969,6 +1211,14 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
     }
   };
 
+  // Check if a field is a fee field
+  const isFeeField = (fieldKey) => {
+    const vaFeeFields = ['ownerCurrentBalance', 'transferFee', 'resaleCertificateFee', 'capitalContribution', 'prepaidAssessments', 'adminFee'];
+    const ncFeeFields = ['lateFees', 'interestCharges', 'attorneyFees', 'otherCharges', 'resaleCertificateFee'];
+    const allFeeFields = [...vaFeeFields, ...ncFeeFields];
+    return allFeeFields.includes(fieldKey);
+  };
+
   // Render a single field based on its configuration
   const renderField = (field) => {
     const value = formData[field.key] || '';
@@ -976,6 +1226,9 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
     
     // Make totalAmountDue read-only and styled differently
     const isTotalField = field.key === 'totalAmountDue';
+    
+    // Check if this is a fee field (but not totalAmountDue)
+    const isFee = isFeeField(field.key) && !isTotalField;
 
     const commonProps = {
       value: value,
@@ -986,6 +1239,90 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
       disabled: isCompleted || isTotalField,
       readOnly: isTotalField,
     };
+
+    // Special handling for fee fields
+    if (isFee) {
+      const payableToKey = `${field.key}_payableTo`;
+      const payableToValue = formData[payableToKey] || '';
+      const payableToOptions = [
+        'Payable to Association',
+        'Payable to Goodman Management Group'
+      ];
+      
+      // Extract numeric value for input (remove $ and format)
+      let numericValue = '';
+      if (value) {
+        // Remove $ and any non-numeric characters except decimal point
+        const cleaned = value.toString().replace(/[^0-9.]/g, '');
+        if (cleaned) {
+          const num = parseFloat(cleaned);
+          if (!isNaN(num)) {
+            numericValue = num.toString();
+          }
+        }
+      }
+      
+      return (
+        <div className="space-y-2">
+          <div className="flex">
+            <span className="inline-flex items-center px-3 py-2.5 border border-r-0 border-gray-200 bg-gray-50 text-gray-700 text-sm rounded-l-lg">$</span>
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              value={numericValue}
+              onChange={(e) => {
+                const inputValue = e.target.value;
+                // Allow empty input for deletion
+                if (inputValue === '' || inputValue === null || inputValue === undefined) {
+                  handleInputChange(field.key, '');
+                  return;
+                }
+                // Parse the number
+                const num = parseFloat(inputValue);
+                if (!isNaN(num) && num >= 0) {
+                  // Format with $ and 2 decimal places
+                  handleInputChange(field.key, `$${num.toFixed(2)}`);
+                } else {
+                  // If invalid, just store the raw value temporarily
+                  handleInputChange(field.key, inputValue);
+                }
+              }}
+              onBlur={(e) => {
+                // Format on blur to ensure proper formatting when user leaves field
+                const inputValue = e.target.value;
+                if (inputValue && inputValue !== '') {
+                  const num = parseFloat(inputValue);
+                  if (!isNaN(num) && num >= 0) {
+                    handleInputChange(field.key, `$${num.toFixed(2)}`);
+                  }
+                }
+              }}
+              className={`flex-1 px-3 py-2.5 border border-gray-200 rounded-r-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-gray-400 disabled:opacity-60 disabled:cursor-not-allowed ${
+                hasError ? 'border-red-300 focus:border-red-500 focus:ring-red-200' : ''
+              }`}
+              placeholder="0.00"
+              disabled={isCompleted}
+            />
+          </div>
+          <select
+            value={payableToValue}
+            onChange={(e) => {
+              handleInputChange(payableToKey, e.target.value);
+            }}
+            className={`w-full px-3 py-2.5 bg-gray-50 border rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all disabled:opacity-60 disabled:cursor-not-allowed ${
+              errors[payableToKey] ? 'border-red-300 focus:border-red-500 focus:ring-red-200' : 'border-gray-200'
+            }`}
+            disabled={isCompleted}
+          >
+            <option value="">Select Pay To...</option>
+            {payableToOptions.map(option => (
+              <option key={option} value={option}>{option}</option>
+            ))}
+          </select>
+        </div>
+      );
+    }
 
     switch (field.type) {
       case 'select':
@@ -1104,10 +1441,31 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
       
       const { data: existingForm } = await query.maybeSingle();
       
+      // Ensure all payableTo values are included in formData before saving
+      const formDataToSave = { ...formData };
+      
+      // Verify payableTo fields are present for fee fields
+      const vaFeeFields = ['ownerCurrentBalance', 'transferFee', 'resaleCertificateFee', 'capitalContribution', 'prepaidAssessments', 'adminFee'];
+      const ncFeeFields = ['lateFees', 'interestCharges', 'attorneyFees', 'otherCharges', 'resaleCertificateFee'];
+      const allFeeFields = propertyState === 'VA' ? vaFeeFields : ncFeeFields;
+      
+      allFeeFields.forEach(feeKey => {
+        const payableToKey = `${feeKey}_payableTo`;
+        // If the fee has a value but no payableTo, set a default
+        if (formDataToSave[feeKey] && !formDataToSave[payableToKey]) {
+          // Set defaults based on fee type
+          if (feeKey === 'ownerCurrentBalance' || feeKey === 'capitalContribution') {
+            formDataToSave[payableToKey] = 'Payable to Association';
+          } else if (feeKey === 'transferFee' || feeKey === 'resaleCertificateFee') {
+            formDataToSave[payableToKey] = 'Payable to Goodman Management Group';
+          }
+        }
+      });
+      
       const formDataToUpsert = {
         application_id: applicationId,
         form_type: 'settlement_form',
-        form_data: formData,
+        form_data: formDataToSave,
         status: 'in_progress',
         updated_at: new Date().toISOString(),
         recipient_email: application?.submitter_email || 'admin@gmgva.com'
@@ -1183,14 +1541,35 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
       
       const { data: existingForm } = await query.maybeSingle();
 
+      // Ensure all payableTo values are included in formData before saving
+      const formDataToSave = { ...formData };
+      
+      // Verify payableTo fields are present for fee fields
+      const vaFeeFields = ['ownerCurrentBalance', 'transferFee', 'resaleCertificateFee', 'capitalContribution', 'prepaidAssessments', 'adminFee'];
+      const ncFeeFields = ['lateFees', 'interestCharges', 'attorneyFees', 'otherCharges', 'resaleCertificateFee'];
+      const allFeeFields = propertyState === 'VA' ? vaFeeFields : ncFeeFields;
+      
+      allFeeFields.forEach(feeKey => {
+        const payableToKey = `${feeKey}_payableTo`;
+        // If the fee has a value but no payableTo, set a default
+        if (formDataToSave[feeKey] && !formDataToSave[payableToKey]) {
+          // Set defaults based on fee type
+          if (feeKey === 'ownerCurrentBalance' || feeKey === 'capitalContribution') {
+            formDataToSave[payableToKey] = 'Payable to Association';
+          } else if (feeKey === 'transferFee' || feeKey === 'resaleCertificateFee') {
+            formDataToSave[payableToKey] = 'Payable to Goodman Management Group';
+          }
+        }
+      });
+      
       let formError;
       if (existingForm) {
         // Update existing form
         const { error } = await supabase
           .from('property_owner_forms')
           .update({
-            form_data: formData,
-            response_data: formData,
+            form_data: formDataToSave,
+            response_data: formDataToSave,
             status: 'completed',
             completed_at: new Date().toISOString(),
             recipient_email: application?.submitter_email || 'admin@gmgva.com'
@@ -1202,8 +1581,8 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
         const formDataToInsert = {
           application_id: applicationId,
           form_type: 'settlement_form',
-          form_data: formData,
-          response_data: formData,
+          form_data: formDataToSave,
+          response_data: formDataToSave,
           status: 'completed',
           completed_at: new Date().toISOString(),
           recipient_email: application?.submitter_email || 'admin@gmgva.com'
@@ -1403,24 +1782,40 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
             {sections && sections.length > 0 ? (
               sections.map((section, sectionIndex) => {
                 const isAssessmentSection = section.section === 'Assessment Information';
+                const isFeesSection = section.section === 'Fees';
                 return (
                   <div key={sectionIndex} className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-                    <div className="px-5 py-3 bg-emerald-50/50 border-b border-emerald-100 flex items-center justify-between">
-                      <h3 className="text-sm font-bold text-gray-800 uppercase tracking-wider">
-                        {section.section}
-                      </h3>
-                      {isAssessmentSection && !isCompleted && (
-                        <button
-                          onClick={addCustomField}
-                          type="button"
-                          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-emerald-700 bg-emerald-100 hover:bg-emerald-200 rounded-md transition-colors"
-                        >
-                          <span className="text-base">+</span>
-                          Add Field
-                        </button>
-                      )}
+                    <div className={`px-5 py-3 ${isFeesSection ? 'bg-blue-50/50 border-b border-blue-100' : 'bg-emerald-50/50 border-b border-emerald-100'} flex items-center justify-between`}>
+                      <div className="flex items-center gap-2">
+                        {isFeesSection && <DollarSign className="w-4 h-4 text-blue-600" />}
+                        <h3 className="text-sm font-bold text-gray-800 uppercase tracking-wider">
+                          {section.section}
+                        </h3>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {isAssessmentSection && !isCompleted && (
+                          <button
+                            onClick={addCustomField}
+                            type="button"
+                            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-emerald-700 bg-emerald-100 hover:bg-emerald-200 rounded-md transition-colors"
+                          >
+                            <span className="text-base">+</span>
+                            Add Field
+                          </button>
+                        )}
+                        {isFeesSection && !isCompleted && (
+                          <button
+                            onClick={addCustomFeeField}
+                            type="button"
+                            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-blue-700 bg-blue-100 hover:bg-blue-200 rounded-md transition-colors"
+                          >
+                            <DollarSign className="w-3.5 h-3.5" />
+                            Add Fee
+                          </button>
+                        )}
+                      </div>
                     </div>
-                    <div className="p-5">
+                    <div className={`p-5 ${isFeesSection ? 'bg-gradient-to-br from-blue-50/30 to-white' : ''}`}>
                       {isAssessmentSection ? (
                         // Render Assessment Information with unified drag-and-drop (only if custom fields exist)
                         (() => {
@@ -1566,6 +1961,129 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
                                   );
                                 })
                               )}
+                            </div>
+                          );
+                        })()
+                      ) : isFeesSection ? (
+                        // Render Fees section with enhanced styling (standard + custom fee fields)
+                        (() => {
+                          const hasCustomFeeFields = customFields.some(f => f.type === 'fee');
+                          const allFeesFields = hasCustomFeeFields ? getAllFeesFields : section.fields;
+                          // Filter out totalAmountDue from display (redundant with Overall Total)
+                          const fieldsWithoutTotal = allFeesFields.filter(f => f.key !== 'totalAmountDue');
+                          
+                          return (
+                            <div className="space-y-4">
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                {fieldsWithoutTotal.map((field) => {
+                                  const isCustom = field.isCustom;
+                                  const fieldKey = isCustom ? `custom_${field.id}` : field.key;
+                                  const customIndex = isCustom ? customFields.findIndex(f => f.id === field.id) : -1;
+                                  
+                                  // Create ref if it doesn't exist
+                                  if (!fieldRefs.current[fieldKey]) {
+                                    fieldRefs.current[fieldKey] = React.createRef();
+                                  }
+                                  
+                                  return (
+                                    <div 
+                                      key={fieldKey} 
+                                      ref={fieldRefs.current[fieldKey]}
+                                      className={`bg-white rounded-lg border border-blue-100 p-4 shadow-sm hover:shadow-md transition-shadow ${isCustom ? 'border-dashed' : ''}`}
+                                    >
+                                      {isCustom ? (
+                                        <>
+                                          <div className="flex items-center justify-between mb-2">
+                                            <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wider">
+                                              {field.name || 'Unnamed Field'}
+                                            </label>
+                                            <div className="flex items-center gap-2">
+                                              {!isCompleted && (
+                                                <button
+                                                  type="button"
+                                                  onClick={() => openFieldEditorForEdit(customIndex)}
+                                                  className="p-1.5 text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded transition-colors"
+                                                  title="Edit field"
+                                                >
+                                                  <FileText className="w-4 h-4" />
+                                                </button>
+                                              )}
+                                              {!isCompleted && (
+                                                <button
+                                                  type="button"
+                                                  onClick={() => removeCustomField(customIndex)}
+                                                  className="p-1.5 text-red-600 hover:text-red-800 hover:bg-red-50 rounded transition-colors"
+                                                  title="Remove field"
+                                                >
+                                                  <X className="w-4 h-4" />
+                                                </button>
+                                              )}
+                                            </div>
+                                          </div>
+                                          {renderCustomFieldInput(field, customIndex)}
+                                        </>
+                                      ) : (
+                                        <>
+                                          <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wider mb-2">
+                                            {field.label}
+                                            {field.required && <span className="text-red-500 ml-1">*</span>}
+                                          </label>
+                                          {renderField({
+                                            ...field,
+                                            className: `w-full px-3 py-2.5 bg-gray-50 border ${
+                                              errors[field.key] ? 'border-red-300 focus:border-red-500 focus:ring-red-200' : 'border-gray-200 focus:border-blue-500 focus:ring-blue-500/20'
+                                            } rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-4 transition-all placeholder:text-gray-400 disabled:opacity-60 disabled:cursor-not-allowed`
+                                          })}
+                                          {errors[field.key] && (
+                                            <p className="text-red-600 text-xs mt-1.5 flex items-center gap-1">
+                                              <AlertCircle className="w-3 h-3" />
+                                              {errors[field.key]}
+                                            </p>
+                                          )}
+                                        </>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                              {/* Fee Totals - GMG, Association, and Overall */}
+                              {(() => {
+                                const feeTotals = calculateFeeTotals(formData, propertyState);
+                                return (
+                                  <div className="space-y-3 mt-4">
+                                    {feeTotals.totalGMGNumeric > 0 && (
+                                      <div className="bg-gradient-to-r from-blue-50 to-emerald-50 rounded-lg border-2 border-blue-200 p-4">
+                                        <div className="flex items-center justify-between">
+                                          <label className="text-sm font-bold text-gray-800 uppercase tracking-wider">
+                                            Total for Goodman Management Group
+                                          </label>
+                                          <span className="text-lg font-semibold text-gray-900">{feeTotals.totalGMG}</span>
+                                        </div>
+                                      </div>
+                                    )}
+                                    {feeTotals.totalAssociationNumeric > 0 && (
+                                      <div className="bg-gradient-to-r from-blue-50 to-emerald-50 rounded-lg border-2 border-blue-200 p-4">
+                                        <div className="flex items-center justify-between">
+                                          <label className="text-sm font-bold text-gray-800 uppercase tracking-wider">
+                                            Total for Association
+                                          </label>
+                                          <span className="text-lg font-semibold text-gray-900">{feeTotals.totalAssociation}</span>
+                                        </div>
+                                      </div>
+                                    )}
+                                    {feeTotals.overallTotalNumeric > 0 && (
+                                      <div className="bg-gradient-to-r from-blue-50 to-emerald-50 rounded-lg border-2 border-blue-200 p-5">
+                                        <div className="flex items-center justify-between">
+                                          <label className="text-sm font-bold text-gray-800 uppercase tracking-wider">
+                                            Overall Total
+                                          </label>
+                                          <span className="text-xl font-bold text-gray-900">{feeTotals.overallTotal}</span>
+                                        </div>
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })()}
                             </div>
                           );
                         })()
@@ -1716,6 +2234,7 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
                   >
                     <option value="text">Text (single-line)</option>
                     <option value="number">Number (currency-compatible)</option>
+                    {fieldEditorSection !== 'assessment' && <option value="fee">Fee (with Pay To)</option>}
                     <option value="date">Date</option>
                   </select>
                   {fieldEditorErrors.type && (
@@ -1731,7 +2250,70 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
                   <label className="block text-sm font-medium text-gray-700 mb-1.5">
                     Field Value <span className="text-gray-500 text-xs">(Optional)</span>
                   </label>
-                  {fieldEditorData.type === 'number' ? (
+                  {fieldEditorData.type === 'fee' ? (
+                    <div className="space-y-2">
+                      <div className="flex">
+                        <span className="inline-flex items-center px-3 py-2 border border-r-0 border-gray-200 bg-gray-50 text-gray-700 text-sm rounded-l-lg">$</span>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          value={(() => {
+                            // Extract numeric value for input (remove $ and format)
+                            let numericValue = '';
+                            if (fieldEditorData.value) {
+                              const cleaned = fieldEditorData.value.toString().replace(/[^0-9.]/g, '');
+                              if (cleaned) {
+                                const num = parseFloat(cleaned);
+                                if (!isNaN(num)) {
+                                  numericValue = num.toString();
+                                }
+                              }
+                            }
+                            return numericValue;
+                          })()}
+                          onChange={(e) => {
+                            const inputValue = e.target.value;
+                            // Allow empty input for deletion
+                            if (inputValue === '' || inputValue === null || inputValue === undefined) {
+                              setFieldEditorData({ ...fieldEditorData, value: '' });
+                              return;
+                            }
+                            // Parse the number
+                            const num = parseFloat(inputValue);
+                            if (!isNaN(num) && num >= 0) {
+                              // Format with $ and 2 decimal places
+                              setFieldEditorData({ ...fieldEditorData, value: `$${num.toFixed(2)}` });
+                            } else {
+                              // If invalid, just store the raw value temporarily
+                              setFieldEditorData({ ...fieldEditorData, value: inputValue });
+                            }
+                          }}
+                          onBlur={(e) => {
+                            // Format on blur to ensure proper formatting when user leaves field
+                            const inputValue = e.target.value;
+                            if (inputValue && inputValue !== '') {
+                              const num = parseFloat(inputValue);
+                              if (!isNaN(num) && num >= 0) {
+                                setFieldEditorData({ ...fieldEditorData, value: `$${num.toFixed(2)}` });
+                              }
+                            }
+                          }}
+                          placeholder="0.00"
+                          className="flex-1 px-3 py-2 border border-gray-200 rounded-r-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
+                        />
+                      </div>
+                      <select
+                        value={fieldEditorData.payableTo || ''}
+                        onChange={(e) => setFieldEditorData({ ...fieldEditorData, payableTo: e.target.value })}
+                        className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
+                      >
+                        <option value="">Select Pay To...</option>
+                        <option value="Payable to Association">Payable to Association</option>
+                        <option value="Payable to Goodman Management Group">Payable to Goodman Management Group</option>
+                      </select>
+                    </div>
+                  ) : fieldEditorData.type === 'number' ? (
                     <input
                       type="number"
                       step="0.01"
@@ -2106,6 +2688,7 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
                 >
                   <option value="text">Text (single-line)</option>
                   <option value="number">Number (currency-compatible)</option>
+                  {fieldEditorSection !== 'assessment' && <option value="fee">Fee (with Pay To)</option>}
                   <option value="date">Date</option>
                 </select>
                 {fieldEditorErrors.type && (
@@ -2153,7 +2736,70 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
                 <label className="block text-sm font-medium text-gray-700 mb-1.5">
                   Field Value <span className="text-gray-500 text-xs">(Optional)</span>
                 </label>
-                {fieldEditorData.type === 'number' ? (
+                {fieldEditorData.type === 'fee' ? (
+                  <div className="space-y-2">
+                    <div className="flex">
+                      <span className="inline-flex items-center px-3 py-2 border border-r-0 border-gray-200 bg-gray-50 text-gray-700 text-sm rounded-l-lg">$</span>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={(() => {
+                          // Extract numeric value for input (remove $ and format)
+                          let numericValue = '';
+                          if (fieldEditorData.value) {
+                            const cleaned = fieldEditorData.value.toString().replace(/[^0-9.]/g, '');
+                            if (cleaned) {
+                              const num = parseFloat(cleaned);
+                              if (!isNaN(num)) {
+                                numericValue = num.toString();
+                              }
+                            }
+                          }
+                          return numericValue;
+                        })()}
+                        onChange={(e) => {
+                          const inputValue = e.target.value;
+                          // Allow empty input for deletion
+                          if (inputValue === '' || inputValue === null || inputValue === undefined) {
+                            setFieldEditorData({ ...fieldEditorData, value: '' });
+                            return;
+                          }
+                          // Parse the number
+                          const num = parseFloat(inputValue);
+                          if (!isNaN(num) && num >= 0) {
+                            // Format with $ and 2 decimal places
+                            setFieldEditorData({ ...fieldEditorData, value: `$${num.toFixed(2)}` });
+                          } else {
+                            // If invalid, just store the raw value temporarily
+                            setFieldEditorData({ ...fieldEditorData, value: inputValue });
+                          }
+                        }}
+                        onBlur={(e) => {
+                          // Format on blur to ensure proper formatting when user leaves field
+                          const inputValue = e.target.value;
+                          if (inputValue && inputValue !== '') {
+                            const num = parseFloat(inputValue);
+                            if (!isNaN(num) && num >= 0) {
+                              setFieldEditorData({ ...fieldEditorData, value: `$${num.toFixed(2)}` });
+                            }
+                          }
+                        }}
+                        placeholder="0.00"
+                        className="flex-1 px-3 py-2 border border-gray-200 rounded-r-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
+                      />
+                    </div>
+                    <select
+                      value={fieldEditorData.payableTo || ''}
+                      onChange={(e) => setFieldEditorData({ ...fieldEditorData, payableTo: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
+                    >
+                      <option value="">Select Pay To...</option>
+                      <option value="Payable to Association">Payable to Association</option>
+                      <option value="Payable to Goodman Management Group">Payable to Goodman Management Group</option>
+                    </select>
+                  </div>
+                ) : fieldEditorData.type === 'number' ? (
                   <input
                     type="number"
                     step="0.01"

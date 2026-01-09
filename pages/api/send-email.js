@@ -27,6 +27,7 @@ export default async function handler(req, res) {
           hoaName,
           submitterType,
           applicationType,
+          linkedProperties,
         } = emailData;
 
         // Validate required fields
@@ -34,6 +35,83 @@ export default async function handler(req, res) {
           return res.status(400).json({ 
             error: 'Missing required fields: applicationId, customerName, propertyAddress, customerEmail' 
           });
+        }
+
+        // Fetch linked properties for multi-community applications if not provided
+        // Note: We check for linked properties regardless of applicationType because
+        // settlement agents can have settlement_va/settlement_nc type even for multi-community properties
+        let linkedProps = linkedProperties || [];
+        if (!linkedProps || linkedProps.length === 0) {
+          try {
+            const supabase = createPagesServerClient({ req, res });
+            
+            // First, try to get from application_property_groups (for paid applications)
+            let linkedPropsData = [];
+            const { data: propertyGroups } = await supabase
+              .from('application_property_groups')
+              .select('property_name, property_location, property_id')
+              .eq('application_id', applicationId)
+              .eq('is_primary', false);
+            
+            if (propertyGroups && propertyGroups.length > 0) {
+              // Property groups exist (application has been paid)
+              linkedPropsData = propertyGroups;
+              console.log(`[EmailService] Found ${linkedPropsData.length} linked properties from property groups for application ${applicationId}`);
+            } else {
+              // Property groups don't exist yet (application not paid), fetch from linked_properties table
+              // Get the application to find the property ID and check if it's multi-community
+              const { data: application } = await supabase
+                .from('applications')
+                .select(`
+                  hoa_property_id,
+                  hoa_properties (
+                    id,
+                    is_multi_community
+                  )
+                `)
+                .eq('id', applicationId)
+                .single();
+              
+              if (application && application.hoa_property_id) {
+                const isMultiCommunity = application.hoa_properties?.is_multi_community || false;
+                
+                if (isMultiCommunity) {
+                  // Get linked properties using the RPC function
+                  const { data: linkedPropsRpc, error: rpcError } = await supabase
+                    .rpc('get_linked_properties', { property_id: application.hoa_property_id });
+                  
+                  if (rpcError) {
+                    console.warn(`[EmailService] RPC error fetching linked properties:`, rpcError);
+                  } else if (linkedPropsRpc && linkedPropsRpc.length > 0) {
+                    // Map RPC result to our expected format
+                    // RPC returns: linked_property_id, property_name, location, property_owner_email
+                    linkedPropsData = linkedPropsRpc.map(prop => ({
+                      property_name: prop.property_name,
+                      property_location: prop.location,
+                      property_id: prop.linked_property_id
+                    }));
+                    console.log(`[EmailService] Found ${linkedPropsData.length} linked properties from linked_properties table for application ${applicationId} (property_id: ${application.hoa_property_id})`);
+                  } else {
+                    console.log(`[EmailService] No linked properties found for property_id: ${application.hoa_property_id} (is_multi_community: ${isMultiCommunity})`);
+                  }
+                } else {
+                  console.log(`[EmailService] Property ${application.hoa_property_id} is not marked as multi-community`);
+                }
+              } else {
+                console.log(`[EmailService] Application ${applicationId} has no hoa_property_id`);
+              }
+            }
+            
+            linkedProps = linkedPropsData.map(prop => ({
+              property_name: prop.property_name,
+              location: prop.property_location || prop.location, // Map property_location to location for consistency
+              property_id: prop.property_id
+            }));
+            
+            console.log(`[EmailService] Total linked properties for application ${applicationId}: ${linkedProps.length}`);
+          } catch (error) {
+            console.warn('Could not fetch linked properties for application:', error.message);
+          }
         }
 
         // Wrap email sending in try-catch so errors don't interrupt the process
@@ -48,6 +126,7 @@ export default async function handler(req, res) {
             hoaName,
             submitterType,
             applicationType,
+            linkedProperties: linkedProps,
           });
         } catch (emailError) {
           console.error('Failed to send application submission email:', emailError);
