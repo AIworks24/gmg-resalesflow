@@ -263,19 +263,43 @@ const AdminResaleCertificateForm = ({
       // Load template data if available
       const templateData = applicationData.resale_template || {};
       
-      setFormData(prev => ({
-        ...prev,
-        developmentName: applicationData.hoa_properties?.name || '',
-        associationName: applicationData.hoa_properties?.name || '',
-        lotAddress: applicationData.property_address || '',
-        ...templateData,
-        ...existingData,
-        // Always override with current application-specific data
-        developmentName: applicationData.hoa_properties?.name || '',
-        associationName: applicationData.hoa_properties?.name || '',
-        lotAddress: applicationData.property_address || '',
-        datePrepared: new Date().toISOString().split('T')[0]
-      }));
+      // Deep merge function to properly merge nested objects
+      const deepMerge = (target, source) => {
+        const output = { ...target };
+        if (isObject(target) && isObject(source)) {
+          Object.keys(source).forEach(key => {
+            if (isObject(source[key])) {
+              if (!(key in target)) {
+                Object.assign(output, { [key]: source[key] });
+              } else {
+                output[key] = deepMerge(target[key], source[key]);
+              }
+            } else {
+              Object.assign(output, { [key]: source[key] });
+            }
+          });
+        }
+        return output;
+      };
+      
+      const isObject = (item) => {
+        return item && typeof item === 'object' && !Array.isArray(item);
+      };
+      
+      setFormData(prev => {
+        // First merge with template data (deep merge)
+        let merged = deepMerge(prev, templateData);
+        // Then merge with existing form data (deep merge to preserve nested structures like disclosures)
+        merged = deepMerge(merged, existingData);
+        // Finally override with current application-specific data
+        return {
+          ...merged,
+          developmentName: applicationData.hoa_properties?.name || merged.developmentName || '',
+          associationName: applicationData.hoa_properties?.name || merged.associationName || '',
+          lotAddress: applicationData.property_address || merged.lotAddress || '',
+          datePrepared: new Date().toISOString().split('T')[0]
+        };
+      });
     }
   }, [applicationData]);
 

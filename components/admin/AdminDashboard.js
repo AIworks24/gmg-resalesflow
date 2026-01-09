@@ -1308,7 +1308,10 @@ const AdminDashboard = ({ userRole }) => {
                             </div>
                             <div className='flex gap-2'>
                               <button
-                                onClick={() => {
+                                type="button"
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
                                   const inspectionForm = selectedApplication.property_owner_forms?.find(form => form.form_type === 'inspection_form');
                                   const resaleForm = selectedApplication.property_owner_forms?.find(form => form.form_type === 'resale_certificate');
                                   const formsData = {

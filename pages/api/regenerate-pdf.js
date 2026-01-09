@@ -83,6 +83,22 @@ export default async function handler(req, res) {
       }
     }
     
+    // If we still don't have form data, try fetching it directly from the database
+    if (!actualFormData || Object.keys(actualFormData).length === 0) {
+      console.log('[regenerate-pdf] No form data provided, fetching from database...');
+      const { data: formRecord } = await supabase
+        .from('property_owner_forms')
+        .select('form_data, response_data')
+        .eq('application_id', applicationId)
+        .eq('form_type', 'resale_certificate')
+        .single();
+      
+      if (formRecord) {
+        actualFormData = formRecord.form_data || formRecord.response_data || {};
+        console.log('[regenerate-pdf] Fetched form data from database');
+      }
+    }
+    
     // Fetch application and property data to enrich formData
     const { data: applicationData, error: appError } = await supabase
       .from('applications')
@@ -97,12 +113,20 @@ export default async function handler(req, res) {
     let enrichedFormData = actualFormData || {};
     
     // Debug logging for checkbox #11 (can be removed after verification)
-    if (process.env.NODE_ENV === 'development') {
-      console.log('[regenerate-pdf] Check Box11 data check:');
-      console.log('  - actualFormData.disclosures?.operatingBudget?.budgetAttached:', actualFormData?.disclosures?.operatingBudget?.budgetAttached);
-      console.log('  - type:', typeof actualFormData?.disclosures?.operatingBudget?.budgetAttached);
-      console.log('  - full operatingBudget object:', actualFormData?.disclosures?.operatingBudget);
-    }
+    console.log('[regenerate-pdf] ========== Check Box11 Debug ==========');
+    console.log('  - rawFormData keys:', rawFormData ? Object.keys(rawFormData) : 'null');
+    console.log('  - rawFormData.resaleCertificate exists:', !!rawFormData?.resaleCertificate);
+    console.log('  - actualFormData.disclosures exists:', !!actualFormData?.disclosures);
+    console.log('  - actualFormData.disclosures?.operatingBudget exists:', !!actualFormData?.disclosures?.operatingBudget);
+    console.log('  - budgetAttached value:', actualFormData?.disclosures?.operatingBudget?.budgetAttached);
+    console.log('  - budgetAttached type:', typeof actualFormData?.disclosures?.operatingBudget?.budgetAttached);
+    console.log('  - full operatingBudget object:', JSON.stringify(actualFormData?.disclosures?.operatingBudget, null, 2));
+    console.log('  - full disclosures object keys:', actualFormData?.disclosures ? Object.keys(actualFormData.disclosures) : 'no disclosures');
+    console.log('  - Sample of disclosures:', JSON.stringify({
+      contactInfoAttached: actualFormData?.disclosures?.contactInfoAttached,
+      operatingBudget: actualFormData?.disclosures?.operatingBudget
+    }, null, 2));
+    console.log('[regenerate-pdf] ========================================');
     
     if (applicationData) {
       // Helper function to get value or fallback (handles empty strings)
@@ -113,8 +137,9 @@ export default async function handler(req, res) {
       };
       
       // Enrich formData with application-level data (formData takes precedence, but empty strings should use fallback)
+      // IMPORTANT: Preserve the entire disclosures object to avoid losing checkbox values
       enrichedFormData = {
-        // Spread existing formData first to preserve all fields
+        // Spread existing formData first to preserve all fields INCLUDING disclosures
         ...actualFormData,
         // Override with enriched values (only if formData value is missing or empty)
         developmentName: getValueOrFallback(actualFormData?.developmentName, applicationData.hoa_properties?.name),
@@ -141,9 +166,15 @@ export default async function handler(req, res) {
           phone: actualFormData?.managingAgent?.phone || '',
           licenseNumber: actualFormData?.managingAgent?.licenseNumber || ''
         },
-        // Ensure disclosures object exists if missing (preserve existing)
+        // CRITICAL: Preserve the entire disclosures object - DO NOT overwrite it
+        // Only set to empty object if it doesn't exist at all
         disclosures: actualFormData?.disclosures || {}
       };
+      
+      // Debug: Verify disclosures are preserved after enrichment
+      console.log('[regenerate-pdf] After enrichment - Check Box11 data:');
+      console.log('  - enrichedFormData.disclosures?.operatingBudget?.budgetAttached:', enrichedFormData.disclosures?.operatingBudget?.budgetAttached);
+      console.log('  - type:', typeof enrichedFormData.disclosures?.operatingBudget?.budgetAttached);
       
       // Force enrichment if values are still missing (double-check)
       if (!enrichedFormData.developmentName || !enrichedFormData.associationName) {
@@ -161,7 +192,22 @@ export default async function handler(req, res) {
       console.error(`⏰ PDF generation timeout for application ${applicationId}${isPropertySpecific ? `, property: ${propertyName}` : ''}`);
     }, 30000); // 30 seconds total timeout
     
+    // Final debug before mapping
+    console.log('[regenerate-pdf] Final formData before mapping:');
+    console.log('  - enrichedFormData.disclosures?.operatingBudget?.budgetAttached:', enrichedFormData.disclosures?.operatingBudget?.budgetAttached);
+    
+    console.log('[regenerate-pdf] About to call mapFormDataToPDFFields...');
     const fields = mapFormDataToPDFFields(enrichedFormData, userTimezone);
+    console.log('[regenerate-pdf] mapFormDataToPDFFields returned', fields.length, 'fields');
+    
+    // Debug: Check if Check Box11 field was mapped correctly
+    const checkBox11Fields = fields.filter(f => f.fieldName === 'Check Box11.');
+    console.log('[regenerate-pdf] Check Box11. fields after mapping:', checkBox11Fields.length);
+    checkBox11Fields.forEach((field, idx) => {
+      console.log(`  - Field ${idx + 1}: value=${field.value}, text=${field.text}`);
+    });
+    
+    console.log('[regenerate-pdf] About to call generateAndUploadPDF...');
     
     // Generate different file paths for property-specific vs application-wide PDFs
     const outputPdfPath = isPropertySpecific 
@@ -170,7 +216,23 @@ export default async function handler(req, res) {
     
     const bucketName = 'bucket0';
 
-    const { publicURL } = await generateAndUploadPDF(fields, outputPdfPath, supabase, bucketName);
+    console.log('[regenerate-pdf] Calling generateAndUploadPDF with:');
+    console.log('  - fields count:', fields.length);
+    console.log('  - outputPdfPath:', outputPdfPath);
+    console.log('  - bucketName:', bucketName);
+    
+    let publicURL;
+    try {
+      // Bypass cache when regenerating to ensure we get the latest form data
+      // The user explicitly clicked "Regenerate", so we should always generate fresh
+      const result = await generateAndUploadPDF(fields, outputPdfPath, supabase, bucketName, null, true);
+      publicURL = result.publicURL;
+      console.log('[regenerate-pdf] generateAndUploadPDF completed successfully');
+      console.log('  - publicURL:', publicURL);
+    } catch (error) {
+      console.error('[regenerate-pdf] ERROR in generateAndUploadPDF:', error);
+      throw error;
+    }
     
     clearTimeout(operationTimeout);
 

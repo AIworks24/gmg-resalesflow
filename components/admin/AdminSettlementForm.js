@@ -520,8 +520,8 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
     const applicationData = {
       // Property Information
       propertyAddress: propertyAddress,
-      // Association Name should be the same as Property Address in settlement form
-      associationName: propertyAddress,
+      // Association Name should be the HOA property name
+      associationName: propertyManager.name || appData.hoa_properties?.name || '',
       // Only include parcelId for NC forms (don't set to undefined, just omit for VA)
       ...(effectiveState === 'NC' && { parcelId: propertyManager.parcel_id || '' }),
       

@@ -4023,9 +4023,11 @@ const AdminApplications = ({ userRole }) => {
                                                             <RefreshCw className="w-3 h-3 animate-spin" />
                                                             <span>Generating...</span>
                                                           </div>
-                                                        ) : 'Generate'}
+                                                        ) : (group.pdf_url || taskStatuses.pdf === 'completed' ? 'Regenerate' : 'Generate')}
                                                      </button>
-                                                     {selectedApplication.pdf_url && <button onClick={() => window.open(selectedApplication.pdf_url, '_blank')} className="text-xs px-2 py-1 bg-gray-100 border rounded text-gray-600">View</button>}
+                                                     {group.pdf_url && (
+                                                        <button onClick={() => window.open(group.pdf_url, '_blank')} className="px-3 py-1 text-xs font-medium bg-gray-100 border border-gray-300 rounded hover:bg-gray-200 text-gray-600">View</button>
+                                                     )}
                                                   </div>
                                                </div>
                                                 {/* Task 3 */}
@@ -4119,7 +4121,7 @@ const AdminApplications = ({ userRole }) => {
                                                     completedAt={group.pdf_completed_at}
                                                 >
                                                     <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2">
-                                                       <button onClick={() => handleGeneratePDFForProperty(selectedApplication.id, group)} disabled={generatingPDFForProperty === group.id || !canGeneratePDFForProperty(group)} className="w-full sm:w-auto px-3 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 active:bg-gray-100 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed">
+                                                       <button type="button" onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleGeneratePDFForProperty(selectedApplication.id, group); }} disabled={generatingPDFForProperty === group.id || !canGeneratePDFForProperty(group)} className="w-full sm:w-auto px-3 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 active:bg-gray-100 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed">
                                                           {generatingPDFForProperty === group.id ? (
                                                              <div className="flex items-center gap-1.5">
                                                                <RefreshCw className="w-3 h-3 animate-spin" />
@@ -4319,7 +4321,10 @@ const AdminApplications = ({ userRole }) => {
                               <TaskCard step="3" status={taskStatuses.pdf} title="Generate PDF" description="Create final PDF document" completedAt={selectedApplication.pdf_completed_at}>
                                  <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2">
                                     <button 
-                                       onClick={() => {
+                                       type="button"
+                                       onClick={(e) => {
+                                         e.preventDefault();
+                                         e.stopPropagation();
                                          const inspectionForm = selectedApplication.property_owner_forms?.find(form => form.form_type === 'inspection_form');
                                          const resaleForm = selectedApplication.property_owner_forms?.find(form => form.form_type === 'resale_certificate');
                                          handleGeneratePDF({ inspectionForm: inspectionForm?.form_data, resaleCertificate: resaleForm?.form_data }, selectedApplication.id);
