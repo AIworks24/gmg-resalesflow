@@ -97,7 +97,7 @@ async function testConnectTransfer() {
             currency: 'usd',
             product_data: {
               name: 'Test Product - Resale Certificate',
-              description: 'Standard Processing (10-15 business days)',
+              description: 'Standard Processing (15 calendar days)',
             },
             unit_amount: testAmount,
           },

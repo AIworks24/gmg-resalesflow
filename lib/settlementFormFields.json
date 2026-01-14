@@ -239,6 +239,21 @@
               "type": "text",
               "required": false,
               "placeholder": "$0.00"
+            },
+            {
+              "key": "gmgAddress",
+              "label": "Goodman Management Group Address",
+              "type": "textarea",
+              "required": false,
+              "placeholder": "4101 Cox Rd., Suite 200-11, Glen Allen, VA 23060",
+              "defaultValue": "4101 Cox Rd., Suite 200-11, Glen Allen, VA 23060"
+            },
+            {
+              "key": "associationAddress",
+              "label": "Association Address",
+              "type": "textarea",
+              "required": false,
+              "placeholder": "HOA Name (e.g., VA Property)"
             }
           ]
         },
@@ -347,6 +362,25 @@
             {
               "key": "datePaid",
               "label": "Date Paid",
+              "type": "date",
+              "required": false
+            }
+          ]
+        },
+        {
+          "section": "Comments",
+          "autoFill": false,
+          "editable": true,
+          "fields": [
+            {
+              "key": "comments",
+              "label": "Comments",
+              "type": "textarea",
+              "required": false
+            },
+            {
+              "key": "goodThroughDate",
+              "label": "This information is good through",
               "type": "date",
               "required": false
             }
@@ -597,6 +631,21 @@
               "type": "text",
               "required": false,
               "placeholder": "$0.00"
+            },
+            {
+              "key": "gmgAddress",
+              "label": "Goodman Management Group Address",
+              "type": "textarea",
+              "required": false,
+              "placeholder": "4101 Cox Rd., Suite 200-11, Glen Allen, VA 23060",
+              "defaultValue": "4101 Cox Rd., Suite 200-11, Glen Allen, VA 23060"
+            },
+            {
+              "key": "associationAddress",
+              "label": "Association Address",
+              "type": "textarea",
+              "required": false,
+              "placeholder": "HOA Name (e.g., VA Property)"
             }
           ]
         },

@@ -112,6 +112,24 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
     };
     }, [applicationId, propertyGroupId]);
 
+  // Update associationAddress when HOA property becomes available
+  useEffect(() => {
+    if (hoaProperty?.name && formData && Object.keys(formData).length > 0) {
+      // If associationAddress is empty or set to default address, update it with HOA name
+      const currentAddress = formData.associationAddress || '';
+      if (!currentAddress || 
+          currentAddress.trim() === '' || 
+          currentAddress === '4101 Cox Rd., Suite 200-11, Glen Allen, VA 23060' ||
+          currentAddress === 'Association') {
+        setFormData(prev => ({
+          ...prev,
+          associationAddress: hoaProperty.name,
+          associationName: hoaProperty.name
+        }));
+      }
+    }
+  }, [hoaProperty?.name]);
+
   // Update form data when user loads (but only if form is already initialized)
   useEffect(() => {
     if (user && formData && Object.keys(formData).length > 0) {
@@ -224,7 +242,7 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
           .from('applications')
           .select(`
             *,
-            hoa_properties(name, location, property_owner_name, property_owner_email, property_owner_phone, management_contact, phone, email)
+            hoa_properties(name, location, property_owner_name, property_owner_email, property_owner_phone, management_contact, phone, email, insurance_company_name, insurance_agent_name, insurance_agent_phone, insurance_agent_email)
           `)
           .eq('id', applicationId)
           .single(),
@@ -253,7 +271,7 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
             .from('application_property_groups')
             .select(`
               *,
-              hoa_properties(id, name, location, property_owner_name, property_owner_email, property_owner_phone, management_contact, phone, email)
+              hoa_properties(id, name, location, property_owner_name, property_owner_email, property_owner_phone, management_contact, phone, email, insurance_company_name, insurance_agent_name, insurance_agent_phone, insurance_agent_email)
             `)
             .eq('id', propertyGroupId)
             .eq('application_id', applicationId)
@@ -435,6 +453,26 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
               existingData.managerAddress = '4101 Cox Rd., Suite 200-11, Glen Allen, VA 23060';
             }
             
+            // Auto-fill default address values for fee payment instructions if not set
+            if (!existingData.gmgAddress || existingData.gmgAddress.trim() === '') {
+              existingData.gmgAddress = '4101 Cox Rd., Suite 200-11, Glen Allen, VA 23060';
+            }
+            // Association address should already be set from HOA property name above
+            // If still not set, use associationName or HOA name as fallback (NOT the physical address)
+            if (!existingData.associationAddress || existingData.associationAddress.trim() === '') {
+              existingData.associationAddress = existingData.associationName || 
+                                                propertyData?.name || 
+                                                appData.hoa_properties?.name || 
+                                                'Association';
+            }
+            // If associationAddress was set to the default address, replace it with HOA name
+            if (existingData.associationAddress === '4101 Cox Rd., Suite 200-11, Glen Allen, VA 23060') {
+              existingData.associationAddress = existingData.associationName || 
+                                                propertyData?.name || 
+                                                appData.hoa_properties?.name || 
+                                                'Association';
+            }
+            
             // Auto-fill default "Pay To" values for specific fees (only if not already set)
             if (!existingData.ownerCurrentBalance_payableTo) {
               existingData.ownerCurrentBalance_payableTo = 'Payable to Association';
@@ -462,6 +500,51 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
                 existingData[payableToKey] = existingForm.form_data[payableToKey];
               }
             });
+            
+            // For multi-community: Update association name from property group if available
+            // This ensures each property group uses its own HOA name, not the primary property's name
+            if (propertyGroupId && propertyData && propertyData.name) {
+              existingData.associationName = propertyData.name;
+            } else if (propertyData && propertyData.name) {
+              // Also update if we have property data (even without propertyGroupId)
+              existingData.associationName = propertyData.name;
+            }
+            
+            // Update Insurance Information fields from property data if they're empty
+            // This ensures insurance data is populated even when loading existing form data
+            if (propertyData) {
+              if (!existingData.insuranceCompanyName && propertyData.insurance_company_name) {
+                existingData.insuranceCompanyName = propertyData.insurance_company_name;
+              }
+              if (!existingData.insuranceAgentName && propertyData.insurance_agent_name) {
+                existingData.insuranceAgentName = propertyData.insurance_agent_name;
+              }
+              if (!existingData.insuranceAgentPhone && propertyData.insurance_agent_phone) {
+                existingData.insuranceAgentPhone = propertyData.insurance_agent_phone;
+              }
+              if (!existingData.insuranceAgentEmail && propertyData.insurance_agent_email) {
+                existingData.insuranceAgentEmail = propertyData.insurance_agent_email;
+              }
+            }
+            
+            // Auto-fill association address from HOA property name
+            // The association address should be the HOA name (e.g., "VA Property"), NOT the physical address
+            // Always override associationAddress with HOA name if available
+            if (propertyData && propertyData.name) {
+              existingData.associationAddress = propertyData.name;
+            } else if (appData.hoa_properties && appData.hoa_properties.name) {
+              existingData.associationAddress = appData.hoa_properties.name;
+            } else if (existingData.associationName) {
+              // Fallback to associationName if already set
+              existingData.associationAddress = existingData.associationName;
+            }
+            // If associationAddress is still set to the default address, replace it with HOA name
+            if (existingData.associationAddress === '4101 Cox Rd., Suite 200-11, Glen Allen, VA 23060') {
+              existingData.associationAddress = existingData.associationName || 
+                                                propertyData?.name || 
+                                                appData.hoa_properties?.name || 
+                                                'Association';
+            }
             
             // Calculate total amount due for existing data
             existingData.totalAmountDue = calculateTotalAmountDue(existingData, state);
@@ -516,12 +599,20 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
     // Get property manager details from propertyData (preferred) or hoa_properties nested object
     const propertyManager = propertyData || appData.hoa_properties || {};
     
+    // Get HOA name for association address
+    // The association address should be the HOA name (e.g., "VA Property")
+    const hoaName = propertyManager.name || appData.hoa_properties?.name || '';
+    
     // Prepare application data for auto-filling based on new JSON structure
     const applicationData = {
       // Property Information
       propertyAddress: propertyAddress,
       // Association Name should be the HOA property name
-      associationName: propertyManager.name || appData.hoa_properties?.name || '',
+      associationName: hoaName,
+      // Association Address should be the HOA property name (same as associationName), NOT the physical address
+      associationAddress: hoaName || 'Association',
+      // GMG Address - always default to company address
+      gmgAddress: '4101 Cox Rd., Suite 200-11, Glen Allen, VA 23060',
       // Only include parcelId for NC forms (don't set to undefined, just omit for VA)
       ...(effectiveState === 'NC' && { parcelId: propertyManager.parcel_id || '' }),
       
@@ -600,6 +691,21 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
     initialData.datePrepared = new Date().toISOString().split('T')[0];
     initialData.preparerSignature = userToUse?.name || managerFromProperty || '';
     initialData.preparerName = userToUse?.name || managerFromProperty || '';
+    
+    // Manually populate Insurance Information fields from property data
+    // (Insurance section has autoFill: false, so we need to set these manually)
+    if (applicationData.insuranceCompanyName) {
+      initialData.insuranceCompanyName = applicationData.insuranceCompanyName;
+    }
+    if (applicationData.insuranceAgentName) {
+      initialData.insuranceAgentName = applicationData.insuranceAgentName;
+    }
+    if (applicationData.insuranceAgentPhone) {
+      initialData.insuranceAgentPhone = applicationData.insuranceAgentPhone;
+    }
+    if (applicationData.insuranceAgentEmail) {
+      initialData.insuranceAgentEmail = applicationData.insuranceAgentEmail;
+    }
     
     // Auto-fill default "Pay To" values for specific fees (only if not already set)
     if (!initialData.ownerCurrentBalance_payableTo) {
@@ -1221,7 +1327,16 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
 
   // Render a single field based on its configuration
   const renderField = (field) => {
-    const value = formData[field.key] || '';
+    // Use formData value, or defaultValue from field config, or empty string
+    let value = formData[field.key] || field.defaultValue || '';
+    
+    // Special handling for associationAddress - if empty, try to get from HOA name
+    if (field.key === 'associationAddress' && (!value || value.trim() === '')) {
+      value = formData.associationName || 
+              hoaProperty?.name || 
+              '';
+    }
+    
     const hasError = errors[field.key];
     
     // Make totalAmountDue read-only and styled differently
@@ -1230,12 +1345,20 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
     // Check if this is a fee field (but not totalAmountDue)
     const isFee = isFeeField(field.key) && !isTotalField;
 
+    // Use provided className or build default one
+    const baseClassName = field.className || `w-full px-3 py-2.5 bg-gray-50 border rounded-lg ${field.type === 'textarea' ? 'text-base' : 'text-sm'} text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-gray-400 disabled:opacity-60 disabled:cursor-not-allowed ${
+      hasError ? 'border-red-300 focus:border-red-500 focus:ring-red-200' : 'border-gray-200'
+    } ${isTotalField ? 'bg-blue-50 font-semibold border-blue-300' : ''}`;
+    
+    // For textarea, ensure text-base is used instead of text-sm
+    const finalClassName = field.type === 'textarea' 
+      ? baseClassName.replace(/\btext-sm\b/g, 'text-base')
+      : baseClassName;
+
     const commonProps = {
       value: value,
       onChange: (e) => handleInputChange(field.key, e.target.value),
-      className: `w-full px-3 py-2.5 bg-gray-50 border rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-gray-400 disabled:opacity-60 disabled:cursor-not-allowed ${
-        hasError ? 'border-red-300 focus:border-red-500 focus:ring-red-200' : 'border-gray-200'
-      } ${isTotalField ? 'bg-blue-50 font-semibold border-blue-300' : ''}`,
+      className: finalClassName,
       disabled: isCompleted || isTotalField,
       readOnly: isTotalField,
     };

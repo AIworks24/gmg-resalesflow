@@ -311,7 +311,7 @@
       "packages": {
         "standard": {
           "price": "$317.95",
-          "timeline": "10-15 business days"
+          "timeline": "15 calendar days"
         },
         "rush": {
           "price": "$388.61 ($317.95 + $70.66)",

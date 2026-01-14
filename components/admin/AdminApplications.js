@@ -347,6 +347,13 @@ const AdminApplications = ({ userRole }) => {
     return date;
   };
 
+  // Helper function to calculate calendar days deadline (including weekends)
+  const calculateCalendarDaysDeadline = (startDate, calendarDays) => {
+    const date = new Date(startDate);
+    date.setDate(date.getDate() + calendarDays);
+    return date;
+  };
+
 
   const getDateRange = () => {
     const now = new Date();
@@ -392,10 +399,15 @@ const AdminApplications = ({ userRole }) => {
       return false;
     }
 
-    // Calculate deadline based on package type using business days
+    // Calculate deadline based on package type
+    // Rush: 5 business days, Standard: 15 calendar days (including weekends)
     const submittedDate = new Date(application.submitted_at);
-    const businessDays = application.package_type === 'rush' ? 5 : 15; // Use max for standard (10-15 days)
-    const deadline = calculateBusinessDaysDeadline(submittedDate, businessDays);
+    let deadline;
+    if (application.package_type === 'rush') {
+      deadline = calculateBusinessDaysDeadline(submittedDate, 5);
+    } else {
+      deadline = calculateCalendarDaysDeadline(submittedDate, 15);
+    }
 
     const now = new Date();
     const hoursUntilDeadline = (deadline - now) / (1000 * 60 * 60);
@@ -1844,6 +1856,33 @@ const AdminApplications = ({ userRole }) => {
     let errorMessage = 'Failed to generate PDF. Please try again.';
     
     try {
+      // Always fetch the latest form data from database to ensure we have the most recent saved data
+      // This ensures that if the user clicked "Save Progress" before regenerating, we use that saved data
+      console.log('[handleGeneratePDF] Fetching latest form data from database...');
+      const { data: latestForms, error: formsError } = await supabase
+        .from('property_owner_forms')
+        .select('form_type, form_data, response_data')
+        .eq('application_id', applicationId)
+        .in('form_type', ['inspection_form', 'resale_certificate']);
+      
+      if (formsError) {
+        console.warn('[handleGeneratePDF] Error fetching latest forms, using provided formData:', formsError);
+      } else {
+        // Use the latest data from database instead of potentially stale selectedApplication data
+        const latestInspectionForm = latestForms?.find(f => f.form_type === 'inspection_form');
+        const latestResaleForm = latestForms?.find(f => f.form_type === 'resale_certificate');
+        
+        if (latestInspectionForm || latestResaleForm) {
+          formData = {
+            inspectionForm: latestInspectionForm?.form_data || latestInspectionForm?.response_data || formData?.inspectionForm,
+            resaleCertificate: latestResaleForm?.form_data || latestResaleForm?.response_data || formData?.resaleCertificate
+          };
+          console.log('[handleGeneratePDF] Using latest form data from database');
+          console.log('[handleGeneratePDF] Resale certificate budgetAttached:', 
+            formData.resaleCertificate?.disclosures?.operatingBudget?.budgetAttached);
+        }
+      }
+      
       const response = await fetch('/api/regenerate-pdf', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2581,14 +2620,35 @@ const AdminApplications = ({ userRole }) => {
     setGeneratingPDFForProperty(group.id); // Set specific property as generating
     
     try {
-      // Get the form data for this specific property
-      // First try to get property-specific form data, then fall back to application-level
+      // Always fetch the latest form data from database to ensure we have the most recent saved data
+      // This ensures that if the user clicked "Save Progress" before regenerating, we use that saved data
+      console.log('[handleGeneratePDFForProperty] Fetching latest form data from database...');
+      
+      // First try property-specific form data from group
       let formData = group.form_data;
       
+      // If no property-specific form data, fetch the latest application-level resale certificate form data from database
       if (!formData) {
-        // If no property-specific form data, get the application-level resale certificate form data
-        const resaleForm = selectedApplication.property_owner_forms?.find(f => f.form_type === 'resale_certificate');
-        formData = resaleForm?.form_data || resaleForm?.response_data;
+        const { data: latestResaleForm, error: formError } = await supabase
+          .from('property_owner_forms')
+          .select('form_data, response_data')
+          .eq('application_id', applicationId)
+          .eq('form_type', 'resale_certificate')
+          .maybeSingle();
+        
+        if (!formError && latestResaleForm) {
+          formData = latestResaleForm.form_data || latestResaleForm.response_data;
+          console.log('[handleGeneratePDFForProperty] Using latest resale certificate form data from database');
+          console.log('[handleGeneratePDFForProperty] BudgetAttached:', 
+            formData?.disclosures?.operatingBudget?.budgetAttached);
+        } else {
+          // Fallback to selectedApplication data if database fetch fails
+          const resaleForm = selectedApplication.property_owner_forms?.find(f => f.form_type === 'resale_certificate');
+          formData = resaleForm?.form_data || resaleForm?.response_data;
+          console.warn('[handleGeneratePDFForProperty] Using selectedApplication data (database fetch failed)');
+        }
+      } else {
+        console.log('[handleGeneratePDFForProperty] Using property-specific form_data from group');
       }
       
       if (!formData) {
@@ -3051,8 +3111,12 @@ const AdminApplications = ({ userRole }) => {
                               <span className='text-gray-600'>
                                 Deadline: {(() => {
                                   const submittedDate = new Date(app.submitted_at);
-                                  const businessDays = app.package_type === 'rush' ? 5 : 15; // Use max for standard (10-15 days)
-                                  const deadline = calculateBusinessDaysDeadline(submittedDate, businessDays);
+                                  let deadline;
+                                  if (app.package_type === 'rush') {
+                                    deadline = calculateBusinessDaysDeadline(submittedDate, 5);
+                                  } else {
+                                    deadline = calculateCalendarDaysDeadline(submittedDate, 15);
+                                  }
                                   return formatDate(deadline.toISOString());
                                 })()}
                               </span>
@@ -3199,8 +3263,12 @@ const AdminApplications = ({ userRole }) => {
                           <div className='text-xs text-gray-500'>
                             Due: {(() => {
                               const submittedDate = new Date(app.submitted_at);
-                              const businessDays = app.package_type === 'rush' ? 5 : 15;
-                              const deadline = calculateBusinessDaysDeadline(submittedDate, businessDays);
+                              let deadline;
+                              if (app.package_type === 'rush') {
+                                deadline = calculateBusinessDaysDeadline(submittedDate, 5);
+                              } else {
+                                deadline = calculateCalendarDaysDeadline(submittedDate, 15);
+                              }
                               return formatDate(deadline.toISOString());
                             })()}
                           </div>

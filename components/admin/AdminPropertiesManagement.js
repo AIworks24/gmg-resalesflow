@@ -300,6 +300,10 @@ const AdminPropertiesManagement = () => {
             management_contact: formData.management_contact,
             phone: formData.phone,
             email: formData.email,
+            insurance_company_name: formData.insurance_company_name || null,
+            insurance_agent_name: formData.insurance_agent_name || null,
+            insurance_agent_phone: formData.insurance_agent_phone || null,
+            insurance_agent_email: formData.insurance_agent_email || null,
             special_requirements: formData.special_requirements,
             // is_multi_community is automatically managed by linked properties
             // When properties are linked/unlinked, it's automatically updated in the database

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
-import { Save, Send, FileText, Calendar, ArrowLeft, Building, CheckCircle, AlertTriangle, Plus, Trash2, DollarSign, Clock, Users, Home, Car, Briefcase, Flag, Sun, MessageSquare } from 'lucide-react';
+import { Save, Send, FileText, Calendar, ArrowLeft, Building, CheckCircle, AlertTriangle, Plus, Trash2, DollarSign, Clock, Users, Home, Car, Briefcase, Flag, Sun, MessageSquare, X } from 'lucide-react';
 import { useRouter } from 'next/router';
 
 const AdminResaleCertificateForm = ({ 
@@ -252,6 +252,7 @@ const AdminResaleCertificateForm = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
+  const [showNotification, setShowNotification] = useState(false);
 
   const supabase = createClientComponentClient();
 
@@ -375,10 +376,30 @@ const AdminResaleCertificateForm = ({
       if (error) throw error;
 
       setSuccess('Virginia Resale Certificate saved successfully!');
-      setTimeout(() => setSuccess(null), 3000);
+      setShowNotification(true);
+      setTimeout(() => {
+        setSuccess(null);
+        setShowNotification(false);
+      }, 3000);
+      
+      // Notify parent component to refresh application data so regenerate uses latest saved data
+      // This ensures that when user clicks "Regenerate", it uses the data we just saved
+      if (onComplete) {
+        // onComplete is typically called on form submission, but we can use it to trigger refresh
+        // However, we don't want to trigger the completion flow, so we'll handle refresh differently
+        // The regenerate function will now fetch fresh data from database, so this is handled
+      }
+      
+      console.log('[AdminResaleCertificateForm] Form saved successfully. Regenerate will fetch latest data from database.');
     } catch (err) {
       console.error('Save error:', err);
-      setError('Failed to save certificate: ' + err.message);
+      const errorMessage = 'Failed to save certificate: ' + err.message;
+      setError(errorMessage);
+      setShowNotification(true);
+      setTimeout(() => {
+        setError(null);
+        setShowNotification(false);
+      }, 5000); // Show errors longer (5 seconds)
     } finally {
       setIsSaving(false);
     }
@@ -1092,7 +1113,12 @@ const AdminResaleCertificateForm = ({
                       type="radio"
                       name="associationFees"
                       checked={!formData.disclosures.fees.hasOtherFees}
-                      onChange={(e) => handleInputChange('disclosures.fees.hasOtherFees', false)}
+                      onChange={(e) => {
+                        // Clear all fees fields when "Not Applicable" is selected
+                        handleInputChange('disclosures.fees.hasOtherFees', false);
+                        handleInputChange('disclosures.fees.otherFeesAmount', '');
+                        handleInputChange('disclosures.fees.unpaidFeesAmount', '');
+                      }}
                       className="mr-2"
                     />
                     <span>The association <strong>does not</strong> charge fees to the owner of the unit. See Appendix 5.</span>
@@ -1173,7 +1199,11 @@ const AdminResaleCertificateForm = ({
                       type="radio"
                       name="otherEntity"
                       checked={!formData.disclosures.otherEntity.isLiable}
-                      onChange={(e) => handleInputChange('disclosures.otherEntity.isLiable', false)}
+                      onChange={(e) => {
+                        // Clear all entities when "is not liable" is selected
+                        handleInputChange('disclosures.otherEntity.isLiable', false);
+                        handleInputChange('disclosures.otherEntity.entities', []);
+                      }}
                       className="mr-2"
                     />
                     <span>The owner <strong>is not</strong> liable to any other entity or facility for assessments, fees, or other charges due to ownership of the unit. See Appendix 6.</span>
@@ -1253,7 +1283,13 @@ const AdminResaleCertificateForm = ({
                       type="radio"
                       name="specialAssessments"
                       checked={!formData.disclosures.specialAssessments.hasApproved}
-                      onChange={(e) => handleInputChange('disclosures.specialAssessments.hasApproved', false)}
+                      onChange={(e) => {
+                        // Clear all special assessment fields when "Not Applicable" is selected
+                        handleInputChange('disclosures.specialAssessments.hasApproved', false);
+                        handleInputChange('disclosures.specialAssessments.approvedAmount', '');
+                        handleInputChange('disclosures.specialAssessments.approvedDueDate', '');
+                        handleInputChange('disclosures.specialAssessments.unpaidAmount', '');
+                      }}
                       className="mr-2"
                     />
                     <span>The association <strong>does not</strong> have other approved additional or special assessments due and payable to the association. See Appendix 7.</span>
@@ -1325,7 +1361,11 @@ const AdminResaleCertificateForm = ({
                       type="radio"
                       name="capitalExpenditures"
                       checked={!formData.disclosures.capitalExpenditures.hasApproved}
-                      onChange={(e) => handleInputChange('disclosures.capitalExpenditures.hasApproved', false)}
+                      onChange={(e) => {
+                        // Clear the details field when "Not Applicable" is selected
+                        handleInputChange('disclosures.capitalExpenditures.hasApproved', false);
+                        handleInputChange('disclosures.capitalExpenditures.details', '');
+                      }}
                       className="mr-2"
                     />
                     <span>The association <strong>does not</strong> have approved capital expenditures for the current and succeeding fiscal years</span>
@@ -1368,7 +1408,13 @@ const AdminResaleCertificateForm = ({
                       type="radio"
                       name="reserves"
                       checked={!formData.disclosures.reserves.hasReserves}
-                      onChange={(e) => handleInputChange('disclosures.reserves.hasReserves', false)}
+                      onChange={(e) => {
+                        // Clear all reserves fields when "Not Applicable" is selected
+                        handleInputChange('disclosures.reserves.hasReserves', false);
+                        handleInputChange('disclosures.reserves.totalAmount', '');
+                        handleInputChange('disclosures.reserves.hasDesignated', false);
+                        handleInputChange('disclosures.reserves.designatedProjects', []);
+                      }}
                       className="mr-2"
                     />
                     <span>The association <strong>does not</strong> have reserves for capital expenditures. See Appendix 9.</span>
@@ -1644,7 +1690,11 @@ const AdminResaleCertificateForm = ({
                       type="radio"
                       name="associationInsurance"
                       checked={!formData.disclosures.insurance.associationProvides}
-                      onChange={(e) => handleInputChange('disclosures.insurance.associationProvides', false)}
+                      onChange={(e) => {
+                        // Clear coverage details when "does not" is selected
+                        handleInputChange('disclosures.insurance.associationProvides', false);
+                        handleInputChange('disclosures.insurance.coverageDetails', []);
+                      }}
                       className="mr-2"
                     />
                     <span>The association <strong>does not</strong> provide insurance coverage for the benefit of the owners, including fidelity coverage. See Appendix 14.</span>
@@ -1732,7 +1782,11 @@ const AdminResaleCertificateForm = ({
                       type="radio"
                       name="ownerInsurance"
                       checked={!formData.disclosures.insurance.recommendsOwnerCoverage}
-                      onChange={(e) => handleInputChange('disclosures.insurance.recommendsOwnerCoverage', false)}
+                      onChange={(e) => {
+                        // Clear owner requirements when "does not recommend" is selected
+                        handleInputChange('disclosures.insurance.recommendsOwnerCoverage', false);
+                        handleInputChange('disclosures.insurance.ownerRequirements', '');
+                      }}
                       className="mr-2"
                     />
                     <span>The association <strong>does not</strong> recommend or require that owners obtain insurance coverage. See Appendix 14.</span>
@@ -1939,7 +1993,11 @@ const AdminResaleCertificateForm = ({
                       type="radio"
                       name="leaseholdEstates"
                       checked={!formData.disclosures.leaseholdEstates.exists}
-                      onChange={(e) => handleInputChange('disclosures.leaseholdEstates.exists', false)}
+                      onChange={(e) => {
+                        // Clear remaining term when "is not" is selected
+                        handleInputChange('disclosures.leaseholdEstates.exists', false);
+                        handleInputChange('disclosures.leaseholdEstates.remainingTerm', '');
+                      }}
                       className="mr-2"
                     />
                     <span>There <strong>is not</strong> an existing leasehold estate affecting a common area or common element in the common interest community. See Appendix 19.</span>
@@ -2840,6 +2898,38 @@ const AdminResaleCertificateForm = ({
           </div>
         </div>
       </div>
+
+      {/* Floating Notification */}
+      {showNotification && (success || error) && (
+        <div className='fixed bottom-4 right-4 z-[100] animate-in slide-in-from-bottom-2 duration-300'>
+          <div className={`
+            px-6 py-4 rounded-lg shadow-lg flex items-center gap-3 max-w-md border
+            ${success 
+              ? 'bg-green-50 border-green-200 text-green-800' 
+              : 'bg-red-50 border-red-200 text-red-800'
+            }
+          `}>
+            {success ? (
+              <CheckCircle className='w-5 h-5 flex-shrink-0' />
+            ) : (
+              <AlertTriangle className='w-5 h-5 flex-shrink-0' />
+            )}
+            <span className='text-sm font-medium'>{success || error}</span>
+            <button
+              onClick={() => {
+                setShowNotification(false);
+                setSuccess(null);
+                setError(null);
+              }}
+              className={`opacity-70 hover:opacity-100 transition-opacity ml-auto ${
+                success ? 'text-green-800' : 'text-red-800'
+              }`}
+            >
+              <X className='w-4 h-4' />
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

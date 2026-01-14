@@ -366,7 +366,7 @@ export default async function handler(req, res) {
               description += ` - Base: $${association.basePrice.toFixed(2)}, Rush: +$${association.rushFee.toFixed(2)}`;
             }
           } else {
-            description += ` (10-15 business days)`;
+            description += ` (15 calendar days)`;
           }
           
           lineItems.push({
@@ -500,11 +500,11 @@ export default async function handler(req, res) {
           // Using price_data for checkout (forced price enabled or Price ID not available)
           
           // Determine delivery time based on application type
-          let deliveryTime = packageType === 'rush' ? '5 business days' : '10-15 business days';
+          let deliveryTime = packageType === 'rush' ? '5 business days' : '15 calendar days';
           if (applicationType === 'settlement_nc' || applicationType === 'settlement_va') {
             deliveryTime = packageType === 'rush' ? '3 business days' : '14 calendar days';
           } else if (applicationType === 'lender_questionnaire') {
-            deliveryTime = packageType === 'rush' ? '5 business days' : '10-15 business days';
+            deliveryTime = packageType === 'rush' ? '5 business days' : '10 Calendar Days';
           }
           
           // For single property, use "Single Property" instead of formType

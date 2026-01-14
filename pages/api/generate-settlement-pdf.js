@@ -152,15 +152,21 @@ export default async function handler(req, res) {
       // Special handling for Assessment Information section - need to preserve order
       const isAssessmentSection = section.section === 'Assessment Information';
       
+      // Skip adding Fees section as a regular section - it will be added specially later with the table
+      const isFeesSection = section.section === 'Fees';
+      
       for (const field of section.fields) {
         const fieldKey = field.key;
         const fieldValue = formData[fieldKey];
         
-        // Skip empty/null/undefined values
-        if (!fieldValue && fieldValue !== 0 && fieldValue !== false) continue;
+        // Skip empty/null/undefined values, except for address fields and fee fields which should always be shown
+        // Fee fields should be included even if 0, so they appear in the fees table
+        const isFeeField = feeFields[propertyState].includes(fieldKey);
+        if (!fieldValue && fieldValue !== 0 && fieldValue !== false && fieldKey !== 'gmgAddress' && fieldKey !== 'associationAddress' && !isFeeField) continue;
         
         // Check if it's a fee field - add to fees section with payableTo
-        if (feeFields[propertyState].includes(fieldKey)) {
+        // Skip address fields (they're not fee fields, they'll be shown separately)
+        if (feeFields[propertyState].includes(fieldKey) && fieldKey !== 'gmgAddress' && fieldKey !== 'associationAddress') {
           // Skip totalAmountDue from the table (it will be shown separately)
           if (fieldKey !== 'totalAmountDue') {
             const payableToKey = `${fieldKey}_payableTo`;
@@ -188,24 +194,35 @@ export default async function handler(req, res) {
               }
             }
             
+            // Calculate numeric value
+            const numericValue = parseFloat((formattedValue || '').replace(/[^0-9.]/g, '')) || 0;
+            
+            // Always add fee to section (even if 0) so it appears in the table
+            // The table will show all fees, including $0.00 ones
             feesSection.fields.push({
               key: fieldKey,
               label: field.label || formatLabel(fieldKey),
-              value: formattedValue,
+              value: formattedValue || '$0.00',
               payableTo: payableToValue,
               type: 'fee',
-              numericValue: parseFloat(formattedValue.replace(/[^0-9.]/g, '')) || 0 // Store numeric value for totaling
+              numericValue: numericValue
             });
           }
           continue;
         }
         
         // Regular field - add to its section
+        // For address fields, use default value if empty
+        let displayValue = fieldValue;
+        if ((fieldKey === 'gmgAddress' || fieldKey === 'associationAddress') && !displayValue) {
+          displayValue = field.defaultValue || '4101 Cox Rd., Suite 200-11, Glen Allen, VA 23060';
+        }
+        
         // For Assessment Information, include order information
         const fieldData = {
           key: fieldKey,
           label: field.label || formatLabel(fieldKey),
-          value: formatValue(fieldValue, field.type),
+          value: formatValue(displayValue, field.type),
           type: field.type
         };
         
@@ -220,8 +237,8 @@ export default async function handler(req, res) {
         sectionFields.push(fieldData);
       }
       
-      // Only add section if it has fields
-      if (sectionFields.length > 0) {
+      // Only add section if it has fields, but skip Fees section (it will be added specially later)
+      if (sectionFields.length > 0 && !isFeesSection) {
         organizedSections.push({
           section: section.section,
           fields: sectionFields
@@ -320,6 +337,53 @@ export default async function handler(req, res) {
       organizedSections.push(feesSection);
     }
     
+    // Extract address fields from formData for payment instructions
+    const gmgAddress = formData.gmgAddress || '4101 Cox Rd., Suite 200-11, Glen Allen, VA 23060';
+    
+    // Association address should be the HOA name (e.g., "VA Property")
+    // For multi-community, try to get from property group's HOA properties if available
+    let hoaNameForAssociation = null;
+    if (propertyGroupId) {
+      // Try to get property group's HOA name
+      const { data: propertyGroup } = await supabase
+        .from('application_property_groups')
+        .select(`
+          hoa_properties(name)
+        `)
+        .eq('id', propertyGroupId)
+        .eq('application_id', applicationId)
+        .single();
+      
+      if (propertyGroup?.hoa_properties?.name) {
+        hoaNameForAssociation = propertyGroup.hoa_properties.name;
+      }
+    }
+    
+    // Use formData value first, then property group HOA name, then application HOA name, then default
+    const associationAddress = formData.associationAddress || 
+                               hoaNameForAssociation ||
+                               application.hoa_properties?.name || 
+                               '4101 Cox Rd., Suite 200-11, Glen Allen, VA 23060';
+    
+    // Calculate payment amounts for GMG and Association from fees
+    let gmgPaymentAmount = 0;
+    let associationPaymentAmount = 0;
+    
+    if (feesSection.fields.length > 0) {
+      feesSection.fields.forEach(field => {
+        if (field.type === 'fee' && field.numericValue) {
+          const payableTo = (field.payableTo || '').toLowerCase();
+          if (payableTo.includes('goodman management') || payableTo.includes('gmg')) {
+            gmgPaymentAmount += field.numericValue;
+          } else if (payableTo.includes('association')) {
+            associationPaymentAmount += field.numericValue;
+          }
+        }
+      });
+    }
+    
+    // Generate confirmation number from application ID (first 8 characters, uppercase)
+    const confirmationNumber = applicationId ? applicationId.toString().substring(0, 8).toUpperCase() : 'N/A';
 
     // Handle Assessment Information section with custom fields and proper ordering
     const assessmentSection = organizedSections.find(s => s.section === 'Assessment Information');
@@ -410,7 +474,41 @@ export default async function handler(req, res) {
     }
 
     // Convert organized sections to format expected by SettlementPdfDocument
-    const pdfSections = organizedSections.map(section => ({
+    // Define optimal section order for better document flow
+    const sectionOrder = [
+      'Property Information',
+      'Seller Information',
+      'Buyer Information',
+      'Requestor Information',
+      'Community Manager Information',
+      'Assessment Information',
+      'Fees', // Fees should come after Assessment but before other info sections
+      'Delinquency Information',
+      'Insurance Information',
+      'Closing Information',
+      'Status Information',
+      'Comments' // Always last
+    ];
+    
+    // Reorder sections according to optimal flow
+    const reorderedSections = [];
+    const sectionsMap = new Map(organizedSections.map(s => [s.section, s]));
+    
+    // Add sections in optimal order
+    sectionOrder.forEach(sectionName => {
+      const section = sectionsMap.get(sectionName);
+      if (section) {
+        reorderedSections.push(section);
+        sectionsMap.delete(sectionName);
+      }
+    });
+    
+    // Add any remaining sections that weren't in the order list (shouldn't happen, but safety)
+    sectionsMap.forEach((section) => {
+      reorderedSections.push(section);
+    });
+    
+    const pdfSections = reorderedSections.map(section => ({
       title: section.section,
       fields: section.fields.map(field => ({
         label: formatLabel(field.key, field.label),
@@ -439,7 +537,12 @@ export default async function handler(req, res) {
       sections: pdfSections,
       requestorName: formData.requestorName || application.submitter_name || '',
       requestorCompany: formData.requestorCompany || application.submitter_company || '',
-      requestorPhone: formData.requestorPhone || application.submitter_phone || ''
+      requestorPhone: formData.requestorPhone || application.submitter_phone || '',
+      gmgAddress: gmgAddress,
+      associationAddress: associationAddress,
+      gmgPaymentAmount: gmgPaymentAmount,
+      associationPaymentAmount: associationPaymentAmount,
+      confirmationNumber: confirmationNumber
     });
     
     const stream = await ReactPDF.default.renderToStream(pdfElement);

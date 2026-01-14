@@ -167,7 +167,7 @@ export default function PaymentSuccess() {
                 <p className="text-sm text-gray-600">
                   {application.package_type === 'rush' 
                     ? 'Rush processing: 5 business days'
-                    : 'Standard processing: 10-15 business days'
+                    : 'Standard processing: 15 calendar days'
                   }
                 </p>
               </div>
