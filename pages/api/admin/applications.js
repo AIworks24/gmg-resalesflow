@@ -36,7 +36,7 @@ export default async function handler(req, res) {
       search = '',
       dateStart = null,
       dateEnd = null,
-      sortBy = 'created_at',  // Default sort field
+      sortBy = 'submitted_at',  // Default sort field (booked/received date)
       sortOrder = 'desc',      // Default sort direction
       bypassCache = false     // For real-time refreshes
     } = req.query;
@@ -119,8 +119,8 @@ export default async function handler(req, res) {
     }
 
     // Apply sorting (validate sortBy to prevent SQL injection)
-    const allowedSortFields = ['created_at', 'property_address', 'status', 'submitter_name', 'application_type'];
-    const validSortBy = allowedSortFields.includes(sortBy) ? sortBy : 'created_at';
+    const allowedSortFields = ['created_at', 'submitted_at', 'property_address', 'status', 'submitter_name', 'application_type'];
+    const validSortBy = allowedSortFields.includes(sortBy) ? sortBy : 'submitted_at';
     const isAscending = sortOrder === 'asc';
 
     // For computed statuses that can be calculated server-side, we need to fetch all applications first

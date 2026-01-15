@@ -45,7 +45,7 @@ const AdminApplications = ({ userRole }) => {
 
   // Get parameters from URL query (for dashboard navigation)
   const urlStatus = router.query.status || 'all';
-  const sortBy = router.query.sortBy || 'created_at';
+  const sortBy = router.query.sortBy || 'submitted_at';  // Default to submitted_at (booked/received date)
   const sortOrder = router.query.sortOrder || 'desc';
 
   // Initialize state from URL params
