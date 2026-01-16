@@ -239,7 +239,8 @@ export default async function handler(req, res) {
           updateData.total_amount = paymentIntent.amount_total / 100; // Convert from cents
         }
         
-        const { data: updatedApplication } = await supabase
+        // First, try to update by stripe_payment_intent_id
+        let { data: updatedApplication } = await supabase
           .from('applications')
           .update(updateData)
           .eq('stripe_payment_intent_id', paymentIntent.id)
@@ -254,9 +255,36 @@ export default async function handler(req, res) {
           `)
           .single();
 
+        // If update by stripe_payment_intent_id failed, try to update by applicationId from metadata
+        if (!updatedApplication && paymentIntent.metadata?.applicationId) {
+          console.log(`[Webhook] Could not find application by stripe_payment_intent_id ${paymentIntent.id}, trying by applicationId from metadata: ${paymentIntent.metadata.applicationId}`);
+          
+          const { data: fallbackApplication } = await supabase
+            .from('applications')
+            .update(updateData)
+            .eq('id', paymentIntent.metadata.applicationId)
+            .select(`
+              id,
+              submitter_email,
+              submitter_name,
+              property_address,
+              package_type,
+              total_amount,
+              application_type
+            `)
+            .single();
+          
+          if (fallbackApplication) {
+            updatedApplication = fallbackApplication;
+            console.log(`[Webhook] Successfully updated application ${fallbackApplication.id} using applicationId from metadata`);
+          } else {
+            console.error(`[Webhook] Could not find application by applicationId ${paymentIntent.metadata.applicationId} either`);
+          }
+        }
+
         // Handle multi-community applications
-        const applicationId = paymentIntent.metadata.applicationId || updatedApplication?.id;
-        const isMultiCommunity = paymentIntent.metadata.isMultiCommunity === 'true';
+        const applicationId = paymentIntent.metadata?.applicationId || updatedApplication?.id;
+        const isMultiCommunity = paymentIntent.metadata?.isMultiCommunity === 'true';
         
         // Get receipt and send receipt email
         if (updatedApplication && updatedApplication.submitter_email) {

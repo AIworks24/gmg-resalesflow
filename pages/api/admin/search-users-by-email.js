@@ -40,15 +40,28 @@ export default async function handler(req, res) {
       return res.status(200).json({ users: [] });
     }
 
-    // Search for admin/staff/accounting users by email
-    // Only return active, non-deleted users with admin/staff/accounting roles
-    const { data: users, error: queryError } = await supabase
+    // Check if search term looks like a complete email address
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const isCompleteEmail = emailRegex.test(searchTerm);
+
+    // Build query - prioritize exact match if it's a complete email
+    let query = supabase
       .from('profiles')
       .select('id, email, first_name, last_name, role')
       .in('role', ['admin', 'staff', 'accounting'])
       .eq('active', true)
-      .is('deleted_at', null)
-      .ilike('email', `%${searchTerm}%`)
+      .is('deleted_at', null);
+
+    // For complete emails, try exact match first (case-insensitive)
+    if (isCompleteEmail) {
+      // Use ilike for case-insensitive exact match
+      query = query.ilike('email', searchTerm);
+    } else {
+      // For partial searches, use LIKE with wildcards
+      query = query.ilike('email', `%${searchTerm}%`);
+    }
+
+    const { data: users, error: queryError } = await query
       .order('email', { ascending: true })
       .limit(limitNum);
 

@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { X, User, AlertCircle, CheckCircle } from 'lucide-react';
+import { normalizeEmail } from '../../lib/emailUtils';
 
 /**
  * MultiEmailInput Component with Autocomplete
@@ -81,15 +82,17 @@ const MultiEmailInput = ({
     if (!enableAutocomplete || !email || !emailRegex.test(email.trim())) return;
 
     try {
-      const response = await fetch(`/api/admin/search-users-by-email?q=${encodeURIComponent(email.trim())}&limit=1`);
+      const normalizedInputEmail = normalizeEmail(email);
+      const response = await fetch(`/api/admin/search-users-by-email?q=${encodeURIComponent(normalizedInputEmail)}&limit=10`);
       if (response.ok) {
         const data = await response.json();
+        // Use normalizeEmail for consistent comparison (handles case, whitespace, etc.)
         const isRegistered = data.users && data.users.some(user => 
-          user.email.toLowerCase() === email.trim().toLowerCase()
+          normalizeEmail(user.email) === normalizedInputEmail
         );
         setEmailStatus(prev => ({
           ...prev,
-          [email.toLowerCase()]: isRegistered
+          [normalizedInputEmail]: isRegistered
         }));
       }
     } catch (error) {
@@ -164,7 +167,7 @@ const MultiEmailInput = ({
     if (emailToRemove) {
       setEmailStatus(prev => {
         const updated = { ...prev };
-        delete updated[emailToRemove.toLowerCase()];
+        delete updated[normalizeEmail(emailToRemove)];
         return updated;
       });
     }
@@ -273,13 +276,13 @@ const MultiEmailInput = ({
     if (!enableAutocomplete) return;
     
     emails.forEach(email => {
-      const emailLower = email.toLowerCase();
+      const normalizedEmail = normalizeEmail(email);
       // Only check if we haven't checked this email yet
-      if (email && emailStatus[emailLower] === undefined) {
+      if (email && emailStatus[normalizedEmail] === undefined) {
         checkEmailStatus(email);
       }
     });
-  }, [emails, enableAutocomplete, checkEmailStatus]); // Run when emails change
+  }, [emails, enableAutocomplete, checkEmailStatus, emailStatus]); // Run when emails change
 
   return (
     <div className={`w-full relative ${className}`}>
@@ -295,7 +298,8 @@ const MultiEmailInput = ({
       >
         {/* Email chips */}
         {emails.map((email, index) => {
-          const isRegistered = emailStatus[email.toLowerCase()];
+          const normalizedEmail = normalizeEmail(email);
+          const isRegistered = emailStatus[normalizedEmail];
           return (
             <span
               key={index}
@@ -393,7 +397,7 @@ const MultiEmailInput = ({
       )}
 
       {/* Warning for non-registered emails */}
-      {!error && emails.some(email => emailStatus[email.toLowerCase()] === false) && (
+      {!error && emails.some(email => emailStatus[normalizeEmail(email)] === false) && (
         <p className="mt-1 text-xs text-amber-600 flex items-center gap-1">
           <AlertCircle className="w-3 h-3" />
           <span>
@@ -403,7 +407,7 @@ const MultiEmailInput = ({
       )}
 
       {/* Helper text */}
-      {!error && emails.length > 0 && !emails.some(email => emailStatus[email.toLowerCase()] === false) && (
+      {!error && emails.length > 0 && !emails.some(email => emailStatus[normalizeEmail(email)] === false) && (
         <p className="mt-1 text-xs text-gray-500">
           {emails.length} email{emails.length !== 1 ? 's' : ''} added
         </p>
