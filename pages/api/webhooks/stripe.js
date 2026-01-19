@@ -93,13 +93,20 @@ export default async function handler(req, res) {
         const session = event.data.object;
         
         // Update application status - keep as pending_payment to allow user to continue the flow
+        const updateData = {
+          status: 'pending_payment',
+          payment_completed_at: new Date().toISOString(),
+          payment_status: 'completed'
+        };
+        
+        // Store the payment intent ID if available
+        if (session.payment_intent) {
+          updateData.stripe_payment_intent_id = session.payment_intent;
+        }
+        
         const { data: updatedApp } = await supabase
           .from('applications')
-          .update({
-            status: 'pending_payment',
-            payment_completed_at: new Date().toISOString(),
-            payment_status: 'completed'
-          })
+          .update(updateData)
           .eq('stripe_session_id', session.id)
           .select('id, application_type')
           .single();
@@ -228,7 +235,7 @@ export default async function handler(req, res) {
         const paymentIntent = event.data.object;
         
         // Update application status and correct total amount
-        const updateData = {
+        const paymentUpdateData = {
           status: 'payment_completed',
           payment_completed_at: new Date().toISOString(),
           stripe_payment_intent_id: paymentIntent.id
@@ -236,13 +243,13 @@ export default async function handler(req, res) {
         
         // Correct the total amount based on actual payment
         if (paymentIntent.amount_total) {
-          updateData.total_amount = paymentIntent.amount_total / 100; // Convert from cents
+          paymentUpdateData.total_amount = paymentIntent.amount_total / 100; // Convert from cents
         }
         
         // First, try to update by stripe_payment_intent_id
         let { data: updatedApplication } = await supabase
           .from('applications')
-          .update(updateData)
+          .update(paymentUpdateData)
           .eq('stripe_payment_intent_id', paymentIntent.id)
           .select(`
             id,

@@ -33,11 +33,11 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Application ID is required' });
     }
 
-    // Update the application with comments
+    // Update the application with notes (comments are stored in notes field)
     const { error } = await supabase
       .from('applications')
       .update({
-        comments: comments || null,
+        notes: comments || null,
         updated_at: new Date().toISOString()
       })
       .eq('id', applicationId);

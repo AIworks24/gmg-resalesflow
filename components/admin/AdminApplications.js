@@ -38,8 +38,12 @@ import AdminPropertyInspectionForm from './AdminPropertyInspectionForm';
 import AdminResaleCertificateForm from './AdminResaleCertificateForm';
 import AdminSettlementForm from './AdminSettlementForm';
 import AdminLayout from './AdminLayout';
+import useAdminAuthStore from '../../stores/adminAuthStore';
 
-const AdminApplications = ({ userRole }) => {
+const AdminApplications = ({ userRole: userRoleProp }) => {
+  // Get userRole from store if not provided as prop
+  const { role: userRoleFromStore } = useAdminAuthStore();
+  const userRole = userRoleProp || userRoleFromStore;
   const supabase = createClientComponentClient();
   const router = useRouter();
 
@@ -93,6 +97,9 @@ const AdminApplications = ({ userRole }) => {
   const [regeneratingGroupDocs, setRegeneratingGroupDocs] = useState(null);
   const [simplePdfReady, setSimplePdfReady] = useState(false);
   const [editingPdf, setEditingPdf] = useState(false);
+  const [showRejectModal, setShowRejectModal] = useState(false);
+  const [rejectComments, setRejectComments] = useState('');
+  const [processingReject, setProcessingReject] = useState(false);
 
   // Sync selectedStatus with URL query parameter when it changes (for dashboard navigation)
   useEffect(() => {
@@ -331,6 +338,86 @@ const AdminApplications = ({ userRole }) => {
     }, 4000); // Hide after 4 seconds
   };
 
+  // Handle reject application
+  const handleReject = async () => {
+    if (!selectedApplication) return;
+
+    if (!rejectComments.trim()) {
+      showSnackbar('Please provide a reason for rejection', 'error');
+      return;
+    }
+
+    setProcessingReject(true);
+    try {
+      const response = await fetch('/api/admin/cancel-application', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          applicationId: selectedApplication.id,
+          action: 'reject',
+          comments: rejectComments,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to reject application');
+      }
+
+      showSnackbar('Application rejected successfully. Email sent to requestor.', 'success');
+      
+      // Update selectedApplication state immediately
+      const updatedNotes = (selectedApplication.notes || '') + `\n\n--- Rejected on ${new Date().toLocaleString()} ---\n${rejectComments}`;
+      setSelectedApplication({
+        ...selectedApplication,
+        status: 'rejected',
+        notes: updatedNotes,
+        rejected_at: new Date().toISOString()
+      });
+      
+      // Optimistically update the application in the list
+      mutate(
+        (currentData) => {
+          if (!currentData?.data) return currentData;
+          return {
+            ...currentData,
+            data: currentData.data.map(app => 
+              app.id === selectedApplication.id 
+                ? { ...app, status: 'rejected', notes: updatedNotes, rejected_at: new Date().toISOString() }
+                : app
+            ),
+          };
+        },
+        { revalidate: false }
+      );
+      
+      // Close reject modal and reset state
+      setShowRejectModal(false);
+      setRejectComments('');
+      
+      // Force refresh with cache bypass to get fresh data from database
+      await forceRefreshWithBypass();
+      
+      // Refresh the selected application to ensure we have the latest data
+      if (selectedApplication.id) {
+        try {
+          await refreshSelectedApplication(selectedApplication.id);
+        } catch (refreshError) {
+          console.warn('Failed to refresh selected application after rejection:', refreshError);
+        }
+      }
+      
+    } catch (error) {
+      console.error('Error rejecting application:', error);
+      showSnackbar(error.message || 'Failed to process request. Please try again.', 'error');
+    } finally {
+      setProcessingReject(false);
+    }
+  };
+
   // Helper function to calculate business days deadline
   const calculateBusinessDaysDeadline = (startDate, businessDays) => {
     const date = new Date(startDate);
@@ -496,7 +583,34 @@ const AdminApplications = ({ userRole }) => {
     return { step: 1, text: 'Forms Required', color: 'bg-yellow-100 text-yellow-800' };
   };
 
+  // Helper function to extract rejection reason from notes
+  const getRejectionReason = (application) => {
+    if (application.status !== 'rejected' || !application.notes) {
+      return null;
+    }
+    
+    // Look for rejection reason in notes
+    // Format: "--- Rejected on {timestamp} ---\n{reason}"
+    const notes = application.notes;
+    const rejectedMatch = notes.match(/---\s*Rejected\s+on\s+[^-]+---\s*\n([\s\S]*?)(?=\n\n---|$)/i);
+    if (rejectedMatch && rejectedMatch[1]) {
+      return rejectedMatch[1].trim();
+    }
+    
+    return null;
+  };
+
   const getWorkflowStep = (application) => {
+    // Check for rejected status first
+    if (application.status === 'rejected') {
+      return { 
+        step: 0, 
+        text: 'Rejected', 
+        color: 'bg-red-50 text-red-700 border border-red-100 ring-1 ring-red-200/50',
+        icon: <XCircle className="w-3 h-3" />
+      };
+    }
+    
     // Check if this is a lender questionnaire application
     const isLenderQuestionnaire = application.application_type === 'lender_questionnaire';
     
@@ -3092,9 +3206,29 @@ const AdminApplications = ({ userRole }) => {
                       </td>
 
                       <td className='px-6 py-4 text-center'>
-                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${workflowStep.color}`}>
-                          Step {workflowStep.step}: {workflowStep.text}
-                        </span>
+                        {app.status === 'rejected' ? (
+                          <div className='group relative inline-block'>
+                            <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold shadow-sm ${workflowStep.color} cursor-help transition-all hover:scale-105`}>
+                              {workflowStep.icon}
+                              {workflowStep.text}
+                            </span>
+                            {getRejectionReason(app) && (
+                              <div className='absolute left-1/2 transform -translate-x-1/2 bottom-full mb-3 hidden group-hover:block z-[100] transition-all animate-in fade-in slide-in-from-bottom-1'>
+                                <div className='bg-gray-900/95 backdrop-blur-md text-white text-xs rounded-xl py-3 px-4 shadow-2xl border border-white/10 w-64'>
+                                  <div className='text-red-400 mb-1 font-bold uppercase tracking-tight text-[10px]'>
+                                    Rejection Reason:
+                                  </div>
+                                  <div className='text-gray-200 leading-relaxed font-medium'>{getRejectionReason(app)}</div>
+                                  <div className='absolute left-1/2 transform -translate-x-1/2 top-full w-0 h-0 border-l-[6px] border-r-[6px] border-t-[6px] border-transparent border-t-gray-900/95'></div>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${workflowStep.color}`}>
+                            Step {workflowStep.step}: {workflowStep.text}
+                          </span>
+                        )}
                       </td>
 
                       <td className='px-6 py-4 text-sm text-gray-900'>
@@ -3204,9 +3338,26 @@ const AdminApplications = ({ userRole }) => {
                         <span className='text-xs opacity-75'>{app.hoa_properties?.name || 'Unknown HOA'}</span>
                       </div>
                     </div>
-                    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${workflowStep.color}`}>
-                      Step {workflowStep.step}
-                    </span>
+                    {app.status === 'rejected' ? (
+                      <div className='group relative inline-block'>
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${workflowStep.color} cursor-help`}>
+                          {workflowStep.text}
+                        </span>
+                        {getRejectionReason(app) && (
+                          <div className='absolute left-1/2 transform -translate-x-1/2 bottom-full mb-2 hidden group-hover:block z-50'>
+                            <div className='bg-gray-900 text-white text-xs rounded-lg py-2 px-3 shadow-lg max-w-xs'>
+                              <div className='font-semibold mb-1'>Rejection Reason:</div>
+                              <div className='whitespace-normal'>{getRejectionReason(app)}</div>
+                              <div className='absolute left-1/2 transform -translate-x-1/2 top-full w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-t-gray-900'></div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${workflowStep.color}`}>
+                        Step {workflowStep.step}
+                      </span>
+                    )}
                   </div>
 
                   {/* Type Badge */}
@@ -3421,6 +3572,22 @@ const AdminApplications = ({ userRole }) => {
                   </div>
                 </div>
                 <div className='flex items-center gap-2'>
+                  {/* Reject Button - Only show if user is admin and application is not already rejected */}
+                  {userRole === 'admin' && selectedApplication && selectedApplication.status !== 'rejected' && (
+                    <button
+                      onClick={() => setShowRejectModal(true)}
+                      className='px-4 py-2 bg-red-50 border border-red-300 rounded-lg text-red-700 hover:bg-red-100 font-semibold transition-all flex items-center gap-2 text-sm'
+                    >
+                      <XCircle className='w-4 h-4' />
+                      Reject
+                    </button>
+                  )}
+                  {/* Status Badge if rejected */}
+                  {selectedApplication && selectedApplication.status === 'rejected' && (
+                    <span className='px-3 py-1.5 rounded-lg text-sm font-semibold bg-red-100 text-red-700'>
+                      Rejected
+                    </span>
+                  )}
                   <button
                     onClick={() => handleApplicationClick(selectedApplication)}
                     className='p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors'
@@ -3439,6 +3606,29 @@ const AdminApplications = ({ userRole }) => {
 
               {/* Modal Content */}
               <div className='flex-1 overflow-y-auto custom-scrollbar p-6 space-y-8 bg-gray-50/30'>
+                {/* Rejected Status Banner */}
+                {selectedApplication.status === 'rejected' && (
+                  <div className='bg-red-600 rounded-2xl p-6 text-white shadow-lg shadow-red-200 flex flex-col md:flex-row md:items-center justify-between gap-4 border border-red-700 animate-in fade-in zoom-in-95 duration-300'>
+                    <div className='flex items-center gap-4'>
+                      <div className='h-14 w-14 rounded-full bg-white/20 flex items-center justify-center backdrop-blur-sm border border-white/30'>
+                        <XCircle className='w-8 h-8 text-white' />
+                      </div>
+                      <div>
+                        <h3 className='text-xl font-bold'>Application Rejected</h3>
+                        <p className='text-red-50/90 text-sm font-medium'>
+                          This request was officially declined on {formatDateTime(selectedApplication.rejected_at || selectedApplication.updated_at)}.
+                        </p>
+                      </div>
+                    </div>
+                    {getRejectionReason(selectedApplication) && (
+                      <div className='bg-white/10 backdrop-blur-md rounded-xl p-4 md:max-w-md border border-white/10'>
+                        <span className='block text-[10px] uppercase font-black tracking-widest text-red-100 mb-1 opacity-80'>Rejection Reason:</span>
+                        <p className='text-sm italic font-medium leading-relaxed'>"{getRejectionReason(selectedApplication)}"</p>
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {/* Loading overlay */}
                 {loadingFormData && (
                   <div className='absolute inset-0 bg-white/80 backdrop-blur-sm flex items-center justify-center z-50 rounded-2xl'>
@@ -3569,57 +3759,59 @@ const AdminApplications = ({ userRole }) => {
                 </div>
                 
                 {/* Assignment Section */}
-                <div className='bg-white rounded-xl border border-gray-200 p-5 shadow-sm'>
-                   <h3 className='text-sm font-semibold text-gray-900 mb-4 flex items-center gap-2 uppercase tracking-wider'>
-                      <User className='w-4 h-4 text-gray-400' />
-                      Assignment
-                    </h3>
-                  <div className='flex items-center gap-4 bg-gray-50 p-4 rounded-lg border border-gray-100'>
-                    <div className='flex-1 max-w-md'>
-                       <label className='block text-xs font-medium text-gray-500 uppercase tracking-wider mb-2'>
-                          Assigned Staff Member
-                        </label>
-                        <div className="relative">
-                          <select
-                            value={selectedApplication.assigned_to || ''}
-                            onChange={(e) => handleAssignApplication(selectedApplication.id, e.target.value || null)}
-                            disabled={assigningApplication === selectedApplication.id}
-                            className='w-full pl-3 pr-10 py-2.5 bg-white border border-gray-300 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 appearance-none transition-all'
-                          >
-                            <option value="">Unassigned</option>
-                            {staffMembers.map((staff) => (
-                              <option key={staff.email} value={staff.email}>
-                                {staff.first_name} {staff.last_name} ({staff.role})
-                              </option>
-                            ))}
-                          </select>
-                          <ChevronDown className="w-4 h-4 text-gray-400 absolute right-3 top-1/2 transform -translate-y-1/2 pointer-events-none" />
+                {selectedApplication.status !== 'rejected' && (
+                  <div className='bg-white rounded-xl border border-gray-200 p-5 shadow-sm'>
+                    <h3 className='text-sm font-semibold text-gray-900 mb-4 flex items-center gap-2 uppercase tracking-wider'>
+                        <User className='w-4 h-4 text-gray-400' />
+                        Assignment
+                      </h3>
+                    <div className='flex items-center gap-4 bg-gray-50 p-4 rounded-lg border border-gray-100'>
+                      <div className='flex-1 max-w-md'>
+                        <label className='block text-xs font-medium text-gray-500 uppercase tracking-wider mb-2'>
+                            Assigned Staff Member
+                          </label>
+                          <div className="relative">
+                            <select
+                              value={selectedApplication.assigned_to || ''}
+                              onChange={(e) => handleAssignApplication(selectedApplication.id, e.target.value || null)}
+                              disabled={assigningApplication === selectedApplication.id}
+                              className='w-full pl-3 pr-10 py-2.5 bg-white border border-gray-300 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 appearance-none transition-all'
+                            >
+                              <option value="">Unassigned</option>
+                              {staffMembers.map((staff) => (
+                                <option key={staff.email} value={staff.email}>
+                                  {staff.first_name} {staff.last_name} ({staff.role})
+                                </option>
+                              ))}
+                            </select>
+                            <ChevronDown className="w-4 h-4 text-gray-400 absolute right-3 top-1/2 transform -translate-y-1/2 pointer-events-none" />
+                          </div>
+                      </div>
+                      
+                      {!selectedApplication.assigned_to && isLegacyApplication(selectedApplication) && (
+                        <div className='flex items-end h-full pt-6'>
+                          <button
+                              onClick={() => handleAutoAssignApplication(selectedApplication.id)}
+                              disabled={assigningApplication === selectedApplication.id}
+                              className='px-4 py-2.5 text-sm font-medium bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed'
+                            >
+                              Auto-Assign
+                            </button>
                         </div>
-                    </div>
-                    
-                    {!selectedApplication.assigned_to && isLegacyApplication(selectedApplication) && (
-                      <div className='flex items-end h-full pt-6'>
-                         <button
-                            onClick={() => handleAutoAssignApplication(selectedApplication.id)}
-                            disabled={assigningApplication === selectedApplication.id}
-                            className='px-4 py-2.5 text-sm font-medium bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed'
-                          >
-                            Auto-Assign
-                          </button>
-                      </div>
-                    )}
+                      )}
 
-                    {assigningApplication === selectedApplication.id && (
-                      <div className='flex items-center gap-2 text-blue-600 pt-6'>
-                        <RefreshCw className='w-5 h-5 animate-spin' />
-                        <span className='text-sm font-medium'>Updating...</span>
-                      </div>
-                    )}
+                      {assigningApplication === selectedApplication.id && (
+                        <div className='flex items-center gap-2 text-blue-600 pt-6'>
+                          <RefreshCw className='w-5 h-5 animate-spin' />
+                          <span className='text-sm font-medium'>Updating...</span>
+                        </div>
+                      )}
+                    </div>
                   </div>
-                </div>
+                )}
 
                 {/* Lender Questionnaire Workflow */}
-                {selectedApplication.application_type === 'lender_questionnaire' && (
+                {selectedApplication.application_type === 'lender_questionnaire' && selectedApplication.status !== 'rejected' && (
                   <div>
                     <h3 className='text-lg font-bold text-gray-900 mb-4 flex items-center gap-2'>
                       <span className="flex items-center justify-center w-6 h-6 rounded bg-indigo-100 text-indigo-600 text-xs">LQ</span>
@@ -3954,6 +4146,10 @@ const AdminApplications = ({ userRole }) => {
 
                 {/* Multi-Community Properties Section */}
                 {(() => {
+                  // Don't show tasks if application is rejected
+                  if (selectedApplication.status === 'rejected') {
+                    return null;
+                  }
                   const isMultiCommunity = selectedApplication.hoa_properties?.is_multi_community && propertyGroups.length > 1;
                   const isLenderQuestionnaire = selectedApplication.application_type === 'lender_questionnaire';
                   
@@ -4252,35 +4448,41 @@ const AdminApplications = ({ userRole }) => {
                 })()}
 
                 {/* Comments Section */}
-                <div className='bg-white rounded-xl border border-gray-200 p-5 shadow-sm'>
-                   <h3 className='text-sm font-semibold text-gray-900 mb-4 flex items-center gap-2 uppercase tracking-wider'>
-                      <MessageSquare className='w-4 h-4 text-gray-400' />
-                      Comments & Notes
-                    </h3>
-                  <div className='flex flex-col gap-3'>
-                    <textarea
-                      value={selectedApplication.comments || ''}
-                      onChange={(e) => setSelectedApplication({
-                        ...selectedApplication,
-                        comments: e.target.value
-                      })}
-                      className='w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 resize-none transition-all text-sm'
-                      rows='4'
-                      placeholder='Add notes about this application, task progress, issues, or important information...'
-                    />
-                    <div className='flex justify-end'>
-                      <button
-                        onClick={() => handleSaveComments(selectedApplication.id, selectedApplication.comments)}
-                        className='px-4 py-2 bg-gray-900 text-white rounded-lg hover:bg-gray-800 transition-colors text-sm font-medium shadow-sm'
-                      >
-                        Save Comments
-                      </button>
+                {selectedApplication.status !== 'rejected' && (
+                  <div className='bg-white rounded-xl border border-gray-200 p-5 shadow-sm'>
+                    <h3 className='text-sm font-semibold text-gray-900 mb-4 flex items-center gap-2 uppercase tracking-wider'>
+                        <MessageSquare className='w-4 h-4 text-gray-400' />
+                        Comments & Notes
+                      </h3>
+                    <div className='flex flex-col gap-3'>
+                      <textarea
+                        value={selectedApplication.notes || ''}
+                        onChange={(e) => setSelectedApplication({
+                          ...selectedApplication,
+                          notes: e.target.value
+                        })}
+                        className='w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 resize-none transition-all text-sm'
+                        rows='4'
+                        placeholder='Add notes about this application, task progress, issues, or important information...'
+                      />
+                      <div className='flex justify-end'>
+                        <button
+                          onClick={() => handleSaveComments(selectedApplication.id, selectedApplication.notes)}
+                          className='px-4 py-2 bg-gray-900 text-white rounded-lg hover:bg-gray-800 transition-colors text-sm font-medium shadow-sm'
+                        >
+                          Save Comments
+                        </button>
+                      </div>
                     </div>
                   </div>
-                </div>
+                )}
 
                 {/* Standard/Settlement Tasks (Single Property) */}
                 {(() => {
+                  // Don't show tasks if application is rejected
+                  if (selectedApplication.status === 'rejected') {
+                    return false;
+                  }
                   const isMultiCommunity = selectedApplication.hoa_properties?.is_multi_community && propertyGroups.length > 1;
                   const isLenderQuestionnaire = selectedApplication.application_type === 'lender_questionnaire';
                   return !isMultiCommunity && !isLenderQuestionnaire;
@@ -4575,6 +4777,100 @@ const AdminApplications = ({ userRole }) => {
                   onComplete={handleFormComplete}
                   isModal={true}
                 />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Reject Modal */}
+        {showRejectModal && (
+          <div className='fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-[80]'>
+            <div className='bg-white rounded-xl shadow-xl w-full max-w-md'>
+              <div className='p-6 border-b border-gray-200'>
+                <div className='flex items-center justify-between'>
+                  <h2 className='text-xl font-bold text-gray-900'>
+                    Reject Application
+                  </h2>
+                  <button
+                    onClick={() => {
+                      setShowRejectModal(false);
+                      setRejectComments('');
+                    }}
+                    className='text-gray-400 hover:text-gray-600'
+                  >
+                    <X className='w-6 h-6' />
+                  </button>
+                </div>
+              </div>
+              
+              <div className='p-6 space-y-4'>
+                <p className='text-sm text-gray-600'>
+                  Are you sure you want to reject this application? 
+                  This action will send an email notification to the requestor and resales@gmgva.com.
+                </p>
+                
+                {selectedApplication && (
+                  <div className='bg-gray-50 rounded-lg p-4 space-y-2'>
+                    <div className='text-sm'>
+                      <span className='font-medium text-gray-700'>Application ID:</span>
+                      <span className='ml-2 text-gray-900'>#{selectedApplication.id}</span>
+                    </div>
+                    <div className='text-sm'>
+                      <span className='font-medium text-gray-700'>Property:</span>
+                      <span className='ml-2 text-gray-900'>{selectedApplication.property_address}</span>
+                    </div>
+                    <div className='text-sm'>
+                      <span className='font-medium text-gray-700'>Requestor:</span>
+                      <span className='ml-2 text-gray-900'>
+                        {selectedApplication.submitter_name}
+                        {selectedApplication.submitter_email && ` (${selectedApplication.submitter_email})`}
+                      </span>
+                    </div>
+                  </div>
+                )}
+                
+                <div>
+                  <label className='block text-sm font-medium text-gray-700 mb-2'>
+                    Reason for Rejection <span className='text-red-500'>*</span>
+                  </label>
+                  <textarea
+                    value={rejectComments}
+                    onChange={(e) => setRejectComments(e.target.value)}
+                    className='w-full px-4 py-3 bg-gray-50 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 resize-none transition-all text-sm'
+                    rows='4'
+                    placeholder='Please provide a reason for rejecting this application...'
+                  />
+                </div>
+              </div>
+              
+              <div className='p-6 border-t border-gray-200 flex justify-end gap-3'>
+                <button
+                  onClick={() => {
+                    setShowRejectModal(false);
+                    setRejectComments('');
+                  }}
+                  className='px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 font-medium transition-colors'
+                  disabled={processingReject}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleReject}
+                  disabled={processingReject || !rejectComments.trim()}
+                  className='px-4 py-2 bg-red-600 text-white rounded-lg font-medium transition-colors hover:bg-red-700 disabled:bg-red-300 disabled:cursor-not-allowed flex items-center gap-2'
+                >
+                  {processingReject ? (
+                    <>
+                      <RefreshCw className='w-4 h-4 animate-spin' />
+                      Processing...
+                    </>
+                  ) : (
+                    <>
+                      <XCircle className='w-4 h-4' />
+                      Reject Application
+                    </>
+                  )}
+                </button>
               </div>
             </div>
           </div>

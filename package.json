@@ -15,7 +15,8 @@
     "supabase:stop": "supabase stop",
     "supabase:status": "supabase status",
     "supabase:reset": "supabase db reset",
-    "supabase:credentials": "node scripts/get-local-supabase-credentials.js"
+    "supabase:credentials": "node scripts/get-local-supabase-credentials.js",
+    "stripe:listen": "stripe listen --forward-to localhost:3000/api/webhooks/stripe"
   },
   "dependencies": {
     "@azure/identity": "^4.13.0",
