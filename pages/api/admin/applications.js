@@ -101,6 +101,8 @@ export default async function handler(req, res) {
     // Apply status filter
     // Note: 'completed', 'pending', 'urgent', 'ongoing', 'payment_confirmed', and 'approved' 
     // are computed statuses that use custom logic, so we'll filter after fetching for those cases
+    // 'urgent' = applications that are overdue (at/past deadline) or near deadline (within 48 hours)
+    // Deadline is based on package type: Rush = 5 business days, Standard = 15 calendar days
     const computedStatuses = ['completed', 'pending', 'urgent', 'ongoing', 'payment_confirmed', 'approved'];
     if (status !== 'all' && !computedStatuses.includes(status)) {
       query = query.eq('status', status);
@@ -256,7 +258,30 @@ export default async function handler(req, res) {
         return !isRegularApplicationCompleted(app);
       });
     } else if (status === 'urgent') {
-      // Urgent = applications that are overdue or within 24 hours of deadline (same logic as dashboard)
+      // Helper function to calculate business days deadline
+      const calculateBusinessDaysDeadline = (startDate, businessDays) => {
+        const date = new Date(startDate);
+        let daysAdded = 0;
+        
+        while (daysAdded < businessDays) {
+          date.setDate(date.getDate() + 1);
+          // Skip weekends (Saturday = 6, Sunday = 0)
+          if (date.getDay() !== 0 && date.getDay() !== 6) {
+            daysAdded++;
+          }
+        }
+        
+        return date;
+      };
+
+      // Helper function to calculate calendar days deadline (including weekends)
+      const calculateCalendarDaysDeadline = (startDate, calendarDays) => {
+        const date = new Date(startDate);
+        date.setDate(date.getDate() + calendarDays);
+        return date;
+      };
+
+      // Urgent = applications that are overdue (at/past deadline) or near deadline (within 48 hours)
       const now = new Date();
       filteredApplications = filteredApplications.filter(app => {
         // Skip completed applications (use strict completion check)
@@ -267,15 +292,20 @@ export default async function handler(req, res) {
           return false;
         }
 
-        // Calculate deadline (7 days from submission, same as dashboard)
-        const submittedDate = new Date(app.created_at);
-        const deadline = new Date(submittedDate);
-        deadline.setDate(deadline.getDate() + 7);
+        // Calculate deadline based on package type (same as dashboard)
+        // Rush: 5 business days, Standard: 15 calendar days (including weekends)
+        const submittedDate = new Date(app.submitted_at || app.created_at);
+        let deadline;
+        if (app.package_type === 'rush') {
+          deadline = calculateBusinessDaysDeadline(submittedDate, 5);
+        } else {
+          deadline = calculateCalendarDaysDeadline(submittedDate, 15);
+        }
 
         const hoursUntilDeadline = (deadline - now) / (1000 * 60 * 60);
 
-        // Urgent if overdue or within 24 hours of deadline
-        return hoursUntilDeadline < 24;
+        // Urgent if overdue (at/past deadline) or within 48 hours (2 days) of deadline
+        return hoursUntilDeadline < 48;
       });
     }
     

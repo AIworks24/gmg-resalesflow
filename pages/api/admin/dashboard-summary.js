@@ -188,6 +188,29 @@ export default async function handler(req, res) {
       new Date(app.created_at) >= todayStart
     ).length;
 
+    // Helper function to calculate business days deadline
+    const calculateBusinessDaysDeadline = (startDate, businessDays) => {
+      const date = new Date(startDate);
+      let daysAdded = 0;
+      
+      while (daysAdded < businessDays) {
+        date.setDate(date.getDate() + 1);
+        // Skip weekends (Saturday = 6, Sunday = 0)
+        if (date.getDay() !== 0 && date.getDay() !== 6) {
+          daysAdded++;
+        }
+      }
+      
+      return date;
+    };
+
+    // Helper function to calculate calendar days deadline (including weekends)
+    const calculateCalendarDaysDeadline = (startDate, calendarDays) => {
+      const date = new Date(startDate);
+      date.setDate(date.getDate() + calendarDays);
+      return date;
+    };
+
     // Deadline calculations
     const now = new Date();
     let urgentCount = 0;
@@ -203,21 +226,27 @@ export default async function handler(req, res) {
         return;
       }
 
-      // Calculate deadline (7 days from submission)
-      const submittedDate = new Date(app.created_at);
-      const deadline = new Date(submittedDate);
-      deadline.setDate(deadline.getDate() + 7);
+      // Calculate deadline based on package type
+      // Rush: 5 business days, Standard: 15 calendar days (including weekends)
+      const submittedDate = new Date(app.submitted_at || app.created_at);
+      let deadline;
+      if (app.package_type === 'rush') {
+        deadline = calculateBusinessDaysDeadline(submittedDate, 5);
+      } else {
+        deadline = calculateCalendarDaysDeadline(submittedDate, 15);
+      }
 
       const hoursUntilDeadline = (deadline - now) / (1000 * 60 * 60);
 
-      if (hoursUntilDeadline < 0) {
+      // Overdue: at deadline (0 hours) or past deadline (negative hours)
+      if (hoursUntilDeadline <= 0) {
         overdueCount++;
         urgentCount++;
-      } else if (hoursUntilDeadline < 24) {
+      } 
+      // Near deadline: within 2 days (48 hours) of due date
+      else if (hoursUntilDeadline < 48) {
         nearDeadlineCount++;
         urgentCount++;
-      } else if (hoursUntilDeadline < 48) {
-        nearDeadlineCount++;
       }
     });
 

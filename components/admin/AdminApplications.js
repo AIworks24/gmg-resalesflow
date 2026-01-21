@@ -56,6 +56,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
   const [selectedStatus, setSelectedStatus] = useState(urlStatus);
   const [selectedApplicationType, setSelectedApplicationType] = useState('all');
   const [selectedPackageType, setSelectedPackageType] = useState('all'); // 'all', 'standard', 'rush'
+  const [urgencyFilter, setUrgencyFilter] = useState('all'); // 'all', 'overdue', 'near_deadline'
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedApplication, setSelectedApplication] = useState(null);
   const [sendingEmail, setSendingEmail] = useState(false);
@@ -499,7 +500,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
     const now = new Date();
     const hoursUntilDeadline = (deadline - now) / (1000 * 60 * 60);
 
-    // Urgent if overdue or within 48 hours of deadline
+    // Urgent if overdue (at/past deadline) or within 48 hours (2 days) of deadline
     return hoursUntilDeadline < 48;
   };
 
@@ -788,7 +789,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
   // Reset to page 1 when filters change
   useEffect(() => {
     setCurrentPage(1);
-  }, [dateFilter, customDateRange, assignedToMe, selectedStatus, selectedApplicationType, selectedPackageType, searchTerm]);
+  }, [dateFilter, customDateRange, assignedToMe, selectedStatus, selectedApplicationType, selectedPackageType, urgencyFilter, searchTerm]);
 
   // Load SimplePDF script
   useEffect(() => {
@@ -990,7 +991,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
           return workflowStep.text !== 'Completed';
         });
       } else if (selectedStatus === 'urgent') {
-        // Urgent = applications that are overdue or within 24 hours of deadline (same logic as dashboard)
+        // Urgent = applications that are overdue (at/past deadline) or near deadline (within 48 hours)
         const now = new Date();
         filtered = filtered.filter(app => {
           // Skip completed applications (use workflow step to handle all app types correctly)
@@ -999,15 +1000,20 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
             return false;
           }
 
-          // Calculate deadline (7 days from submission, same as dashboard)
-          const submittedDate = new Date(app.created_at);
-          const deadline = new Date(submittedDate);
-          deadline.setDate(deadline.getDate() + 7);
+          // Calculate deadline based on package type (same as dashboard)
+          // Rush: 5 business days, Standard: 15 calendar days (including weekends)
+          const submittedDate = new Date(app.submitted_at || app.created_at);
+          let deadline;
+          if (app.package_type === 'rush') {
+            deadline = calculateBusinessDaysDeadline(submittedDate, 5);
+          } else {
+            deadline = calculateCalendarDaysDeadline(submittedDate, 15);
+          }
 
           const hoursUntilDeadline = (deadline - now) / (1000 * 60 * 60);
 
-          // Urgent if overdue or within 24 hours of deadline
-          return hoursUntilDeadline < 24;
+          // Urgent if overdue (at/past deadline) or within 48 hours (2 days) of deadline
+          return hoursUntilDeadline < 48;
         });
       } else if (selectedStatus === 'completed') {
         // Completed = check by workflow step text to handle all app types correctly
@@ -1063,6 +1069,38 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
           return !isRush;
         }
         return true;
+      });
+    }
+
+    // Apply urgency filter (overdue/near deadline)
+    if (urgencyFilter !== 'all') {
+      const now = new Date();
+      filtered = filtered.filter(app => {
+        // Skip completed applications
+        const workflowStep = getWorkflowStep(app);
+        if (workflowStep.text === 'Completed') {
+          return false;
+        }
+
+        // Calculate deadline based on package type
+        const submittedDate = new Date(app.submitted_at || app.created_at);
+        let deadline;
+        if (app.package_type === 'rush') {
+          deadline = calculateBusinessDaysDeadline(submittedDate, 5);
+        } else {
+          deadline = calculateCalendarDaysDeadline(submittedDate, 15);
+        }
+
+        const hoursUntilDeadline = (deadline - now) / (1000 * 60 * 60);
+
+        if (urgencyFilter === 'overdue') {
+          // Show only overdue applications (at or past deadline)
+          return hoursUntilDeadline <= 0;
+        } else if (urgencyFilter === 'near_deadline') {
+          // Show only near deadline applications (within 48 hours but not overdue)
+          return hoursUntilDeadline > 0 && hoursUntilDeadline < 48;
+        }
+        return false;
       });
     }
 
@@ -1142,7 +1180,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
     const paginated = filtered.slice(startIndex, startIndex + itemsPerPage);
 
     return { applications: paginated, totalCount: count };
-  }, [swrData, dateFilter, customDateRange, selectedStatus, selectedApplicationType, selectedPackageType, searchTerm, assignedToMe, userEmail, currentPage, itemsPerPage, userRole]);
+  }, [swrData, dateFilter, customDateRange, selectedStatus, selectedApplicationType, selectedPackageType, urgencyFilter, searchTerm, assignedToMe, userEmail, currentPage, itemsPerPage, userRole]);
 
   // Check if application was created before auto-assignment feature was implemented
   // Auto-assignment was implemented on 2025-01-15
@@ -3105,6 +3143,22 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
               </select>
             </div>
 
+            {/* Urgency Filter */}
+            <div className='space-y-1.5'>
+              <label className='text-xs font-semibold text-gray-500 uppercase tracking-wider'>
+                Urgency
+              </label>
+              <select
+                value={urgencyFilter}
+                onChange={(e) => setUrgencyFilter(e.target.value)}
+                className='w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all'
+              >
+                <option value='all'>All Applications</option>
+                <option value='overdue'>Overdue Only</option>
+                <option value='near_deadline'>Near Deadline Only</option>
+              </select>
+            </div>
+
           </div>
 
           </div>
@@ -3299,10 +3353,10 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
             <div className='text-center py-12'>
               <FileText className='w-12 h-12 text-gray-400 mx-auto mb-4' />
               <h3 className='text-lg font-medium text-gray-900 mb-2'>
-                {searchTerm || dateFilter !== 'all' || assignedToMe ? 'No applications found' : 'No applications yet'}
+                {searchTerm || dateFilter !== 'all' || urgencyFilter !== 'all' || assignedToMe ? 'No applications found' : 'No applications yet'}
               </h3>
               <p className='text-gray-500'>
-                {searchTerm || dateFilter !== 'all' || assignedToMe
+                {searchTerm || dateFilter !== 'all' || urgencyFilter !== 'all' || assignedToMe
                   ? 'Try adjusting your search criteria or filters'
                   : 'Applications will appear here once submitted'}
               </p>
@@ -3316,10 +3370,10 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
             <div className='bg-white rounded-xl shadow-sm border border-gray-200 p-8 text-center'>
               <FileText className='w-12 h-12 text-gray-400 mx-auto mb-4' />
               <h3 className='text-lg font-medium text-gray-900 mb-2'>
-                {searchTerm || dateFilter !== 'all' || assignedToMe ? 'No applications found' : 'No applications yet'}
+                {searchTerm || dateFilter !== 'all' || urgencyFilter !== 'all' || assignedToMe ? 'No applications found' : 'No applications yet'}
               </h3>
               <p className='text-gray-500'>
-                {searchTerm || dateFilter !== 'all' || assignedToMe
+                {searchTerm || dateFilter !== 'all' || urgencyFilter !== 'all' || assignedToMe
                   ? 'Try adjusting your search criteria or filters'
                   : 'Applications will appear here once submitted'}
               </p>
