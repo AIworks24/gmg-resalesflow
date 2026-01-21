@@ -26,13 +26,16 @@ import {
   Link,
   Unlink,
   AlertTriangle,
-  CheckCircle
+  CheckCircle,
+  Info,
+  HelpCircle
 } from 'lucide-react';
 import { 
   getLinkedProperties, 
   hasLinkedProperties, 
   linkProperties, 
-  unlinkProperties 
+  unlinkProperties,
+  updatePropertyLinkComment
 } from '../../lib/multiCommunityUtils';
 import { parseEmails, formatEmailsForStorage, validateEmails } from '../../lib/emailUtils';
 import MultiEmailInput from '../common/MultiEmailInput';
@@ -75,8 +78,11 @@ const AdminPropertiesManagement = () => {
   const [linkedProperties, setLinkedProperties] = useState([]);
   const [availableProperties, setAvailableProperties] = useState([]);
   const [selectedLinkedProperties, setSelectedLinkedProperties] = useState([]);
+  const [propertyComments, setPropertyComments] = useState({}); // Store comments for each linked property { propertyId: comment }
   const [showLinkModal, setShowLinkModal] = useState(false);
   const [linkingProperty, setLinkingProperty] = useState(null);
+  const [savingCommentId, setSavingCommentId] = useState(null); // Track which comment is being saved
+  const [savingPrimaryComment, setSavingPrimaryComment] = useState(false); // Track primary comment save
 
   // Snackbar state
   const [snackbar, setSnackbar] = useState({ show: false, message: '', type: 'success' });
@@ -106,7 +112,8 @@ const AdminPropertiesManagement = () => {
     is_multi_community: false,
     allow_public_offering: false,
     force_price_enabled: false,
-    force_price_value: null
+    force_price_value: null,
+    multi_community_comment: ''
   });
 
   const supabase = createClientComponentClient();
@@ -193,7 +200,8 @@ const AdminPropertiesManagement = () => {
       is_multi_community: false,
       allow_public_offering: false,
       force_price_enabled: false,
-      force_price_value: null
+      force_price_value: null,
+      multi_community_comment: ''
     });
     setLinkedProperties([]);
     setShowModal(true);
@@ -231,7 +239,8 @@ const AdminPropertiesManagement = () => {
       is_multi_community: actuallyMultiCommunity,
       allow_public_offering: property.allow_public_offering || false,
       force_price_enabled: property.force_price_enabled || false,
-      force_price_value: property.force_price_value || null
+      force_price_value: property.force_price_value || null,
+      multi_community_comment: property.multi_community_comment || ''
     });
     setLinkedProperties(linked);
     
@@ -279,6 +288,7 @@ const AdminPropertiesManagement = () => {
             allow_public_offering: formData.allow_public_offering || false,
             force_price_enabled: formData.force_price_enabled || false,
             force_price_value: formData.force_price_enabled ? (formData.force_price_value || null) : null,
+            multi_community_comment: formData.multi_community_comment || null,
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString()
           }])
@@ -312,6 +322,7 @@ const AdminPropertiesManagement = () => {
             allow_public_offering: formData.allow_public_offering || false,
             force_price_enabled: formData.force_price_enabled || false,
             force_price_value: formData.force_price_enabled ? (formData.force_price_value || null) : null,
+            multi_community_comment: formData.multi_community_comment || null,
             updated_at: new Date().toISOString()
           })
           .eq('id', selectedProperty.id);
@@ -579,15 +590,51 @@ const AdminPropertiesManagement = () => {
   const openLinkModal = async (property) => {
     setLinkingProperty(property);
     setSelectedLinkedProperties([]);
+    setPropertyComments({}); // Reset comments
     loadAvailableProperties();
+    
+    // Fetch the latest property data from database to ensure we have current multi_community_comment
+    try {
+      const { data: freshProperty, error: fetchError } = await supabase
+        .from('hoa_properties')
+        .select('id, name, location, multi_community_comment')
+        .eq('id', property.id)
+        .single();
+      
+      if (fetchError) {
+        console.error('Error fetching fresh property data:', fetchError);
+        // Fallback to cached property if fetch fails
+      } else if (freshProperty) {
+        // Update linkingProperty with fresh data
+        setLinkingProperty({ ...property, ...freshProperty });
+        // Update formData with the latest multi_community_comment from database
+        setFormData(prev => ({
+          ...prev,
+          multi_community_comment: freshProperty.multi_community_comment || ''
+        }));
+      }
+    } catch (error) {
+      console.error('Error fetching fresh property data:', error);
+      // Fallback to cached property if fetch fails
+    }
     
     // Load existing linked properties for this property
     try {
       const linked = await getLinkedProperties(property.id, supabase);
       setLinkedProperties(linked);
+      
+      // Load existing comments into state
+      const comments = {};
+      linked.forEach(link => {
+        if (link.relationship_comment) {
+          comments[link.linked_property_id] = link.relationship_comment;
+        }
+      });
+      setPropertyComments(comments);
     } catch (error) {
       console.error('Error loading linked properties:', error);
       setLinkedProperties([]);
+      setPropertyComments({});
     }
     
     setShowLinkModal(true);
@@ -599,6 +646,7 @@ const AdminPropertiesManagement = () => {
     try {
       // Store reference to property ID before closing modal
       const propertyIdToUpdate = linkingProperty.id;
+      const commentsToSave = { ...propertyComments }; // Capture current comments
       
       // Optimistically update the cache IMMEDIATELY to show the change right away
       if (swrData?.properties) {
@@ -615,9 +663,10 @@ const AdminPropertiesManagement = () => {
       setShowLinkModal(false);
       setLinkingProperty(null);
       setSelectedLinkedProperties([]);
+      setPropertyComments({});
       
-      // Now perform the actual database operation
-      await linkProperties(propertyIdToUpdate, selectedLinkedProperties, supabase);
+      // Now perform the actual database operation with comments
+      await linkProperties(propertyIdToUpdate, selectedLinkedProperties, supabase, commentsToSave);
       
       // Verify the database update was successful by directly querying the property
       const { data: verifiedProperty, error: verifyError } = await supabase
@@ -729,6 +778,53 @@ const AdminPropertiesManagement = () => {
       // Revert optimistic update on error by forcing a fresh fetch
       mutate();
       showSnackbar('Error linking properties: ' + error.message, 'error');
+    }
+  };
+
+  const handleUpdateComment = async (linkedPropertyId) => {
+    if (!linkingProperty) return;
+    
+    const comment = propertyComments[linkedPropertyId];
+    
+    try {
+      setSavingCommentId(linkedPropertyId);
+      
+      // Update in database
+      await updatePropertyLinkComment(linkingProperty.id, linkedPropertyId, comment, supabase);
+      
+      // Reload linked properties to get updated data
+      const linked = await getLinkedProperties(linkingProperty.id, supabase);
+      setLinkedProperties(linked);
+      
+      showSnackbar('Comment saved successfully.', 'success');
+    } catch (error) {
+      console.error('Error updating comment:', error);
+      showSnackbar('Error saving comment: ' + error.message, 'error');
+    } finally {
+      setSavingCommentId(null);
+    }
+  };
+
+  const handleUpdatePrimaryComment = async () => {
+    if (!linkingProperty) return;
+    
+    try {
+      setSavingPrimaryComment(true);
+      
+      // Update in database
+      const { error } = await supabase
+        .from('hoa_properties')
+        .update({ multi_community_comment: formData.multi_community_comment || null })
+        .eq('id', linkingProperty.id);
+      
+      if (error) throw error;
+      
+      showSnackbar('Primary property comment saved successfully.', 'success');
+    } catch (error) {
+      console.error('Error saving primary comment:', error);
+      showSnackbar('Error saving primary comment: ' + error.message, 'error');
+    } finally {
+      setSavingPrimaryComment(false);
     }
   };
 
@@ -1620,102 +1716,230 @@ const AdminPropertiesManagement = () => {
 
         {/* Property Linking Modal */}
         {showLinkModal && linkingProperty && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-            <div className="bg-white rounded-lg max-w-2xl w-full max-h-[80vh] overflow-y-auto p-6">
-              <div className="flex justify-between items-center mb-4">
-                <h2 className="text-lg font-semibold">
-                  Link Properties for {linkingProperty.name}
-                </h2>
+          <div className="fixed inset-0 bg-gray-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 transition-all duration-300">
+            <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] flex flex-col overflow-hidden animate-in fade-in zoom-in duration-200">
+              {/* Modal Header */}
+              <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-white sticky top-0 z-10">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-green-50 rounded-lg">
+                    <Users className="w-5 h-5 text-green-600" />
+                  </div>
+                  <div>
+                    <h2 className="text-xl font-bold text-gray-900 leading-tight">
+                      Multi-Community Setup
+                    </h2>
+                    <p className="text-sm text-gray-500 font-medium">
+                      Managing <span className="text-green-600 font-bold">{linkingProperty.name}</span>
+                    </p>
+                  </div>
+                </div>
                 <button
                   onClick={() => setShowLinkModal(false)}
-                  className="text-gray-400 hover:text-gray-600"
+                  className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-full transition-colors"
                 >
-                  <X className="w-5 h-5" />
+                  <X className="w-6 h-6" />
                 </button>
               </div>
 
-              <div className="mb-4">
-                <p className="text-sm text-gray-600 mb-4">
-                  Select properties that should be automatically included when users select "{linkingProperty.name}".
-                  These properties will generate additional transactions and documents.
-                  <strong className="block mt-2 text-blue-600">Note: Linking properties will automatically enable multi-community status for this property.</strong>
-                </p>
-
-                {/* Current linked properties */}
-                {linkedProperties.length > 0 && (
-                  <div className="mb-4">
-                    <h3 className="text-sm font-medium text-gray-700 mb-2">Currently Linked Properties:</h3>
+              {/* Modal Body */}
+              <div className="flex-1 overflow-y-auto p-6 space-y-8">
+                {/* 1. Primary Property Section */}
+                <section>
+                  <div className="flex items-center gap-2 mb-4">
+                    <div className="w-1 h-6 bg-green-500 rounded-full"></div>
+                    <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wider">Primary Property Details</h3>
+                  </div>
+                  
+                  <div className="bg-green-50/30 border border-green-100 rounded-xl p-5">
+                    <div className="flex items-center justify-between mb-4">
+                      <div className="flex items-center gap-2">
+                        <Building className="w-5 h-5 text-green-600" />
+                        <span className="font-bold text-gray-900">{linkingProperty.name}</span>
+                      </div>
+                      <span className="px-2 py-0.5 bg-green-100 text-green-700 rounded text-[10px] font-bold uppercase">Primary Account</span>
+                    </div>
+                    
                     <div className="space-y-2">
+                      <label className="text-xs font-bold text-gray-600 flex items-center gap-1">
+                        <Info className="w-3.5 h-3.5 text-green-600" />
+                        Explanation for Requestors
+                      </label>
+                      <div className="flex gap-2">
+                        <textarea
+                          value={formData.multi_community_comment || ''}
+                          onChange={(e) => setFormData({...formData, multi_community_comment: e.target.value})}
+                          placeholder="Explain this property's role to the user..."
+                          className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 min-h-[80px] resize-none"
+                        />
+                        <button
+                          onClick={handleUpdatePrimaryComment}
+                          disabled={savingPrimaryComment}
+                          className="self-end p-3 bg-green-600 text-white rounded-lg hover:bg-green-700 shadow-sm transition-all disabled:opacity-50"
+                          title="Save Comment"
+                        >
+                          {savingPrimaryComment ? (
+                            <RefreshCw className="w-5 h-5 animate-spin" />
+                          ) : (
+                            <Save className="w-5 h-5" />
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </section>
+
+                {/* 2. Linked Properties Section */}
+                <section>
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center gap-2">
+                      <div className="w-1 h-6 bg-blue-500 rounded-full"></div>
+                      <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wider">Linked Properties</h3>
+                    </div>
+                    <span className="text-xs font-bold text-gray-500 bg-gray-100 px-2 py-1 rounded-md">
+                      {linkedProperties.length} Connected
+                    </span>
+                  </div>
+
+                  {linkedProperties.length > 0 ? (
+                    <div className="space-y-4">
                       {linkedProperties.map((linked) => (
-                        <div key={linked.linked_property_id} className="flex items-center justify-between p-2 bg-gray-50 rounded-md">
-                          <div>
-                            <span className="text-sm font-medium text-gray-900">{linked.property_name}</span>
-                            <span className="text-sm text-gray-500 ml-2">({linked.location})</span>
+                        <div key={linked.linked_property_id} className="bg-white border border-gray-200 rounded-xl p-4 hover:border-blue-300 transition-all shadow-sm">
+                          <div className="flex items-center justify-between mb-4">
+                            <div className="flex items-center gap-3">
+                              <div className="p-2 bg-blue-50 rounded-lg">
+                                <Building className="w-4 h-4 text-blue-600" />
+                              </div>
+                              <div>
+                                <h4 className="text-sm font-bold text-gray-900">{linked.property_name}</h4>
+                                <p className="text-[11px] text-gray-500 font-medium italic">{linked.location}</p>
+                              </div>
+                            </div>
+                            <button
+                              onClick={() => handleUnlinkProperty(linkingProperty.id, linked.linked_property_id)}
+                              className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all"
+                              title="Unlink"
+                            >
+                              <Unlink className="w-4 h-4" />
+                            </button>
                           </div>
-                          <button
-                            onClick={() => handleUnlinkProperty(linkingProperty.id, linked.linked_property_id)}
-                            className="text-red-600 hover:text-red-800"
-                            title="Unlink Property"
-                          >
-                            <Unlink className="w-4 h-4" />
-                          </button>
+                          
+                          <div className="flex gap-2">
+                            <textarea
+                              value={propertyComments[linked.linked_property_id] || ''}
+                              onChange={(e) => setPropertyComments(prev => ({
+                                ...prev,
+                                [linked.linked_property_id]: e.target.value
+                              }))}
+                              placeholder="Relationship details..."
+                              className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 min-h-[60px] resize-none"
+                            />
+                            <button
+                              onClick={() => handleUpdateComment(linked.linked_property_id)}
+                              disabled={savingCommentId === linked.linked_property_id}
+                              className="self-end p-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-all disabled:opacity-50"
+                              title="Save Relationship Detail"
+                            >
+                              {savingCommentId === linked.linked_property_id ? (
+                                <RefreshCw className="w-4 h-4 animate-spin" />
+                              ) : (
+                                <Save className="w-4 h-4" />
+                              )}
+                            </button>
+                          </div>
                         </div>
                       ))}
                     </div>
-                  </div>
-                )}
+                  ) : (
+                    <div className="bg-gray-50 border border-dashed border-gray-300 rounded-xl p-8 text-center">
+                      <p className="text-sm text-gray-500 font-medium">No other properties linked yet.</p>
+                    </div>
+                  )}
+                </section>
 
-                {/* Available properties to link */}
-                <div>
-                  <h3 className="text-sm font-medium text-gray-700 mb-2">Available Properties to Link:</h3>
-                  <div className="max-h-60 overflow-y-auto border border-gray-200 rounded-md">
-                    {availableProperties
-                      .filter(prop => {
-                        // Don't show the property itself
-                        if (prop.id === linkingProperty.id) return false;
-                        // Don't show properties that are already linked
-                        const isAlreadyLinked = linkedProperties.some(linked => linked.linked_property_id === prop.id);
-                        return !isAlreadyLinked;
-                      })
-                      .map((property) => (
-                        <div key={property.id} className="flex items-center p-3 hover:bg-gray-50">
-                          <input
-                            type="checkbox"
-                            id={`link-${property.id}`}
-                            checked={selectedLinkedProperties.includes(property.id)}
-                            onChange={(e) => {
-                              if (e.target.checked) {
-                                setSelectedLinkedProperties([...selectedLinkedProperties, property.id]);
-                              } else {
-                                setSelectedLinkedProperties(selectedLinkedProperties.filter(id => id !== property.id));
-                              }
-                            }}
-                            className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
-                          />
-                          <label htmlFor={`link-${property.id}`} className="ml-3 flex-1 cursor-pointer">
-                            <div className="text-sm font-medium text-gray-900">{property.name}</div>
-                            <div className="text-sm text-gray-500">{property.location}</div>
-                          </label>
-                        </div>
-                      ))}
+                {/* 3. Add New Connections Section */}
+                <section className="bg-gray-50 -mx-6 -mb-6 p-6 border-t border-gray-100">
+                  <div className="flex items-center gap-2 mb-4">
+                    <div className="w-1 h-6 bg-purple-500 rounded-full"></div>
+                    <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wider">Link New Properties</h3>
                   </div>
-                </div>
+
+                  <div className="space-y-4">
+                    <div className="relative">
+                      <Search className="w-4 h-4 absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
+                      <input
+                        type="text"
+                        placeholder="Search for a property to link..."
+                        className="w-full pl-10 pr-4 py-2 text-sm border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500 shadow-sm"
+                        onChange={(e) => {
+                          // Simple local filter logic could go here if needed
+                        }}
+                      />
+                    </div>
+
+                    <div className="max-h-60 overflow-y-auto border border-gray-200 rounded-xl bg-white">
+                      {availableProperties
+                        .filter(prop => prop.id !== linkingProperty.id && !linkedProperties.some(l => l.linked_property_id === prop.id))
+                        .length > 0 ? (
+                          availableProperties
+                            .filter(prop => prop.id !== linkingProperty.id && !linkedProperties.some(l => l.linked_property_id === prop.id))
+                            .map((property) => {
+                              const isSelected = selectedLinkedProperties.includes(property.id);
+                              return (
+                                <div 
+                                  key={property.id}
+                                  onClick={() => {
+                                    if (isSelected) {
+                                      setSelectedLinkedProperties(selectedLinkedProperties.filter(id => id !== property.id));
+                                    } else {
+                                      setSelectedLinkedProperties([...selectedLinkedProperties, property.id]);
+                                    }
+                                  }}
+                                  className={`p-3 border-b border-gray-50 last:border-0 flex items-center justify-between cursor-pointer hover:bg-purple-50 transition-colors ${isSelected ? 'bg-purple-50' : ''}`}
+                                >
+                                  <div className="flex items-center gap-3">
+                                    <div className={`p-1.5 rounded-md ${isSelected ? 'bg-purple-600 text-white' : 'bg-gray-100 text-gray-400'}`}>
+                                      <Building className="w-4 h-4" />
+                                    </div>
+                                    <div>
+                                      <p className="text-sm font-bold text-gray-900">{property.name}</p>
+                                      <p className="text-[11px] text-gray-500">{property.location}</p>
+                                    </div>
+                                  </div>
+                                  <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center transition-all ${isSelected ? 'bg-purple-600 border-purple-600' : 'border-gray-200'}`}>
+                                    {isSelected && <CheckCircle className="w-4 h-4 text-white" />}
+                                  </div>
+                                </div>
+                              );
+                            })
+                        ) : (
+                          <div className="p-6 text-center text-sm text-gray-500 italic">
+                            No additional properties found to link.
+                          </div>
+                        )}
+                    </div>
+
+                    {selectedLinkedProperties.length > 0 && (
+                      <div className="animate-in slide-in-from-bottom-2 duration-300">
+                        <button
+                          onClick={handleLinkProperties}
+                          className="w-full py-3 bg-purple-600 text-white rounded-xl font-bold shadow-lg shadow-purple-100 hover:bg-purple-700 active:scale-95 transition-all flex items-center justify-center gap-2"
+                        >
+                          <Link className="w-4 h-4" />
+                          Link {selectedLinkedProperties.length} Selected Properties
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </section>
               </div>
 
-              <div className="flex justify-end gap-3 pt-4 border-t">
+              {/* Modal Footer */}
+              <div className="px-6 py-4 border-t border-gray-100 flex justify-end">
                 <button
                   onClick={() => setShowLinkModal(false)}
-                  className="px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50"
+                  className="px-6 py-2 text-sm font-bold text-gray-600 hover:bg-gray-50 rounded-lg transition-all"
                 >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleLinkProperties}
-                  disabled={selectedLinkedProperties.length === 0}
-                  className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-                >
-                  <Link className="w-4 h-4" />
-                  Link {selectedLinkedProperties.length} Properties
+                  Close
                 </button>
               </div>
             </div>

@@ -6,6 +6,13 @@ import {
   validateFormData as validateFormDataHelper 
 } from '../../lib/settlementFormFieldsLoader';
 
+// Helper function to format property address with unit number
+const formatPropertyAddress = (address, unitNumber) => {
+  if (!address) return '';
+  if (!unitNumber || unitNumber === 'N/A' || unitNumber.trim() === '') return address;
+  return `${address} ${unitNumber}`;
+};
+
 // Utility functions (moved from pricingUtils to avoid module issues)
 const getPropertyState = (location) => {
   if (!location) return null;
@@ -593,8 +600,11 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
     // Use provided state or fallback to component state
     const effectiveState = stateToUse || propertyState || 'VA';
     
-    // Get property address (without unit number concatenation)
-    const propertyAddress = (appData.property_address || '').trim();
+    // Get property address with unit number if available
+    const propertyAddress = formatPropertyAddress(
+      (appData.property_address || '').trim(),
+      appData.unit_number
+    );
     
     // Get property manager details from propertyData (preferred) or hoa_properties nested object
     const propertyManager = propertyData || appData.hoa_properties || {};
@@ -1882,7 +1892,7 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
                 <div>
                   <div className="mb-3">
                     <span className="block text-xs font-medium text-gray-500 mb-1">Property Address</span>
-                    <span className="font-medium text-gray-900">{application?.property_address || 'N/A'}</span>
+                    <span className="font-medium text-gray-900">{formatPropertyAddress(application?.property_address, application?.unit_number) || 'N/A'}</span>
                   </div>
                   <div className="mb-3">
                     <span className="block text-xs font-medium text-gray-500 mb-1">HOA</span>

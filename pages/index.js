@@ -40,6 +40,9 @@ import {
   X,
   UserPlus,
   InfoIcon,
+  Info,
+  Link,
+  AlertTriangle,
   Trash2,
   Briefcase,
   ChevronDown,
@@ -81,6 +84,12 @@ const getForcedPriceSync = (property) => {
 // Force price ONLY applies when submitterType is 'builder' AND public offering is NOT requested
 const shouldApplyForcedPrice = (submitterType, publicOffering = false) => {
   return submitterType === 'builder' && !publicOffering;
+};
+
+// Helper function to clean property name (remove "Property" suffix)
+const cleanPropertyName = (name) => {
+  if (!name) return name;
+  return name.replace(/\s+Property$/i, '').trim();
 };
 
 // Helper function to calculate total amount
@@ -328,8 +337,8 @@ const HOASelectionStep = React.memo(
           // Calculate pricing for multi-community
           const pricing = await calculateMultiCommunityPricing(hoa.id, formData.packageType || 'standard', 'standard', null, formData.submitterType, formData.publicOffering);
           
-          // Generate notification
-          const notification = generateMultiCommunityNotification(hoa.id, linked, pricing);
+          // Generate notification with actual property name
+          const notification = generateMultiCommunityNotification(hoa.id, linked, pricing, hoa.name);
           setMultiCommunityNotification(notification);
         } catch (error) {
           console.error('Error loading multi-community data:', error);
@@ -380,7 +389,7 @@ const HOASelectionStep = React.memo(
               setLinkedProperties(linked);
               
               const pricing = await calculateMultiCommunityPricing(selectedHOA.id, formData.packageType || 'standard', 'standard', null, formData.submitterType, formData.publicOffering);
-              const notification = generateMultiCommunityNotification(selectedHOA.id, linked, pricing);
+              const notification = generateMultiCommunityNotification(selectedHOA.id, linked, pricing, selectedHOA.name);
               setMultiCommunityNotification(notification);
             } catch (error) {
               console.error('Error restoring multi-community data:', error);
@@ -494,61 +503,139 @@ const HOASelectionStep = React.memo(
         </div>
 
         {/* Multi-Community Notification (no pricing on this step) */}
-        {multiCommunityNotification && (
-          <div className={`p-3 sm:p-4 rounded-lg border ${
-            multiCommunityNotification.showWarning 
-              ? 'bg-blue-50 border-blue-200' 
-              : 'bg-yellow-50 border-yellow-200'
-          }`}>
-            <div className='flex items-start'>
-              <AlertCircle className={`h-4 w-4 sm:h-5 sm:w-5 mt-0.5 mr-2 flex-shrink-0 ${
-                multiCommunityNotification.showWarning 
-                  ? 'text-blue-600' 
-                  : 'text-yellow-600'
-              }`} />
-              <div className='flex-1 min-w-0'>
-                <h4 className={`text-sm sm:text-base font-medium ${
-                  multiCommunityNotification.showWarning 
-                    ? 'text-blue-900' 
-                    : 'text-yellow-900'
-                }`}>
-                  Multi-Community Association Detected
-                </h4>
-                <p className={`text-xs sm:text-sm mt-1 ${
-                  multiCommunityNotification.showWarning 
-                    ? 'text-blue-700' 
-                    : 'text-yellow-700'
-                }`}>
-                  Your property is part of a Master Association. Additional documents and fees will be included.
-                </p>
+        {(multiCommunityNotification || (() => {
+          // First try exact match, then try cleaned name match
+          const selectedHOA = (hoaProperties || []).find(hoa => {
+            // Exact match first (most reliable)
+            if (hoa.name === formData.hoaProperty) return true;
+            // Fallback to cleaned name match
+            const hoaName = cleanPropertyName(hoa.name);
+            const formPropName = cleanPropertyName(formData.hoaProperty);
+            return hoaName === formPropName && hoaName !== '' && formPropName !== '';
+          });
+          // Only show disclosure if property found AND has a non-empty comment
+          if (!selectedHOA) return false;
+          const comment = selectedHOA.multi_community_comment?.trim();
+          return comment && comment.length > 0;
+        })()) && (
+          <div className="bg-white border-l-4 border-blue-600 rounded-xl shadow-sm overflow-hidden animate-in fade-in slide-in-from-top-4 duration-500 mb-6">
+            <div className="p-5 sm:p-6">
+              <div className="flex items-start gap-4">
+                <div className="p-2 bg-blue-50 rounded-lg flex-shrink-0">
+                  <Info className="w-5 h-5 text-blue-600" />
+                </div>
+                
+                <div className="flex-1 text-left">
+                  <h4 className="text-base font-bold text-gray-900">
+                    {multiCommunityNotification ? 'Important: Multi-Community Association' : 'Important Property Information'}
+                  </h4>
+                  <p className="text-sm text-gray-600 mt-1">
+                    {multiCommunityNotification 
+                      ? 'Your resale package will automatically include documents from the following related associations:' 
+                      : 'Please review the following information regarding this property:'
+                    }
+                  </p>
+                  
+                  {multiCommunityNotification && multiCommunityNotification.details && multiCommunityNotification.details.associations && (
+                    <div className="mt-4 space-y-3">
+                      {multiCommunityNotification.details.associations.map((association, index) => {
+                        const linkedProp = linkedProperties.find(lp => {
+                          // Match by exact name or cleaned name
+                          const lpName = cleanPropertyName(lp.property_name);
+                          const assocName = cleanPropertyName(association.name);
+                          return lp.property_name === association.name || lpName === assocName;
+                        });
+                        
+                        // For primary property, find the selected HOA by matching formData.hoaProperty
+                        // Try both exact match and cleaned name match
+                        const selectedHOA = (hoaProperties || []).find(hoa => {
+                          const hoaName = cleanPropertyName(hoa.name);
+                          const formPropName = cleanPropertyName(formData.hoaProperty);
+                          return hoa.name === formData.hoaProperty || hoaName === formPropName;
+                        });
+                        
+                        const primaryComment = association.isPrimary && selectedHOA && selectedHOA.multi_community_comment;
+                        const hasComment = linkedProp && linkedProp.relationship_comment;
+                        const displayComment = (association.isPrimary ? primaryComment : (hasComment ? linkedProp.relationship_comment : null))?.trim();
+                        
+                        return (
+                          <div key={index} className={`flex flex-col ${index !== multiCommunityNotification.details.associations.length - 1 ? 'border-b border-gray-100 pb-3' : ''}`}>
+                            <div className="flex items-center gap-2">
+                              <div className={`w-1.5 h-1.5 rounded-full ${association.isPrimary ? 'bg-green-500' : 'bg-blue-500'}`}></div>
+                              <span className="text-sm font-bold text-gray-900">
+                                {cleanPropertyName(association.name)}
+                                {association.isPrimary && <span className="ml-2 text-[9px] tracking-widest text-green-700 bg-green-100 px-2 py-0.5 rounded-md uppercase font-black border border-green-200">Primary</span>}
+                              </span>
+                            </div>
+                            {displayComment && (
+                              <div className="ml-4 mt-1.5 flex items-start gap-2 animate-in fade-in slide-in-from-top-1 duration-300">
+                                <div className="mt-1.5 w-1 h-1 rounded-full bg-gray-300 flex-shrink-0"></div>
+                                <p className="text-[13px] text-gray-700 font-medium leading-relaxed">
+                                  {displayComment}
+                                </p>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
 
-                {multiCommunityNotification.details && multiCommunityNotification.details.associations && (
-                  <div className='mt-2 sm:mt-3'>
-                    <div className='text-xs sm:text-sm font-medium text-gray-900 mb-1.5 sm:mb-2'>
-                      Included Associations:
+                  {/* For Single Property with Comment */}
+                  {!multiCommunityNotification && (
+                    <div className="mt-4 space-y-3">
+                      {(() => {
+                        // First try exact match, then try cleaned name match
+                        const selectedHOA = (hoaProperties || []).find(hoa => {
+                          // Exact match first (most reliable)
+                          if (hoa.name === formData.hoaProperty) return true;
+                          // Fallback to cleaned name match
+                          const hoaName = cleanPropertyName(hoa.name);
+                          const formPropName = cleanPropertyName(formData.hoaProperty);
+                          return hoaName === formPropName && hoaName !== '' && formPropName !== '';
+                        });
+                        
+                        // Only display if we found the exact property and it has a non-empty comment
+                        if (!selectedHOA) return null;
+                        
+                        const displayComment = selectedHOA.multi_community_comment?.trim();
+                        // Strict check: must be a non-empty string after trimming
+                        if (!displayComment || displayComment.length === 0) return null;
+
+                        return (
+                          <div className="flex flex-col">
+                            <div className="flex items-center gap-2">
+                              <div className="w-1.5 h-1.5 rounded-full bg-green-500"></div>
+                              <span className="text-sm font-bold text-gray-900">
+                                {cleanPropertyName(selectedHOA.name)}
+                              </span>
+                            </div>
+                            <div className="ml-4 mt-1.5 flex items-start gap-2 animate-in fade-in slide-in-from-top-1 duration-300">
+                              <div className="mt-1.5 w-1 h-1 rounded-full bg-gray-300 flex-shrink-0"></div>
+                              <p className="text-[13px] text-gray-700 font-medium leading-relaxed">
+                                {displayComment}
+                              </p>
+                            </div>
+                          </div>
+                        );
+                      })()}
                     </div>
-                    <div className='space-y-1'>
-                      {multiCommunityNotification.details.associations.map((association, index) => (
-                        <div key={index} className='flex items-center text-xs sm:text-sm text-gray-600'>
-                          <div className={`w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full mr-2 flex-shrink-0 ${
-                            association.isPrimary ? 'bg-green-500' : 'bg-blue-500'
-                          }`}></div>
-                          <span className={`truncate ${association.isPrimary ? 'font-medium' : ''}`}>
-                            {association.name}
-                            {association.isPrimary && ' (Primary)'}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
+                  )}
+                </div>
               </div>
             </div>
           </div>
         )}
 
-        {/* Standard HOA Documents Ready notification */}
-        {formData.hoaProperty && !multiCommunityNotification && (
+        {/* Standard HOA Documents Ready notification (Only show if NO comment exists) */}
+        {formData.hoaProperty && !multiCommunityNotification && !(() => {
+          const selectedHOA = (hoaProperties || []).find(hoa => {
+            const hoaName = cleanPropertyName(hoa.name);
+            const formPropName = cleanPropertyName(formData.hoaProperty);
+            return hoa.name === formData.hoaProperty || hoaName === formPropName;
+          });
+          return selectedHOA && selectedHOA.multi_community_comment?.trim();
+        })() && (
           <div className='bg-green-50 p-3 sm:p-4 rounded-lg border border-green-200'>
             <div className='flex items-start'>
               <CheckCircle className='h-4 w-4 sm:h-5 sm:w-5 text-green-600 mt-0.5 mr-2 flex-shrink-0' />
@@ -1567,33 +1654,112 @@ const PackagePaymentStep = ({
         </p>
       </div>
 
-      {/* Multi-Community Notification */}
-      {multiCommunityPricing && multiCommunityPricing.associations && multiCommunityPricing.associations.length > 0 && applicationType !== 'lender_questionnaire' && (
-        <div className='bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6'>
-          <div className='flex items-start'>
-            <AlertCircle className='h-5 w-5 text-blue-600 mt-0.5 mr-3' />
-            <div className='flex-1'>
-              <h4 className='font-medium text-blue-900 mb-2'>
-                Multi-Community Association Detected
+      {/* Multi-Community / Property Disclosure */}
+      {((multiCommunityPricing && multiCommunityPricing.associations && multiCommunityPricing.associations.length > 0 && applicationType !== 'lender_questionnaire') || (() => {
+        // First try exact match, then try cleaned name match
+        const selectedHOA = (hoaProperties || []).find(hoa => {
+          // Exact match first (most reliable)
+          if (hoa.name === formData.hoaProperty) return true;
+          // Fallback to cleaned name match
+          const hoaName = cleanPropertyName(hoa.name);
+          const formPropName = cleanPropertyName(formData.hoaProperty);
+          return hoaName === formPropName && hoaName !== '' && formPropName !== '';
+        });
+        // Only show disclosure if property found AND has a non-empty comment
+        if (!selectedHOA) return false;
+        const comment = selectedHOA.multi_community_comment?.trim();
+        return comment && comment.length > 0;
+      })()) && (
+        <div className="bg-white border border-blue-100 rounded-2xl shadow-sm overflow-hidden mb-8 animate-in fade-in slide-in-from-top-2 duration-300">
+          <div className="p-1 bg-blue-600"></div>
+          <div className="p-5 sm:p-6 flex flex-col sm:flex-row items-start gap-4">
+            <div className="p-2.5 bg-blue-50 rounded-xl flex-shrink-0">
+              <Info className="w-6 h-6 text-blue-600" />
+            </div>
+            <div className="flex-1 text-left">
+              <h4 className="text-lg font-bold text-gray-900 leading-tight">
+                {multiCommunityPricing?.associations?.length > 0 ? 'Multi-Community Structure' : 'Important Property Information'}
               </h4>
-              <p className='text-sm text-blue-700 mb-3'>
-                Your selected property is part of multiple community associations. The pricing below includes all required documents and fees for each association.
+              <p className="text-sm text-gray-600 mt-1 font-medium">
+                {multiCommunityPricing?.associations?.length > 0 
+                  ? 'Pricing includes all mandatory documents for this tiered property structure.' 
+                  : 'Please review the following information regarding this property:'
+                }
               </p>
-              <div className='text-sm'>
-                <div className='font-medium text-blue-900 mb-1'>Included Associations:</div>
-                <div className='space-y-1'>
-                  {multiCommunityPricing.associations.map((association, index) => (
-                    <div key={index} className='flex items-center text-sm text-blue-700'>
-                      <div className={`w-2 h-2 rounded-full mr-2 ${
-                        association.isPrimary ? 'bg-green-500' : 'bg-blue-500'
-                      }`}></div>
-                      <span className={association.isPrimary ? 'font-medium' : ''}>
-                        {association.name}
-                        {association.isPrimary && ' (Primary)'}
-                      </span>
+              
+              <div className="mt-5 space-y-4">
+                {/* For Multi-Community */}
+                {multiCommunityPricing?.associations?.length > 0 && multiCommunityPricing.associations.map((association, index) => {
+                  const linkedProp = linkedProperties.find(lp => {
+                    const lpName = cleanPropertyName(lp.property_name);
+                    const assocName = cleanPropertyName(association.name);
+                    return lp.property_name === association.name || lpName === assocName;
+                  });
+                  
+                  const selectedHOA = (hoaProperties || []).find(hoa => {
+                    const hoaName = cleanPropertyName(hoa.name);
+                    const formPropName = cleanPropertyName(formData.hoaProperty);
+                    return hoa.name === formData.hoaProperty || hoaName === formPropName;
+                  });
+                  
+                  const primaryComment = (association.isPrimary && selectedHOA && selectedHOA.multi_community_comment)?.trim();
+                  const hasComment = linkedProp && linkedProp.relationship_comment?.trim();
+                  const displayComment = association.isPrimary ? primaryComment : (hasComment ? linkedProp.relationship_comment.trim() : null);
+                  
+                  return (
+                    <div key={index} className={`flex flex-col ${index !== multiCommunityPricing.associations.length - 1 ? 'border-b border-gray-100 pb-3' : ''}`}>
+                      <div className="flex items-center gap-2">
+                        <div className={`w-1.5 h-1.5 rounded-full ${association.isPrimary ? 'bg-green-500' : 'bg-blue-500'}`}></div>
+                        <span className="text-sm font-bold text-gray-900">
+                          {cleanPropertyName(association.name)}
+                          {association.isPrimary && <span className="ml-2 text-[9px] tracking-widest text-green-700 bg-green-100 px-2 py-0.5 rounded-md uppercase font-black border border-green-200">Primary</span>}
+                        </span>
+                      </div>
+                      {displayComment && (
+                        <div className="ml-4 mt-1.5 flex items-start gap-2 animate-in fade-in slide-in-from-top-1 duration-300">
+                          <div className="mt-1.5 w-1 h-1 rounded-full bg-gray-300 flex-shrink-0"></div>
+                          <p className="text-[13px] text-gray-700 font-medium leading-relaxed">
+                            {displayComment}
+                          </p>
+                        </div>
+                      )}
                     </div>
-                  ))}
-                </div>
+                  );
+                })}
+
+                {/* For Single Property with Comment */}
+                {(!multiCommunityPricing || !multiCommunityPricing.associations || multiCommunityPricing.associations.length === 0) && (() => {
+                  // First try exact match, then try cleaned name match
+                  const selectedHOA = (hoaProperties || []).find(hoa => {
+                    // Exact match first (most reliable)
+                    if (hoa.name === formData.hoaProperty) return true;
+                    // Fallback to cleaned name match
+                    const hoaName = cleanPropertyName(hoa.name);
+                    const formPropName = cleanPropertyName(formData.hoaProperty);
+                    return hoaName === formPropName && hoaName !== '' && formPropName !== '';
+                  });
+                  if (!selectedHOA) return null;
+                  const displayComment = selectedHOA.multi_community_comment?.trim();
+                  // Strict check: must be a non-empty string after trimming
+                  if (!displayComment || displayComment.length === 0) return null;
+
+                  return (
+                    <div className="flex flex-col">
+                      <div className="flex items-center gap-2">
+                        <div className="w-1.5 h-1.5 rounded-full bg-green-500"></div>
+                        <span className="text-sm font-bold text-gray-900">
+                          {cleanPropertyName(selectedHOA.name)}
+                        </span>
+                      </div>
+                      <div className="ml-4 mt-1.5 flex items-start gap-2 animate-in fade-in slide-in-from-top-1 duration-300">
+                        <div className="mt-1.5 w-1 h-1 rounded-full bg-gray-300 flex-shrink-0"></div>
+                        <p className="text-[13px] text-gray-700 font-medium leading-relaxed">
+                          {displayComment}
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
             </div>
           </div>
@@ -1660,7 +1826,7 @@ const PackagePaymentStep = ({
               <>
                 {standardMultiCommunityPricing.associations.map((association, index) => (
                   <li key={index} className='font-medium text-gray-700'>
-                    {association.name} {association.isPrimary && '(Primary)'} - ${association.basePrice.toFixed(2)}
+                    {cleanPropertyName(association.name)} {association.isPrimary && '(Primary)'} - ${association.basePrice.toFixed(2)}
                   </li>
                 ))}
                 {formData.submitterType === 'settlement' ? (
@@ -1875,7 +2041,7 @@ const PackagePaymentStep = ({
               <>
                 {rushMultiCommunityPricing.associations.map((association, index) => (
                   <li key={index} className='font-medium text-gray-700'>
-                    {association.name} {association.isPrimary && '(Primary)'} - ${association.basePrice.toFixed(2)} + ${association.rushFee.toFixed(2)} rush
+                    {cleanPropertyName(association.name)} {association.isPrimary && '(Primary)'} - ${association.basePrice.toFixed(2)} + ${association.rushFee.toFixed(2)} rush
                   </li>
                 ))}
                 {formData.submitterType === 'settlement' ? (
@@ -1996,7 +2162,7 @@ const PackagePaymentStep = ({
                 {multiCommunityPricing.associations.map((association, index) => (
                   <div key={index} className='border-b border-green-200 pb-2 mb-2'>
                     <div className='font-medium text-green-800 mb-1'>
-                      {association.name} {association.isPrimary && '(Primary)'}
+                      {cleanPropertyName(association.name)} {association.isPrimary && '(Primary)'}
                     </div>
                     <div className='flex justify-between ml-4'>
                       <span>Processing Fee:</span>
@@ -3525,30 +3691,120 @@ const ReviewSubmitStep = ({ formData, stripePrices, applicationId, hoaProperties
         </div>
       )}
 
-      {/* Multi-Community Information */}
-      {multiCommunityInfo && (
-        <div className='bg-blue-50 border border-blue-200 rounded-lg p-6 mb-6'>
-          <div className='flex items-start'>
-            <Building2 className='h-6 w-6 text-blue-600 mr-3 mt-0.5' />
-            <div className='flex-1'>
-              <h4 className='text-lg font-semibold text-blue-900 mb-2'>
-                Multi-Community Association Detected
+      {/* Multi-Community / Property Disclosure */}
+      {(multiCommunityInfo || (() => {
+        const selectedHOA = (hoaProperties || []).find(hoa => {
+          const hoaName = cleanPropertyName(hoa.name);
+          const formPropName = cleanPropertyName(formData.hoaProperty);
+          return hoa.name === formData.hoaProperty || hoaName === formPropName;
+        });
+        return selectedHOA && selectedHOA.multi_community_comment?.trim();
+      })()) && (
+        <div className="bg-white border-l-4 border-blue-600 rounded-xl shadow-sm overflow-hidden mb-8 animate-in fade-in slide-in-from-top-2 duration-300">
+          <div className="p-5 sm:p-6 flex items-start gap-4">
+            <div className="p-2 bg-blue-50 rounded-lg flex-shrink-0">
+              <Building2 className="w-5 h-5 text-blue-600" />
+            </div>
+            <div className="flex-1">
+              <h4 className="text-base font-bold text-gray-900 leading-tight">
+                {multiCommunityInfo ? 'Multi-Community Review' : 'Important Property Information'}
               </h4>
-              <p className='text-sm text-blue-700 mb-3'>
-                Your property is part of multiple community associations. Additional documents and fees have been included for the following associations:
+              <p className="text-sm text-gray-600 mt-1 font-medium">
+                {multiCommunityInfo 
+                  ? 'The following associations are included in your application:' 
+                  : 'Please review the following information regarding this property:'
+                }
               </p>
-              <div className='space-y-2'>
-                <div className='flex items-center text-sm'>
-                  <span className='w-2 h-2 bg-blue-600 rounded-full mr-2'></span>
-                  <span className='font-medium text-blue-900'>{multiCommunityInfo.primaryProperty.name}</span>
-                  <span className='ml-2 px-2 py-1 bg-blue-100 text-blue-700 rounded text-xs'>Primary</span>
-                </div>
-                {multiCommunityInfo.linkedProperties.map((property, index) => (
-                  <div key={index} className='flex items-center text-sm'>
-                    <span className='w-2 h-2 bg-blue-400 rounded-full mr-2'></span>
-                    <span className='text-blue-800'>{property.property_name}</span>
-                  </div>
-                ))}
+              
+              <div className="mt-4 space-y-3">
+                {/* For Multi-Community */}
+                {multiCommunityInfo && (
+                  <>
+                    {(() => {
+                      const selectedHOA = (hoaProperties || []).find(hoa => {
+                        const hoaName = cleanPropertyName(hoa.name);
+                        const formPropName = cleanPropertyName(formData.hoaProperty);
+                        return hoa.name === formData.hoaProperty || hoaName === formPropName;
+                      });
+                      const primaryComment = (selectedHOA && selectedHOA.multi_community_comment)?.trim();
+                      
+                      return (
+                        <div className={`flex flex-col ${multiCommunityInfo.linkedProperties.length > 0 ? 'border-b border-gray-100 pb-3' : ''}`}>
+                          <div className="flex items-center gap-2">
+                            <div className="w-1.5 h-1.5 rounded-full bg-green-500"></div>
+                            <span className="text-sm font-bold text-gray-900">
+                              {cleanPropertyName(multiCommunityInfo.primaryProperty.name)}
+                              <span className="ml-2 text-[9px] tracking-widest text-green-700 bg-green-100 px-2 py-0.5 rounded-md uppercase font-black border border-green-200">Primary</span>
+                            </span>
+                          </div>
+                          {primaryComment && (
+                            <div className="ml-4 mt-1.5 flex items-start gap-2 animate-in fade-in slide-in-from-top-1 duration-300">
+                              <div className="mt-1.5 w-1 h-1 rounded-full bg-gray-300 flex-shrink-0"></div>
+                              <p className="text-[13px] text-gray-700 font-medium leading-relaxed">
+                                {primaryComment}
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
+                    {multiCommunityInfo.linkedProperties.map((property, index) => {
+                      const displayComment = property.relationship_comment?.trim();
+                      return (
+                        <div key={index} className={`flex flex-col ${index !== multiCommunityInfo.linkedProperties.length - 1 ? 'border-b border-gray-100 pb-3' : ''}`}>
+                          <div className="flex items-center gap-2">
+                            <div className="w-1.5 h-1.5 rounded-full bg-blue-500"></div>
+                            <span className="text-sm font-bold text-gray-900">
+                              {cleanPropertyName(property.property_name)}
+                            </span>
+                          </div>
+                          {displayComment && (
+                            <div className="ml-4 mt-1.5 flex items-start gap-2 animate-in fade-in slide-in-from-top-1 duration-300">
+                              <div className="mt-1.5 w-1 h-1 rounded-full bg-gray-300 flex-shrink-0"></div>
+                              <p className="text-[13px] text-gray-700 font-medium leading-relaxed">
+                                {displayComment}
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </>
+                )}
+
+                {/* For Single Property with Comment */}
+                {!multiCommunityInfo && (() => {
+                  // First try exact match, then try cleaned name match
+                  const selectedHOA = (hoaProperties || []).find(hoa => {
+                    // Exact match first (most reliable)
+                    if (hoa.name === formData.hoaProperty) return true;
+                    // Fallback to cleaned name match
+                    const hoaName = cleanPropertyName(hoa.name);
+                    const formPropName = cleanPropertyName(formData.hoaProperty);
+                    return hoaName === formPropName && hoaName !== '' && formPropName !== '';
+                  });
+                  if (!selectedHOA) return null;
+                  const displayComment = selectedHOA.multi_community_comment?.trim();
+                  // Strict check: must be a non-empty string after trimming
+                  if (!displayComment || displayComment.length === 0) return null;
+
+                  return (
+                    <div className="flex flex-col">
+                      <div className="flex items-center gap-2">
+                        <div className="w-1.5 h-1.5 rounded-full bg-green-500"></div>
+                        <span className="text-sm font-bold text-gray-900">
+                          {cleanPropertyName(selectedHOA.name)}
+                        </span>
+                      </div>
+                      <div className="ml-4 mt-1.5 flex items-start gap-2 animate-in fade-in slide-in-from-top-1 duration-300">
+                        <div className="mt-1.5 w-1 h-1 rounded-full bg-gray-300 flex-shrink-0"></div>
+                        <p className="text-[13px] text-gray-700 font-medium leading-relaxed">
+                          {displayComment}
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
             </div>
           </div>
@@ -5501,7 +5757,7 @@ export default function GMGResaleFlow() {
                                           {idx + 1}
                                         </div>
                                         <div>
-                                          <p className='text-sm font-medium text-gray-900'>{prop.property_name}</p>
+                                          <p className='text-sm font-medium text-gray-900'>{cleanPropertyName(prop.property_name)}</p>
                                           <p className='text-xs text-gray-500'>{prop.property_location || 'Virginia'}</p>
                                         </div>
                                       </div>

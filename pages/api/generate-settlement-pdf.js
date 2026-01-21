@@ -4,6 +4,13 @@ import fs from 'fs';
 import path from 'path';
 import { formatDateTimeInTimezone } from '../../lib/timeUtils';
 
+// Helper function to format property address with unit number
+const formatPropertyAddress = (address, unitNumber) => {
+  if (!address) return '';
+  if (!unitNumber || unitNumber === 'N/A' || unitNumber.trim() === '') return address;
+  return `${address} ${unitNumber}`;
+};
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
@@ -522,7 +529,8 @@ export default async function handler(req, res) {
 
     // Use dedicated React PDF component for settlement form (same approach as inspection form)
     console.log('Creating settlement form PDF using React PDF component');
-    const filename = `${documentType.replace(/[^a-zA-Z0-9]/g, '_')}_${application.property_address.replace(/[^a-zA-Z0-9]/g, '_')}.pdf`;
+    const formattedAddress = formatPropertyAddress(application.property_address, application.unit_number);
+    const filename = `${documentType.replace(/[^a-zA-Z0-9]/g, '_')}_${formattedAddress.replace(/[^a-zA-Z0-9]/g, '_')}.pdf`;
     
     const React = await import('react');
     const ReactPDF = await import('@react-pdf/renderer');
@@ -530,7 +538,7 @@ export default async function handler(req, res) {
     
     const pdfElement = React.createElement(SettlementPdfDocument, {
       documentType: documentType,
-      propertyAddress: application.property_address,
+      propertyAddress: formatPropertyAddress(application.property_address, application.unit_number),
       hoaName: application.hoa_properties.name,
       generatedDate: formatDateTimeInTimezone(new Date(), userTimezone),
       logoBase64: logoBase64,

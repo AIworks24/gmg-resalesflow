@@ -1,5 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
+
+// Helper function to format property address with unit number
+const formatPropertyAddress = (address, unitNumber) => {
+  if (!address) return '';
+  if (!unitNumber || unitNumber === 'N/A' || unitNumber.trim() === '') return address;
+  return `${address} ${unitNumber}`;
+};
 import Joyride, { STATUS } from 'react-joyride';
 import {
   FileText,
@@ -1046,11 +1053,7 @@ const AdminDashboard = ({ userRole }) => {
                 <div className='space-y-2 text-sm'>
                   <div>
                     <strong>Address:</strong>{' '}
-                    {selectedApplication.property_address}
-                  </div>
-                  <div>
-                    <strong>Unit:</strong>{' '}
-                    {selectedApplication.unit_number || 'N/A'}
+                    {formatPropertyAddress(selectedApplication.property_address, selectedApplication.unit_number)}
                   </div>
                   <div>
                     <strong>HOA:</strong>{' '}

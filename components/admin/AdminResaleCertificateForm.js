@@ -3,6 +3,13 @@ import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
 import { Save, Send, FileText, Calendar, ArrowLeft, Building, CheckCircle, AlertTriangle, Plus, Trash2, DollarSign, Clock, Users, Home, Car, Briefcase, Flag, Sun, MessageSquare, X } from 'lucide-react';
 import { useRouter } from 'next/router';
 
+// Helper function to format property address with unit number
+const formatPropertyAddress = (address, unitNumber) => {
+  if (!address) return '';
+  if (!unitNumber || unitNumber === 'N/A' || unitNumber.trim() === '') return address;
+  return `${address} ${unitNumber}`;
+};
+
 const AdminResaleCertificateForm = ({ 
   applicationData,
   formId,
@@ -16,7 +23,7 @@ const AdminResaleCertificateForm = ({
     developmentLocation: '',
     associationName: applicationData?.hoa_properties?.name || '',
     associationAddress: '',
-    lotAddress: applicationData?.property_address || '',
+    lotAddress: formatPropertyAddress(applicationData?.property_address, applicationData?.unit_number),
     datePrepared: new Date().toISOString().split('T')[0],
     
     // Appendix 1: Contact Information
@@ -297,7 +304,7 @@ const AdminResaleCertificateForm = ({
           ...merged,
           developmentName: applicationData.hoa_properties?.name || merged.developmentName || '',
           associationName: applicationData.hoa_properties?.name || merged.associationName || '',
-          lotAddress: applicationData.property_address || merged.lotAddress || '',
+          lotAddress: formatPropertyAddress(applicationData.property_address, applicationData.unit_number) || merged.lotAddress || '',
           datePrepared: new Date().toISOString().split('T')[0]
         };
       });
@@ -2728,7 +2735,7 @@ const AdminResaleCertificateForm = ({
               <div>
                 <div className="mb-3">
                   <span className="block text-xs font-medium text-gray-500 mb-1">Property Address</span>
-                  <span className="font-medium text-gray-900">{applicationData?.property_address} {applicationData?.unit_number}</span>
+                  <span className="font-medium text-gray-900">{formatPropertyAddress(applicationData?.property_address, applicationData?.unit_number)}</span>
                 </div>
                 <div className="mb-3">
                   <span className="block text-xs font-medium text-gray-500 mb-1">HOA</span>

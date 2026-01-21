@@ -3,6 +3,13 @@ import { useRouter } from 'next/router';
 import { CheckCircle, FileText, Clock, Mail } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 
+// Helper function to format property address with unit number
+const formatPropertyAddress = (address, unitNumber) => {
+  if (!address) return '';
+  if (!unitNumber || unitNumber === 'N/A' || unitNumber.trim() === '') return address;
+  return `${address} ${unitNumber}`;
+};
+
 export default function PaymentSuccess() {
   const router = useRouter();
   const [application, setApplication] = useState(null);
@@ -97,7 +104,7 @@ export default function PaymentSuccess() {
               <h3 className="font-medium text-gray-900 mb-2">Property Information</h3>
               <div className="space-y-1 text-sm text-gray-600">
                 <p><strong>HOA:</strong> {application.hoa_properties?.name}</p>
-                <p><strong>Address:</strong> {application.property_address} {application.unit_number}</p>
+                <p><strong>Address:</strong> {formatPropertyAddress(application.property_address, application.unit_number)}</p>
                 <p><strong>Sale Price:</strong> ${application.sale_price?.toLocaleString()}</p>
                 <p><strong>Closing Date:</strong> {application.closing_date}</p>
               </div>

@@ -4,6 +4,13 @@ import { createPagesServerClient } from '@supabase/auth-helpers-nextjs';
 import { mapFormDataToPDFFields } from '../../lib/pdfFieldMapper';
 import { generateAndUploadPDF } from '../../lib/pdfService';
 
+// Helper function to format property address with unit number
+const formatPropertyAddress = (address, unitNumber) => {
+  if (!address) return '';
+  if (!unitNumber || unitNumber === 'N/A' || unitNumber.trim() === '') return address;
+  return `${address} ${unitNumber}`;
+};
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
@@ -146,7 +153,7 @@ export default async function handler(req, res) {
         associationName: getValueOrFallback(actualFormData?.associationName, applicationData.hoa_properties?.name),
         associationAddress: getValueOrFallback(actualFormData?.associationAddress, applicationData.hoa_properties?.address || applicationData.hoa_properties?.location),
         developmentLocation: getValueOrFallback(actualFormData?.developmentLocation, applicationData.hoa_properties?.location),
-        lotAddress: getValueOrFallback(actualFormData?.lotAddress, applicationData.property_address),
+        lotAddress: getValueOrFallback(actualFormData?.lotAddress, formatPropertyAddress(applicationData.property_address, applicationData.unit_number)),
         salePrice: getValueOrFallback(actualFormData?.salePrice || actualFormData?.sale_price, applicationData.sale_price),
         closingDate: getValueOrFallback(actualFormData?.closingDate || actualFormData?.closing_date, applicationData.closing_date),
         // Ensure preparer object exists (merge with existing if present)
@@ -182,7 +189,7 @@ export default async function handler(req, res) {
           if (!enrichedFormData.developmentName) enrichedFormData.developmentName = applicationData.hoa_properties.name;
           if (!enrichedFormData.associationName) enrichedFormData.associationName = applicationData.hoa_properties.name;
           if (!enrichedFormData.associationAddress) enrichedFormData.associationAddress = applicationData.hoa_properties.address || applicationData.hoa_properties.location || '';
-          if (!enrichedFormData.lotAddress) enrichedFormData.lotAddress = applicationData.property_address || '';
+          if (!enrichedFormData.lotAddress) enrichedFormData.lotAddress = formatPropertyAddress(applicationData.property_address, applicationData.unit_number) || '';
         }
       }
     }

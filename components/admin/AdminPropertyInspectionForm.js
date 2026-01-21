@@ -3,6 +3,13 @@ import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
 import { Save, Send, FileText, Calendar, Clock, User, CheckCircle, ArrowLeft, Building } from 'lucide-react';
 import { useRouter } from 'next/router';
 
+// Helper function to format property address with unit number
+const formatPropertyAddress = (address, unitNumber) => {
+  if (!address) return '';
+  if (!unitNumber || unitNumber === 'N/A' || unitNumber.trim() === '') return address;
+  return `${address} ${unitNumber}`;
+};
+
 const AdminPropertyInspectionForm = ({ 
   applicationData,
   formId,
@@ -191,7 +198,7 @@ const AdminPropertyInspectionForm = ({
               <div>
                 <div className="mb-3">
                   <span className="block text-xs font-medium text-gray-500 mb-1">Property Address</span>
-                  <span className="font-medium text-gray-900">{applicationData?.property_address}</span>
+                  <span className="font-medium text-gray-900">{formatPropertyAddress(applicationData?.property_address, applicationData?.unit_number)}</span>
                 </div>
                 <div className="mb-3">
                   <span className="block text-xs font-medium text-gray-500 mb-1">HOA</span>

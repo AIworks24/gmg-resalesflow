@@ -1,5 +1,12 @@
 import { createPagesServerClient } from '@supabase/auth-helpers-nextjs';
 
+// Helper function to format property address with unit number
+const formatPropertyAddress = (address, unitNumber) => {
+  if (!address) return '';
+  if (!unitNumber || unitNumber === 'N/A' || unitNumber.trim() === '') return address;
+  return `${address} ${unitNumber}`;
+};
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
@@ -107,7 +114,7 @@ export default async function handler(req, res) {
     
     // Get property group information if this is a multi-community application
     let propertyGroupData = null;
-    let propertyAddress = application.property_address;
+    let propertyAddress = formatPropertyAddress(application.property_address, application.unit_number);
     let hoaName = application.hoa_properties?.name || 'HOA';
     let propertyLocation = application.hoa_properties?.location;
     
