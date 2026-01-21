@@ -1,6 +1,13 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
 import useSWR from 'swr';
+
+// Helper function to format property address with unit number
+const formatPropertyAddress = (address, unitNumber) => {
+  if (!address) return '';
+  if (!unitNumber || unitNumber === 'N/A' || unitNumber.trim() === '') return address;
+  return `${address} ${unitNumber}`;
+};
 import {
   FileText,
   CheckCircle,
@@ -172,141 +179,44 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
         (payload) => {
           console.log('📡 Real-time event received:', payload.eventType, payload.new?.id || payload.old?.id);
           
-          // For INSERT events, optimistically add then refresh silently
+          // For INSERT events, refresh immediately to show new application
           if (payload.eventType === 'INSERT') {
             const newApp = payload.new;
             // Skip if it's a draft (we filter those out)
-            if (newApp.status === 'draft') {
+            if (newApp.status === 'draft' || newApp.status === 'pending_payment') {
               return;
             }
             
-            // Optimistically add to cache immediately (no loading state)
-            mutate(
-              (currentData) => {
-                if (!currentData?.data) {
-                  // If no data yet, trigger normal load
-                  return currentData;
-                }
-                // Check if already exists (prevent duplicates)
-                if (currentData.data.some(app => app.id === newApp.id)) {
-                  return currentData;
-                }
-                // Add new application to the beginning of the list
-                return {
-                  ...currentData,
-                  data: [newApp, ...currentData.data],
-                  count: (currentData.count || 0) + 1,
-                };
-              },
-              { 
-                revalidate: true, // Fetch full data in background
-                populateCache: true,
-                rollbackOnError: true
-              }
-            ).catch(err => console.warn('Failed to update applications list:', err));
-            
-            // Force refresh with bypass cache to ensure workflow steps update correctly
-            setTimeout(() => {
-              forceRefreshWithBypass();
-            }, 300);
+            // Immediately refresh with cache bypass to get complete application data
+            forceRefreshWithBypass().catch(err => 
+              console.warn('Failed to refresh applications list after realtime insert:', err)
+            );
           }
-          // For UPDATE events, refresh silently
+          // For UPDATE events, refresh immediately with cache bypass
           else if (payload.eventType === 'UPDATE') {
             const newStatus = payload.new?.status;
             const oldStatus = payload.old?.status;
-            const updatedApp = payload.new;
             
             // Skip draft-only updates
             if (newStatus === 'draft' && oldStatus === 'draft') {
               return;
             }
             
-            // If status changed from draft to submitted, refresh immediately
-            if (oldStatus === 'draft' && newStatus !== 'draft') {
-              // Optimistically update, then refresh in background
-              mutate(
-                (currentData) => {
-                  if (!currentData?.data) return currentData;
-                  // Check if exists, if not add it (draft -> submitted means it should appear)
-                  const exists = currentData.data.some(app => app.id === updatedApp.id);
-                  if (exists) {
-                    return {
-                      ...currentData,
-                      data: currentData.data.map(app => 
-                        app.id === updatedApp.id ? { ...app, ...updatedApp } : app
-                      ),
-                    };
-                  } else {
-                    // Add to list if it wasn't there before
-                    return {
-                      ...currentData,
-                      data: [updatedApp, ...currentData.data],
-                      count: (currentData.count || 0) + 1,
-                    };
-                  }
-                },
-                { 
-                  revalidate: true,
-                  populateCache: true,
-                  rollbackOnError: true
-                }
-              ).catch(err => console.warn('Failed to refresh applications list:', err));
-              
-              // Force refresh with bypass cache to ensure workflow steps update correctly
-              setTimeout(() => {
-                forceRefreshWithBypass();
-              }, 300);
-            } 
-            // For other updates, optimistically update then refresh silently
-            else if (newStatus !== 'draft') {
-              mutate(
-                (currentData) => {
-                  if (!currentData?.data) return currentData;
-                  // Update the application in the list
-                  return {
-                    ...currentData,
-                    data: currentData.data.map(app => 
-                      app.id === updatedApp.id ? { ...app, ...updatedApp } : app
-                    ),
-                  };
-                },
-                { 
-                  revalidate: true,
-                  populateCache: true,
-                  rollbackOnError: true
-                }
-              ).catch(err => console.warn('Failed to update applications list:', err));
-              
-              // Force refresh with bypass cache to ensure workflow steps update correctly
-              setTimeout(() => {
-                forceRefreshWithBypass();
-              }, 300);
+            // For any meaningful update (not draft), immediately refresh with cache bypass
+            // This ensures we get the complete data with all relations (forms, notifications, etc.)
+            // which is necessary to correctly display workflow steps and statuses
+            if (newStatus !== 'draft') {
+              forceRefreshWithBypass().catch(err => 
+                console.warn('Failed to refresh applications list after realtime update:', err)
+              );
             }
           }
-          // For DELETE events, remove immediately
+          // For DELETE events, refresh immediately
           else if (payload.eventType === 'DELETE') {
-            const deletedApp = payload.old;
-            mutate(
-              (currentData) => {
-                if (!currentData?.data) return currentData;
-                // Remove deleted application from the list
-                return {
-                  ...currentData,
-                  data: currentData.data.filter(app => app.id !== deletedApp.id),
-                  count: Math.max(0, (currentData.count || 0) - 1),
-                };
-              },
-              { 
-                revalidate: true,
-                populateCache: true,
-                rollbackOnError: true
-              }
-            ).catch(err => console.warn('Failed to update applications list:', err));
-            
-            // Force refresh with bypass cache to ensure workflow steps update correctly
-            setTimeout(() => {
-              forceRefreshWithBypass();
-            }, 300);
+            // Immediately refresh to remove deleted application
+            forceRefreshWithBypass().catch(err => 
+              console.warn('Failed to refresh applications list after realtime delete:', err)
+            );
           }
         }
       )
@@ -1685,8 +1595,9 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
     const handler = async (e) => {
       const updatedId = e.detail?.applicationId;
       try {
-        // Refresh the applications list using SWR mutate
-        await mutate();
+        // Force refresh with cache bypass to get immediate updates
+        await forceRefreshWithBypass();
+        
         // Also refresh the selected application if it's the one that was updated
         if (selectedApplication && selectedApplication.id === updatedId) {
           const { data: updatedApp } = await supabase
@@ -1700,7 +1611,9 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
             .eq('id', updatedId)
             .is('deleted_at', null) // Only get non-deleted applications
             .maybeSingle();
-          if (updatedApp) setSelectedApplication(updatedApp);
+          if (updatedApp) {
+            setSelectedApplication(updatedApp);
+          }
         }
       } catch (err) {
         console.error('Failed to refresh after application update:', err);
@@ -1714,7 +1627,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
         window.removeEventListener('application-updated', handler);
       }
     };
-  }, [selectedApplication, mutate, supabase]);
+  }, [selectedApplication, mutate, supabase, forceRefreshWithBypass]);
 
   const loadFormData = async (applicationId, formType, group) => {
     try {
@@ -3200,7 +3113,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                           <Building className='w-5 h-5 text-gray-400' />
                           <div>
                             <div className='text-sm font-semibold text-gray-900 mb-0.5'>
-                              {app.property_address}
+                              {formatPropertyAddress(app.property_address, app.unit_number)}
                             </div>
                             <div className='text-xs text-gray-500 flex items-center gap-1.5'>
                               <span className='font-medium text-gray-700'>{app.submitter_name}</span>
@@ -3386,7 +3299,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                   {/* Header: Address and Status */}
                   <div className='flex justify-between items-start'>
                     <div>
-                      <h3 className='text-base font-semibold text-gray-900'>{app.property_address}</h3>
+                      <h3 className='text-base font-semibold text-gray-900'>{formatPropertyAddress(app.property_address, app.unit_number)}</h3>
                       <div className='text-sm text-gray-500 mt-0.5 flex flex-col'>
                         <span className='font-medium'>{app.submitter_name}</span>
                         <span className='text-xs opacity-75'>{app.hoa_properties?.name || 'Unknown HOA'}</span>

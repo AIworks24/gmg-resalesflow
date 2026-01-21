@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { useRouter } from 'next/router';
 import AdminLayout from './AdminLayout';
+import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
 
 const AdminDashboardMetrics = ({ userRole }) => {
   const router = useRouter();
@@ -49,6 +50,49 @@ const AdminDashboardMetrics = ({ userRole }) => {
       { revalidate: false }
     );
   };
+
+  // Set up realtime subscription for applications table changes
+  useEffect(() => {
+    const supabase = createClientComponentClient();
+    
+    console.log('🔄 Setting up realtime subscription for dashboard metrics...');
+
+    // Create a channel for real-time updates
+    const channel = supabase
+      .channel('applications-changes-dashboard-metrics')
+      .on(
+        'postgres_changes',
+        {
+          event: '*', // Listen for INSERT, UPDATE, DELETE
+          schema: 'public',
+          table: 'applications',
+        },
+        async (payload) => {
+          console.log('📊 Dashboard: Application change detected:', payload.eventType);
+          
+          // Refresh dashboard data with cache bypass when any change occurs
+          await mutate(
+            fetch('/api/admin/dashboard-summary?bypass=true').then(res => res.json()),
+            { revalidate: false }
+          );
+        }
+      )
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          console.log('✅ Dashboard realtime subscription active');
+        } else if (status === 'CHANNEL_ERROR') {
+          console.error('❌ Dashboard realtime subscription error');
+        } else if (status === 'TIMED_OUT') {
+          console.error('⏱️ Dashboard realtime subscription timed out');
+        }
+      });
+
+    // Cleanup function
+    return () => {
+      console.log('🧹 Cleaning up dashboard realtime subscription');
+      supabase.removeChannel(channel);
+    };
+  }, [mutate]); // Dependency on mutate function
 
   // Extract data from SWR response with defaults
   const metrics = swrData?.metrics || {
