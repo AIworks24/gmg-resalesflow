@@ -124,3 +124,34 @@ a {
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
 }
+
+/* Prevent hyphenation in email input fields */
+input[type="email"],
+input[type="text"][name*="email" i],
+input[type="text"][id*="email" i],
+input[type="text"][class*="email" i] {
+  hyphens: none !important;
+  -webkit-hyphens: none !important;
+  -moz-hyphens: none !important;
+  -ms-hyphens: none !important;
+  /* Use break-word to wrap at word boundaries, but keep-all prevents breaking within words */
+  word-break: normal !important;
+  overflow-wrap: break-word !important;
+  /* Prevent browser from adding hyphens when wrapping */
+  -webkit-hyphenate-character: '' !important;
+  -moz-hyphenate-character: '' !important;
+}
+
+/* For email fields that need to wrap (like managerEmail with multiple emails) */
+input[type="text"].email-field-multi {
+  hyphens: none !important;
+  -webkit-hyphens: none !important;
+  -moz-hyphens: none !important;
+  -ms-hyphens: none !important;
+  word-break: normal !important;
+  overflow-wrap: break-word !important;
+  white-space: normal !important;
+  /* Prevent browser from adding hyphens when wrapping */
+  -webkit-hyphenate-character: '' !important;
+  -moz-hyphenate-character: '' !important;
+}

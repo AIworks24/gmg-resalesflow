@@ -1473,11 +1473,35 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
             <input 
               type="text" 
               {...commonProps}
+              className={`${commonProps.className} email-field-multi`}
               placeholder={field.placeholder || 'Enter email addresses separated by commas'}
+              style={{
+                minWidth: '100%',
+                hyphens: 'none',
+                WebkitHyphens: 'none',
+                MozHyphens: 'none',
+                msHyphens: 'none',
+                wordBreak: 'normal',
+                overflowWrap: 'break-word'
+              }}
             />
           );
         }
-        return <input type="email" {...commonProps} />;
+        return (
+          <input 
+            type="email" 
+            {...commonProps}
+            style={{
+              minWidth: '100%',
+              hyphens: 'none',
+              WebkitHyphens: 'none',
+              MozHyphens: 'none',
+              msHyphens: 'none',
+              wordBreak: 'normal',
+              overflowWrap: 'break-word'
+            }}
+          />
+        );
       
       case 'date':
         return <input type="date" {...commonProps} />;
