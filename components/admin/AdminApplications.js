@@ -36,6 +36,7 @@ import {
   MessageSquare,
   CheckSquare,
   ChevronDown,
+  Hash,
 } from 'lucide-react';
 import { useRouter } from 'next/router';
 import { mapFormDataToPDFFields } from '../../lib/pdfFieldMapper';
@@ -108,6 +109,19 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
   const [showRejectModal, setShowRejectModal] = useState(false);
   const [rejectComments, setRejectComments] = useState('');
   const [processingReject, setProcessingReject] = useState(false);
+  const [isEditingDetails, setIsEditingDetails] = useState(false);
+  const [editedDetails, setEditedDetails] = useState({
+    submitter_name: '',
+    property_address: '',
+    submitter_email: '',
+    submitter_phone: '',
+    buyer_name: '',
+    buyer_email: [],
+    seller_email: '',
+    sale_price: '',
+    closing_date: '',
+  });
+  const [savingDetails, setSavingDetails] = useState(false);
 
   // Sync selectedStatus with URL query parameter when it changes (for dashboard navigation)
   useEffect(() => {
@@ -116,6 +130,23 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
       setSelectedStatus(statusFromUrl);
     }
   }, [router.query.status, router.isReady]);
+
+  // Reset edit mode when selectedApplication changes
+  useEffect(() => {
+    if (selectedApplication) {
+      setIsEditingDetails(false);
+      setEditedDetails({
+        submitter_name: '',
+        property_address: '',
+        submitter_email: '',
+        buyer_name: '',
+        buyer_email: [],
+        seller_email: '',
+        sale_price: '',
+        closing_date: '',
+      });
+    }
+  }, [selectedApplication?.id]);
 
   // Build dynamic API URL with sort and status parameters
   // Include status in API URL so server-side filtering happens
@@ -327,6 +358,183 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
     } finally {
       setProcessingReject(false);
     }
+  };
+
+  // Handle starting edit mode for application details
+  const handleStartEditDetails = () => {
+    if (!selectedApplication) return;
+    
+    const buyerEmails = parseEmails(selectedApplication.buyer_email || '');
+    
+    // Format closing_date from date string to YYYY-MM-DD format for input
+    let closingDateFormatted = '';
+    if (selectedApplication.closing_date) {
+      const date = new Date(selectedApplication.closing_date);
+      if (!isNaN(date.getTime())) {
+        closingDateFormatted = date.toISOString().split('T')[0];
+      }
+    }
+    
+    setEditedDetails({
+      submitter_name: selectedApplication.submitter_name || '',
+      property_address: selectedApplication.property_address || '',
+      submitter_email: selectedApplication.submitter_email || '',
+      submitter_phone: selectedApplication.submitter_phone || '',
+      buyer_name: selectedApplication.buyer_name || '',
+      buyer_email: buyerEmails.length > 0 ? buyerEmails : [''],
+      seller_email: selectedApplication.seller_email || '',
+      sale_price: selectedApplication.sale_price ? selectedApplication.sale_price.toString() : '',
+      closing_date: closingDateFormatted,
+    });
+    setIsEditingDetails(true);
+  };
+
+  // Handle canceling edit mode
+  const handleCancelEditDetails = () => {
+    setIsEditingDetails(false);
+    setEditedDetails({
+      submitter_name: '',
+      property_address: '',
+      submitter_email: '',
+      submitter_phone: '',
+      buyer_name: '',
+      buyer_email: [],
+      seller_email: '',
+      sale_price: '',
+      closing_date: '',
+    });
+  };
+
+  // Handle saving application details
+  const handleSaveDetails = async () => {
+    if (!selectedApplication) return;
+
+    setSavingDetails(true);
+    try {
+      const response = await fetch('/api/admin/update-application-details', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          applicationId: selectedApplication.id,
+          submitter_name: editedDetails.submitter_name,
+          property_address: editedDetails.property_address,
+          submitter_email: editedDetails.submitter_email,
+          submitter_phone: editedDetails.submitter_phone,
+          buyer_name: editedDetails.buyer_name,
+          buyer_email: editedDetails.buyer_email.filter(e => e.trim()),
+          seller_email: editedDetails.seller_email,
+          sale_price: editedDetails.sale_price || null,
+          closing_date: editedDetails.closing_date || null,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to update application details');
+      }
+
+      showSnackbar('Application details updated successfully', 'success');
+      
+      // Update selectedApplication state immediately
+      const buyerEmailStr = editedDetails.buyer_email.filter(e => e.trim()).join(',');
+      const salePriceNum = editedDetails.sale_price ? parseFloat(editedDetails.sale_price) : null;
+      setSelectedApplication({
+        ...selectedApplication,
+        submitter_name: editedDetails.submitter_name,
+        property_address: editedDetails.property_address,
+        submitter_email: editedDetails.submitter_email,
+        submitter_phone: editedDetails.submitter_phone,
+        buyer_name: editedDetails.buyer_name,
+        buyer_email: buyerEmailStr,
+        seller_email: editedDetails.seller_email,
+        sale_price: salePriceNum,
+        closing_date: editedDetails.closing_date || null,
+      });
+      
+      // Optimistically update the application in the list
+      mutate(
+        (currentData) => {
+          if (!currentData?.data) return currentData;
+          return {
+            ...currentData,
+            data: currentData.data.map(app => 
+              app.id === selectedApplication.id 
+                ? { 
+                    ...app, 
+                    submitter_name: editedDetails.submitter_name,
+                    property_address: editedDetails.property_address,
+                    submitter_email: editedDetails.submitter_email,
+                    submitter_phone: editedDetails.submitter_phone,
+                    buyer_name: editedDetails.buyer_name,
+                    buyer_email: buyerEmailStr,
+                    seller_email: editedDetails.seller_email,
+                    sale_price: salePriceNum,
+                    closing_date: editedDetails.closing_date || null,
+                  }
+                : app
+            ),
+          };
+        },
+        { revalidate: false }
+      );
+      
+      setIsEditingDetails(false);
+      
+      // Force refresh with cache bypass to get fresh data from database
+      await forceRefreshWithBypass();
+      
+      // Refresh the selected application to ensure we have the latest data
+      if (selectedApplication.id) {
+        try {
+          await refreshSelectedApplication(selectedApplication.id);
+        } catch (refreshError) {
+          console.warn('Failed to refresh selected application after update:', refreshError);
+        }
+      }
+      
+    } catch (error) {
+      console.error('Error updating application details:', error);
+      showSnackbar(error.message || 'Failed to update application details', 'error');
+    } finally {
+      setSavingDetails(false);
+    }
+  };
+
+  // Handle adding a new email to buyer_email array
+  const handleAddBuyerEmail = () => {
+    setEditedDetails({
+      ...editedDetails,
+      buyer_email: [...editedDetails.buyer_email, ''],
+    });
+  };
+
+  // Handle removing an email from buyer_email array
+  const handleRemoveBuyerEmail = (index) => {
+    if (editedDetails.buyer_email.length <= 1) {
+      // Keep at least one empty field
+      setEditedDetails({
+        ...editedDetails,
+        buyer_email: [''],
+      });
+    } else {
+      setEditedDetails({
+        ...editedDetails,
+        buyer_email: editedDetails.buyer_email.filter((_, i) => i !== index),
+      });
+    }
+  };
+
+  // Handle updating buyer email at specific index
+  const handleUpdateBuyerEmail = (index, value) => {
+    const newBuyerEmails = [...editedDetails.buyer_email];
+    newBuyerEmails[index] = value;
+    setEditedDetails({
+      ...editedDetails,
+      buyer_email: newBuyerEmails,
+    });
   };
 
   // Helper function to calculate business days deadline
@@ -3116,6 +3324,11 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                               {formatPropertyAddress(app.property_address, app.unit_number)}
                             </div>
                             <div className='text-xs text-gray-500 flex items-center gap-1.5'>
+                              <span className='inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-semibold text-gray-600'>
+                                <Hash className='h-3 w-3 text-gray-400' />
+                                App #{app.id}
+                              </span>
+                              <span className='text-gray-300'>•</span>
                               <span className='font-medium text-gray-700'>{app.submitter_name}</span>
                               <span className='text-gray-300'>•</span>
                               <span>{app.hoa_properties?.name || 'Unknown HOA'}</span>
@@ -3303,6 +3516,10 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                       <div className='text-sm text-gray-500 mt-0.5 flex flex-col'>
                         <span className='font-medium'>{app.submitter_name}</span>
                         <span className='text-xs opacity-75'>{app.hoa_properties?.name || 'Unknown HOA'}</span>
+                      </div>
+                      <div className='mt-2 inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-semibold text-gray-600'>
+                        <Hash className='h-3 w-3 text-gray-400' />
+                        App #{app.id}
                       </div>
                     </div>
                     {app.status === 'rejected' ? (
@@ -3539,8 +3756,48 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                   </div>
                 </div>
                 <div className='flex items-center gap-2'>
+                  {/* Edit Details Button - Only show if user is admin */}
+                  {userRole === 'admin' && !isEditingDetails && (
+                    <button
+                      onClick={handleStartEditDetails}
+                      className='px-4 py-2 bg-blue-50 border border-blue-300 rounded-lg text-blue-700 hover:bg-blue-100 font-semibold transition-all flex items-center gap-2 text-sm'
+                    >
+                      <Edit className='w-4 h-4' />
+                      Edit Details
+                    </button>
+                  )}
+                  {/* Save/Cancel Buttons when editing */}
+                  {userRole === 'admin' && isEditingDetails && (
+                    <>
+                      <button
+                        onClick={handleSaveDetails}
+                        disabled={savingDetails}
+                        className='px-4 py-2 bg-green-50 border border-green-300 rounded-lg text-green-700 hover:bg-green-100 font-semibold transition-all flex items-center gap-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed'
+                      >
+                        {savingDetails ? (
+                          <>
+                            <RefreshCw className='w-4 h-4 animate-spin' />
+                            Saving...
+                          </>
+                        ) : (
+                          <>
+                            <CheckCircle className='w-4 h-4' />
+                            Save
+                          </>
+                        )}
+                      </button>
+                      <button
+                        onClick={handleCancelEditDetails}
+                        disabled={savingDetails}
+                        className='px-4 py-2 bg-gray-50 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-100 font-semibold transition-all flex items-center gap-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed'
+                      >
+                        <X className='w-4 h-4' />
+                        Cancel
+                      </button>
+                    </>
+                  )}
                   {/* Reject Button - Only show if user is admin and application is not already rejected */}
-                  {userRole === 'admin' && selectedApplication && selectedApplication.status !== 'rejected' && (
+                  {userRole === 'admin' && selectedApplication && selectedApplication.status !== 'rejected' && !isEditingDetails && (
                     <button
                       onClick={() => setShowRejectModal(true)}
                       className='px-4 py-2 bg-red-50 border border-red-300 rounded-lg text-red-700 hover:bg-red-100 font-semibold transition-all flex items-center gap-2 text-sm'
@@ -3555,19 +3812,23 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                       Rejected
                     </span>
                   )}
-                  <button
-                    onClick={() => handleApplicationClick(selectedApplication)}
-                    className='p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors'
-                    title='Refresh application data'
-                  >
-                    <RefreshCw className='w-5 h-5' />
-                  </button>
-                  <button
-                    onClick={handleCloseModal}
-                    className='p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors'
-                  >
-                    <X className='w-5 h-5' />
-                  </button>
+                  {!isEditingDetails && (
+                    <>
+                      <button
+                        onClick={() => handleApplicationClick(selectedApplication)}
+                        className='p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors'
+                        title='Refresh application data'
+                      >
+                        <RefreshCw className='w-5 h-5' />
+                      </button>
+                      <button
+                        onClick={handleCloseModal}
+                        className='p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors'
+                      >
+                        <X className='w-5 h-5' />
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
 
@@ -3641,7 +3902,17 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                     <div className='grid grid-cols-2 gap-y-4 gap-x-2'>
                       <div className='col-span-2'>
                         <label className='text-xs font-medium text-gray-500 uppercase tracking-wider block mb-1'>Address</label>
-                        <div className='text-sm font-medium text-gray-900 break-words'>{selectedApplication.property_address}</div>
+                        {isEditingDetails ? (
+                          <input
+                            type='text'
+                            value={editedDetails.property_address}
+                            onChange={(e) => setEditedDetails({ ...editedDetails, property_address: e.target.value })}
+                            className='w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500'
+                            placeholder='Enter property address'
+                          />
+                        ) : (
+                          <div className='text-sm font-medium text-gray-900 break-words'>{selectedApplication.property_address}</div>
+                        )}
                       </div>
                       <div>
                         <label className='text-xs font-medium text-gray-500 uppercase tracking-wider block mb-1'>Unit</label>
@@ -3649,25 +3920,117 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                       </div>
                       <div>
                         <label className='text-xs font-medium text-gray-500 uppercase tracking-wider block mb-1'>HOA</label>
-                        <div className='text-sm text-gray-900'>{selectedApplication.hoa_properties?.name || 'N/A'}</div>
+                        <div className='text-sm text-gray-900 font-medium'>{selectedApplication.hoa_properties?.name || 'N/A'}</div>
+                        {isEditingDetails && (
+                          <p className='text-xs text-gray-500 mt-1 italic'>HOA cannot be changed</p>
+                        )}
                       </div>
                       <div>
                         <label className='text-xs font-medium text-gray-500 uppercase tracking-wider block mb-1'>Buyer</label>
-                        <div className='text-sm text-gray-900'>{selectedApplication.buyer_name || 'N/A'}</div>
+                        {isEditingDetails ? (
+                          <input
+                            type='text'
+                            value={editedDetails.buyer_name}
+                            onChange={(e) => setEditedDetails({ ...editedDetails, buyer_name: e.target.value })}
+                            className='w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 mb-2'
+                            placeholder='Enter buyer name'
+                          />
+                        ) : (
+                          <div className='text-sm text-gray-900'>{selectedApplication.buyer_name || 'N/A'}</div>
+                        )}
+                        {!isEditingDetails && selectedApplication.buyer_email && (
+                          <div className='text-xs text-gray-500 mt-0.5'>
+                            {parseEmails(selectedApplication.buyer_email).map((email, idx) => (
+                              <div key={idx}>{email}</div>
+                            ))}
+                          </div>
+                        )}
+                        {isEditingDetails && (
+                          <div className='mt-2 space-y-2'>
+                            <label className='text-xs font-medium text-gray-500 uppercase tracking-wider block'>Buyer Email(s)</label>
+                            {editedDetails.buyer_email.map((email, index) => (
+                              <div key={index} className='flex items-center gap-2'>
+                                <input
+                                  type='email'
+                                  value={email}
+                                  onChange={(e) => handleUpdateBuyerEmail(index, e.target.value)}
+                                  className='flex-1 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500'
+                                  placeholder='Enter buyer email'
+                                />
+                                {editedDetails.buyer_email.length > 1 && (
+                                  <button
+                                    type='button'
+                                    onClick={() => handleRemoveBuyerEmail(index)}
+                                    className='p-1.5 text-red-600 hover:bg-red-50 rounded transition-colors'
+                                    title='Remove email'
+                                  >
+                                    <X className='w-4 h-4' />
+                                  </button>
+                                )}
+                              </div>
+                            ))}
+                            <button
+                              type='button'
+                              onClick={handleAddBuyerEmail}
+                              className='text-xs text-blue-600 hover:text-blue-700 font-medium flex items-center gap-1'
+                            >
+                              <span>+</span> Add Email
+                            </button>
+                          </div>
+                        )}
                       </div>
                       <div>
                         <label className='text-xs font-medium text-gray-500 uppercase tracking-wider block mb-1'>Seller</label>
                         <div className='text-sm text-gray-900'>{selectedApplication.seller_name || 'N/A'}</div>
+                        {!isEditingDetails && selectedApplication.seller_email && (
+                          <div className='text-xs text-gray-500 mt-0.5'>{selectedApplication.seller_email}</div>
+                        )}
+                        {isEditingDetails && (
+                          <div className='mt-2'>
+                            <label className='text-xs font-medium text-gray-500 uppercase tracking-wider block mb-1'>Seller Email</label>
+                            <input
+                              type='email'
+                              value={editedDetails.seller_email}
+                              onChange={(e) => setEditedDetails({ ...editedDetails, seller_email: e.target.value })}
+                              className='w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500'
+                              placeholder='Enter seller email (optional)'
+                            />
+                          </div>
+                        )}
                       </div>
                       <div>
                         <label className='text-xs font-medium text-gray-500 uppercase tracking-wider block mb-1'>Sale Price</label>
-                        <div className='text-sm text-gray-900'>${selectedApplication.sale_price?.toLocaleString() || 'N/A'}</div>
+                        {isEditingDetails ? (
+                          <div className='relative'>
+                            <span className='absolute left-3 top-1/2 transform -translate-y-1/2 text-sm text-gray-500'>$</span>
+                            <input
+                              type='number'
+                              step='0.01'
+                              min='0'
+                              value={editedDetails.sale_price}
+                              onChange={(e) => setEditedDetails({ ...editedDetails, sale_price: e.target.value })}
+                              className='w-full pl-7 pr-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500'
+                              placeholder='0.00'
+                            />
+                          </div>
+                        ) : (
+                          <div className='text-sm text-gray-900'>${selectedApplication.sale_price?.toLocaleString() || 'N/A'}</div>
+                        )}
                       </div>
                       <div>
                         <label className='text-xs font-medium text-gray-500 uppercase tracking-wider block mb-1'>Closing Date</label>
-                        <div className='text-sm text-gray-900'>
-                          {selectedApplication.closing_date ? formatDate(selectedApplication.closing_date) : 'TBD'}
-                        </div>
+                        {isEditingDetails ? (
+                          <input
+                            type='date'
+                            value={editedDetails.closing_date}
+                            onChange={(e) => setEditedDetails({ ...editedDetails, closing_date: e.target.value })}
+                            className='w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500'
+                          />
+                        ) : (
+                          <div className='text-sm text-gray-900'>
+                            {selectedApplication.closing_date ? formatDate(selectedApplication.closing_date) : 'TBD'}
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -3681,10 +4044,38 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                     <div className='grid grid-cols-2 gap-y-4 gap-x-2'>
                       <div className='col-span-2'>
                         <label className='text-xs font-medium text-gray-500 uppercase tracking-wider block mb-1'>Submitted By</label>
-                        <div className='text-sm font-medium text-gray-900'>{selectedApplication.submitter_name || 'N/A'}</div>
-                        <div className='text-xs text-gray-500 mt-0.5'>{selectedApplication.submitter_email || 'N/A'}</div>
-                        {selectedApplication.submitter_phone && (
-                          <div className='text-xs text-gray-500'>{selectedApplication.submitter_phone}</div>
+                        {isEditingDetails ? (
+                          <div className='space-y-2'>
+                            <input
+                              type='text'
+                              value={editedDetails.submitter_name}
+                              onChange={(e) => setEditedDetails({ ...editedDetails, submitter_name: e.target.value })}
+                              className='w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500'
+                              placeholder='Enter submitter name'
+                            />
+                            <input
+                              type='email'
+                              value={editedDetails.submitter_email}
+                              onChange={(e) => setEditedDetails({ ...editedDetails, submitter_email: e.target.value })}
+                              className='w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500'
+                              placeholder='Enter submitter email'
+                            />
+                            <input
+                              type='tel'
+                              value={editedDetails.submitter_phone}
+                              onChange={(e) => setEditedDetails({ ...editedDetails, submitter_phone: e.target.value })}
+                              className='w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500'
+                              placeholder='Enter phone number'
+                            />
+                          </div>
+                        ) : (
+                          <>
+                            <div className='text-sm font-medium text-gray-900'>{selectedApplication.submitter_name || 'N/A'}</div>
+                            <div className='text-xs text-gray-500 mt-0.5'>{selectedApplication.submitter_email || 'N/A'}</div>
+                            {selectedApplication.submitter_phone && (
+                              <div className='text-xs text-gray-500'>{selectedApplication.submitter_phone}</div>
+                            )}
+                          </>
                         )}
                       </div>
                       <div>

@@ -84,7 +84,8 @@ export default async function handler(req, res) {
                     console.warn(`[EmailService] RPC error fetching linked properties:`, rpcError);
                   } else if (linkedPropsRpc && linkedPropsRpc.length > 0) {
                     // Map RPC result to our expected format
-                    // RPC returns: linked_property_id, property_name, location, property_owner_email
+                    // RPC returns: linked_property_id, property_name, location, property_owner_email, relationship_comment
+                    // Note: relationship_comment is fetched but not included in emails per requirements
                     linkedPropsData = linkedPropsRpc.map(prop => ({
                       property_name: prop.property_name,
                       property_location: prop.location,

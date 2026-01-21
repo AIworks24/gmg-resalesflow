@@ -22,6 +22,7 @@ import {
 } from '../lib/applicationTypes';
 import { getPricing } from '../lib/pricingConfig';
 import { formatDate, formatDateTime } from '../lib/timeUtils';
+import { parseEmails, formatEmailsForStorage, validateEmails } from '../lib/emailUtils';
 import Image from 'next/image';
 import companyLogo from '../assets/company_logo.png';
 import {
@@ -48,6 +49,8 @@ import {
   ChevronDown,
   ChevronUp,
   Filter,
+  Edit,
+  RefreshCw,
   Calendar,
   Plus,
   ArrowRight,
@@ -55,6 +58,7 @@ import {
   Loader2,
   Eye,
   EyeOff,
+  Hash,
 } from 'lucide-react';
 
 // Initialize Stripe with error handling
@@ -554,9 +558,9 @@ const HOASelectionStep = React.memo(
                           return hoa.name === formData.hoaProperty || hoaName === formPropName;
                         });
                         
-                        const primaryComment = association.isPrimary && selectedHOA && selectedHOA.multi_community_comment;
-                        const hasComment = linkedProp && linkedProp.relationship_comment;
-                        const displayComment = (association.isPrimary ? primaryComment : (hasComment ? linkedProp.relationship_comment : null))?.trim();
+                        const primaryComment = association.isPrimary && selectedHOA?.multi_community_comment?.trim();
+                        const hasComment = linkedProp?.relationship_comment?.trim();
+                        const displayComment = association.isPrimary ? primaryComment : hasComment;
                         
                         return (
                           <div key={index} className={`flex flex-col ${index !== multiCommunityNotification.details.associations.length - 1 ? 'border-b border-gray-100 pb-3' : ''}`}>
@@ -1013,6 +1017,7 @@ const PackagePaymentStep = ({
 
   // Check if this is a pending payment application
   const [isPendingPayment, setIsPendingPayment] = React.useState(false);
+  const [isPaymentCompleted, setIsPaymentCompleted] = React.useState(false);
   
   // Ensure payment method defaults to credit_card when ACH is disabled
   React.useEffect(() => {
@@ -1027,12 +1032,24 @@ const PackagePaymentStep = ({
         try {
           const { data, error } = await supabase
             .from('applications')
-            .select('status')
+            .select('status, payment_completed_at, payment_status')
             .eq('id', applicationId)
             .single();
           
-          if (!error && data?.status === 'pending_payment') {
-            setIsPendingPayment(true);
+          if (!error && data) {
+            if (data.status === 'pending_payment') {
+              setIsPendingPayment(true);
+            }
+            
+            // Check if payment is already completed
+            const paymentCompleted = data.payment_completed_at || 
+                                   data.status === 'payment_completed' ||
+                                   data.payment_status === 'completed';
+            
+            if (paymentCompleted) {
+              setIsPaymentCompleted(true);
+              setIsPendingPayment(false);
+            }
           }
         } catch (error) {
           console.error('Error checking application status:', error);
@@ -1090,6 +1107,20 @@ const PackagePaymentStep = ({
 
 
   const handlePayment = async () => {
+    // Check if payment is already completed - if so, redirect to next step
+    if (isPaymentCompleted && applicationId) {
+      // Payment already completed - redirect to next step
+      const isLenderQuestionnaire = applicationType === 'lender_questionnaire' || 
+                                     formData.submitterType === 'lender_questionnaire';
+      
+      if (isLenderQuestionnaire) {
+        setCurrentStep(5); // Go to upload step
+      } else {
+        setCurrentStep(5); // Go to review step
+      }
+      return;
+    }
+    
     if (!formData.packageType || !formData.paymentMethod) {
       setPaymentError('Please select a package and payment method');
       return;
@@ -1149,8 +1180,8 @@ const PackagePaymentStep = ({
             package_type: formData.packageType,
             payment_method: formData.paymentMethod,
             total_amount: totalAmount,
-            status: 'under_review',
-            payment_status: 'pending',
+            status: 'pending_payment', // Will be finalized in Review step
+            payment_status: 'not_required', // Free transaction
             submitted_at: new Date().toISOString(),
             updated_at: new Date().toISOString(),
             expected_completion_date: new Date(
@@ -1199,8 +1230,8 @@ const PackagePaymentStep = ({
             package_type: formData.packageType,
             payment_method: formData.paymentMethod,
             total_amount: totalAmount,
-            status: 'under_review',
-            payment_status: 'pending',
+            status: 'pending_payment', // Will be finalized in Review step
+            payment_status: 'not_required', // Free transaction
             submitted_at: new Date().toISOString(),
             expected_completion_date: new Date(
               Date.now() +
@@ -1322,43 +1353,15 @@ const PackagePaymentStep = ({
           // Don't fail the submission if email fails
         }
 
-        // Show success message and redirect
-        setSnackbarData({
-          message: 'Application submitted successfully! You will receive a confirmation email shortly.',
-          type: 'success'
-        });
-        setShowSnackbar(true);
-
-        // Reset form and redirect to applications
-        setCurrentStep(0);
-        await loadApplications();
-        setApplicationId(null);
+        // For free transactions, advance to Review step instead of immediately submitting
+        // Application is already created with status 'pending_payment' and payment_status 'not_required'
+        // User will review and finalize submission on Review step
         
-        // Reset form data
-        setFormData({
-          hoaProperty: '',
-          propertyAddress: '',
-          unitNumber: '',
-          submitterType: '',
-          publicOffering: false,
-          submitterName: '',
-          submitterEmail: '',
-          submitterPhone: '',
-          realtorLicense: '',
-          buyerName: '',
-          buyerEmail: '',
-          buyerEmails: [],
-          buyerPhone: '',
-          sellerName: '',
-          sellerEmail: '',
-          sellerPhone: '',
-          salePrice: '',
-          closingDate: '',
-          packageType: 'standard',
-          paymentMethod: '',
-        });
-
-        return; // Exit early for free transactions
+        // Advance to Review step for free transactions
+        setCurrentStep(5);
+        setIsProcessing(false);
+        
+        return; // Exit early for free transactions - user will review and submit on step 5
       }
 
       if (formData.paymentMethod === 'credit_card') {
@@ -1702,9 +1705,9 @@ const PackagePaymentStep = ({
                     return hoa.name === formData.hoaProperty || hoaName === formPropName;
                   });
                   
-                  const primaryComment = (association.isPrimary && selectedHOA && selectedHOA.multi_community_comment)?.trim();
-                  const hasComment = linkedProp && linkedProp.relationship_comment?.trim();
-                  const displayComment = association.isPrimary ? primaryComment : (hasComment ? linkedProp.relationship_comment.trim() : null);
+                  const primaryComment = association.isPrimary && selectedHOA?.multi_community_comment?.trim();
+                  const hasComment = linkedProp?.relationship_comment?.trim();
+                  const displayComment = association.isPrimary ? primaryComment : hasComment;
                   
                   return (
                     <div key={index} className={`flex flex-col ${index !== multiCommunityPricing.associations.length - 1 ? 'border-b border-gray-100 pb-3' : ''}`}>
@@ -2307,32 +2310,42 @@ const PackagePaymentStep = ({
           Back
         </button>
         
-        <button
-          onClick={handlePayment}
-          disabled={
-            isProcessing || 
-            !formData.packageType || 
-            !formData.paymentMethod
-          }
-          className="px-8 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed flex items-center"
-        >
-          {isProcessing ? (
-            <>
-              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-              Processing...
-            </>
-          ) : (
-            formData.paymentMethod === 'credit_card' ? 'Continue to Checkout' : `Pay $${(() => {
-              if (multiCommunityPricing && multiCommunityPricing.total) {
-                const baseTotal = multiCommunityPricing.total;
-                const convenienceFeeTotal = formData.paymentMethod === 'credit_card' ? 
-                  multiCommunityPricing.totalConvenienceFee : 0;
-                return (baseTotal + convenienceFeeTotal).toFixed(2);
-              }
-              return calculateTotal(formData, stripePrices, hoaProperties).toFixed(2);
-            })()}`
-          )}
-        </button>
+        {isPaymentCompleted ? (
+          <button
+            onClick={handlePayment}
+            className="px-8 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 flex items-center"
+          >
+            Continue
+            <ArrowRight className="h-4 w-4 ml-2" />
+          </button>
+        ) : (
+          <button
+            onClick={handlePayment}
+            disabled={
+              isProcessing || 
+              !formData.packageType || 
+              !formData.paymentMethod
+            }
+            className="px-8 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed flex items-center"
+          >
+            {isProcessing ? (
+              <>
+                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                Processing...
+              </>
+            ) : (
+              formData.paymentMethod === 'credit_card' ? 'Continue to Checkout' : `Pay $${(() => {
+                if (multiCommunityPricing && multiCommunityPricing.total) {
+                  const baseTotal = multiCommunityPricing.total;
+                  const convenienceFeeTotal = formData.paymentMethod === 'credit_card' ? 
+                    multiCommunityPricing.totalConvenienceFee : 0;
+                  return (baseTotal + convenienceFeeTotal).toFixed(2);
+                }
+                return calculateTotal(formData, stripePrices, hoaProperties).toFixed(2);
+              })()}`
+            )}
+          </button>
+        )}
       </div>
       </div>
     </div>
@@ -3404,8 +3417,8 @@ const LenderQuestionnaireUploadStep = ({ formData, applicationId, setCurrentStep
           // Final auth check before redirect
           const finalAuthCheck = useApplicantAuthStore.getState();
           if (finalAuthCheck.user && finalAuthCheck.isAuthenticated()) {
-            // User is still authenticated, safe to redirect
-            setCurrentStep(0);
+            // User is still authenticated, redirect to Review & Submit step (step 6)
+            setCurrentStep(6);
           } else {
             console.warn('Auth state lost after loading applications');
             setSnackbarData({
@@ -3597,12 +3610,25 @@ const LenderQuestionnaireUploadStep = ({ formData, applicationId, setCurrentStep
   );
 };
 
-const ReviewSubmitStep = ({ formData, stripePrices, applicationId, hoaProperties, handleSubmit, isSubmitting }) => {
+const ReviewSubmitStep = ({ formData, handleInputChange, stripePrices, applicationId, hoaProperties, handleSubmit, isSubmitting, setSnackbarData, setShowSnackbar }) => {
   // Check if user just returned from payment
   const [showPaymentSuccess, setShowPaymentSuccess] = React.useState(false);
   const [multiCommunityInfo, setMultiCommunityInfo] = React.useState(null);
   const [multiCommunityPricing, setMultiCommunityPricing] = React.useState(null);
   const [applicationType, setApplicationType] = React.useState(null);
+  const [isEditingDetails, setIsEditingDetails] = React.useState(false);
+  const [editedDetails, setEditedDetails] = React.useState({
+    submitter_name: '',
+    property_address: '',
+    submitter_email: '',
+    submitter_phone: '',
+    buyer_name: '',
+    buyer_email: [],
+    seller_email: '',
+    sale_price: '',
+    closing_date: '',
+  });
+  const [savingDetails, setSavingDetails] = React.useState(false);
   
   React.useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -3673,6 +3699,161 @@ const ReviewSubmitStep = ({ formData, stripePrices, applicationId, hoaProperties
     loadMultiCommunityInfo();
   }, [formData.hoaProperty, formData.packageType, formData.submitterType, formData.publicOffering, hoaProperties, applicationType]);
 
+  // Initialize edit details when entering edit mode
+  const handleStartEditDetails = () => {
+    // Buyer info is optional - only initialize if it exists
+    const buyerEmails = Array.isArray(formData.buyerEmails) && formData.buyerEmails.length > 0
+      ? formData.buyerEmails.filter(e => e && e.trim())
+      : (formData.buyerEmail && formData.buyerEmail.trim() ? [formData.buyerEmail] : []);
+    
+    // Format closing_date from date string to YYYY-MM-DD format for input
+    let closingDateFormatted = '';
+    if (formData.closingDate) {
+      const date = new Date(formData.closingDate);
+      if (!isNaN(date.getTime())) {
+        closingDateFormatted = date.toISOString().split('T')[0];
+      }
+    }
+    
+    setEditedDetails({
+      submitter_name: formData.submitterName || '',
+      property_address: formData.propertyAddress || '',
+      submitter_email: formData.submitterEmail || '',
+      submitter_phone: formData.submitterPhone || '',
+      buyer_name: formData.buyerName || '',
+      buyer_email: buyerEmails.length > 0 ? buyerEmails : [], // Empty array for optional field
+      seller_email: formData.sellerEmail || '',
+      sale_price: formData.salePrice || '',
+      closing_date: closingDateFormatted,
+    });
+    setIsEditingDetails(true);
+  };
+
+  // Handle canceling edit mode
+  const handleCancelEditDetails = () => {
+    setIsEditingDetails(false);
+    setEditedDetails({
+      submitter_name: '',
+      property_address: '',
+      submitter_email: '',
+      submitter_phone: '',
+      buyer_name: '',
+      buyer_email: [],
+      seller_email: '',
+      sale_price: '',
+      closing_date: '',
+    });
+  };
+
+  // Handle saving application details
+  const handleSaveDetails = async () => {
+    setSavingDetails(true);
+    try {
+      // Update formData first
+      handleInputChange('submitterName', editedDetails.submitter_name);
+      handleInputChange('propertyAddress', editedDetails.property_address);
+      handleInputChange('submitterEmail', editedDetails.submitter_email);
+      handleInputChange('submitterPhone', editedDetails.submitter_phone);
+      handleInputChange('buyerName', editedDetails.buyer_name);
+      handleInputChange('sellerEmail', editedDetails.seller_email);
+      handleInputChange('salePrice', editedDetails.sale_price);
+      handleInputChange('closingDate', editedDetails.closing_date);
+      
+      // Update buyer emails (optional - can be empty)
+      const buyerEmailsFiltered = editedDetails.buyer_email.filter(e => e && e.trim());
+      handleInputChange('buyerEmails', buyerEmailsFiltered);
+      handleInputChange('buyerEmail', buyerEmailsFiltered.length > 0 ? buyerEmailsFiltered[0] : '');
+
+      // If applicationId exists, also update via API
+      if (applicationId) {
+        const response = await fetch('/api/update-application-details', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            applicationId: applicationId,
+            submitter_name: editedDetails.submitter_name,
+            property_address: editedDetails.property_address,
+            submitter_email: editedDetails.submitter_email,
+            submitter_phone: editedDetails.submitter_phone,
+            buyer_name: editedDetails.buyer_name || null, // Optional
+            buyer_email: buyerEmailsFiltered.length > 0 ? buyerEmailsFiltered : null, // Optional - send null if empty
+            seller_email: editedDetails.seller_email || null,
+            sale_price: editedDetails.sale_price || null,
+            closing_date: editedDetails.closing_date || null,
+          }),
+        });
+
+        if (!response.ok) {
+          const data = await response.json();
+          throw new Error(data.error || 'Failed to update application details');
+        }
+      }
+
+      setIsEditingDetails(false);
+      
+      // Show success message
+      if (setSnackbarData && setShowSnackbar) {
+        setSnackbarData({
+          message: 'Application details updated successfully',
+          type: 'success'
+        });
+        setShowSnackbar(true);
+      } else {
+        // Fallback to alert if snackbar not available
+        alert('Application details updated successfully');
+      }
+    } catch (error) {
+      console.error('Error updating application details:', error);
+      if (setSnackbarData && setShowSnackbar) {
+        setSnackbarData({
+          message: 'Failed to update application details: ' + error.message,
+          type: 'error'
+        });
+        setShowSnackbar(true);
+      } else {
+        alert('Failed to update application details: ' + error.message);
+      }
+    } finally {
+      setSavingDetails(false);
+    }
+  };
+
+  // Handle adding a new email to buyer_email array
+  const handleAddBuyerEmail = () => {
+    setEditedDetails({
+      ...editedDetails,
+      buyer_email: [...editedDetails.buyer_email, ''],
+    });
+  };
+
+  // Handle removing an email from buyer_email array
+  const handleRemoveBuyerEmail = (index) => {
+    // Allow removing all emails (buyer info is optional)
+    const newBuyerEmails = editedDetails.buyer_email.filter((_, i) => i !== index);
+    setEditedDetails({
+      ...editedDetails,
+      buyer_email: newBuyerEmails,
+    });
+  };
+
+  // Handle updating buyer email at specific index
+  const handleUpdateBuyerEmail = (index, value) => {
+    // Ensure we have at least one element in the array
+    let newBuyerEmails = editedDetails.buyer_email.length > 0 
+      ? [...editedDetails.buyer_email] 
+      : [''];
+    
+    // Update the value at the index
+    newBuyerEmails[index] = value;
+    
+    setEditedDetails({
+      ...editedDetails,
+      buyer_email: newBuyerEmails,
+    });
+  };
+
   return (
     <div className='space-y-6'>
       {showPaymentSuccess && (
@@ -3691,126 +3872,6 @@ const ReviewSubmitStep = ({ formData, stripePrices, applicationId, hoaProperties
         </div>
       )}
 
-      {/* Multi-Community / Property Disclosure */}
-      {(multiCommunityInfo || (() => {
-        const selectedHOA = (hoaProperties || []).find(hoa => {
-          const hoaName = cleanPropertyName(hoa.name);
-          const formPropName = cleanPropertyName(formData.hoaProperty);
-          return hoa.name === formData.hoaProperty || hoaName === formPropName;
-        });
-        return selectedHOA && selectedHOA.multi_community_comment?.trim();
-      })()) && (
-        <div className="bg-white border-l-4 border-blue-600 rounded-xl shadow-sm overflow-hidden mb-8 animate-in fade-in slide-in-from-top-2 duration-300">
-          <div className="p-5 sm:p-6 flex items-start gap-4">
-            <div className="p-2 bg-blue-50 rounded-lg flex-shrink-0">
-              <Building2 className="w-5 h-5 text-blue-600" />
-            </div>
-            <div className="flex-1">
-              <h4 className="text-base font-bold text-gray-900 leading-tight">
-                {multiCommunityInfo ? 'Multi-Community Review' : 'Important Property Information'}
-              </h4>
-              <p className="text-sm text-gray-600 mt-1 font-medium">
-                {multiCommunityInfo 
-                  ? 'The following associations are included in your application:' 
-                  : 'Please review the following information regarding this property:'
-                }
-              </p>
-              
-              <div className="mt-4 space-y-3">
-                {/* For Multi-Community */}
-                {multiCommunityInfo && (
-                  <>
-                    {(() => {
-                      const selectedHOA = (hoaProperties || []).find(hoa => {
-                        const hoaName = cleanPropertyName(hoa.name);
-                        const formPropName = cleanPropertyName(formData.hoaProperty);
-                        return hoa.name === formData.hoaProperty || hoaName === formPropName;
-                      });
-                      const primaryComment = (selectedHOA && selectedHOA.multi_community_comment)?.trim();
-                      
-                      return (
-                        <div className={`flex flex-col ${multiCommunityInfo.linkedProperties.length > 0 ? 'border-b border-gray-100 pb-3' : ''}`}>
-                          <div className="flex items-center gap-2">
-                            <div className="w-1.5 h-1.5 rounded-full bg-green-500"></div>
-                            <span className="text-sm font-bold text-gray-900">
-                              {cleanPropertyName(multiCommunityInfo.primaryProperty.name)}
-                              <span className="ml-2 text-[9px] tracking-widest text-green-700 bg-green-100 px-2 py-0.5 rounded-md uppercase font-black border border-green-200">Primary</span>
-                            </span>
-                          </div>
-                          {primaryComment && (
-                            <div className="ml-4 mt-1.5 flex items-start gap-2 animate-in fade-in slide-in-from-top-1 duration-300">
-                              <div className="mt-1.5 w-1 h-1 rounded-full bg-gray-300 flex-shrink-0"></div>
-                              <p className="text-[13px] text-gray-700 font-medium leading-relaxed">
-                                {primaryComment}
-                              </p>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })()}
-                    {multiCommunityInfo.linkedProperties.map((property, index) => {
-                      const displayComment = property.relationship_comment?.trim();
-                      return (
-                        <div key={index} className={`flex flex-col ${index !== multiCommunityInfo.linkedProperties.length - 1 ? 'border-b border-gray-100 pb-3' : ''}`}>
-                          <div className="flex items-center gap-2">
-                            <div className="w-1.5 h-1.5 rounded-full bg-blue-500"></div>
-                            <span className="text-sm font-bold text-gray-900">
-                              {cleanPropertyName(property.property_name)}
-                            </span>
-                          </div>
-                          {displayComment && (
-                            <div className="ml-4 mt-1.5 flex items-start gap-2 animate-in fade-in slide-in-from-top-1 duration-300">
-                              <div className="mt-1.5 w-1 h-1 rounded-full bg-gray-300 flex-shrink-0"></div>
-                              <p className="text-[13px] text-gray-700 font-medium leading-relaxed">
-                                {displayComment}
-                              </p>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </>
-                )}
-
-                {/* For Single Property with Comment */}
-                {!multiCommunityInfo && (() => {
-                  // First try exact match, then try cleaned name match
-                  const selectedHOA = (hoaProperties || []).find(hoa => {
-                    // Exact match first (most reliable)
-                    if (hoa.name === formData.hoaProperty) return true;
-                    // Fallback to cleaned name match
-                    const hoaName = cleanPropertyName(hoa.name);
-                    const formPropName = cleanPropertyName(formData.hoaProperty);
-                    return hoaName === formPropName && hoaName !== '' && formPropName !== '';
-                  });
-                  if (!selectedHOA) return null;
-                  const displayComment = selectedHOA.multi_community_comment?.trim();
-                  // Strict check: must be a non-empty string after trimming
-                  if (!displayComment || displayComment.length === 0) return null;
-
-                  return (
-                    <div className="flex flex-col">
-                      <div className="flex items-center gap-2">
-                        <div className="w-1.5 h-1.5 rounded-full bg-green-500"></div>
-                        <span className="text-sm font-bold text-gray-900">
-                          {cleanPropertyName(selectedHOA.name)}
-                        </span>
-                      </div>
-                      <div className="ml-4 mt-1.5 flex items-start gap-2 animate-in fade-in slide-in-from-top-1 duration-300">
-                        <div className="mt-1.5 w-1 h-1 rounded-full bg-gray-300 flex-shrink-0"></div>
-                        <p className="text-[13px] text-gray-700 font-medium leading-relaxed">
-                          {displayComment}
-                        </p>
-                      </div>
-                    </div>
-                  );
-                })()}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-      
       <div className='text-center mb-8'>
         <h3 className='text-2xl font-bold text-green-900 mb-2'>
           Review & Submit
@@ -3819,6 +3880,37 @@ const ReviewSubmitStep = ({ formData, stripePrices, applicationId, hoaProperties
           Please review your information before submitting
         </p>
       </div>
+
+      {/* Save/Cancel Buttons when editing - Show at top */}
+      {isEditingDetails && (
+        <div className='flex justify-center gap-2 mb-6'>
+          <button
+            onClick={handleSaveDetails}
+            disabled={savingDetails}
+            className='px-4 py-2 bg-green-50 border border-green-300 rounded-lg text-green-700 hover:bg-green-100 font-semibold transition-all flex items-center gap-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed'
+          >
+            {savingDetails ? (
+              <>
+                <RefreshCw className='w-4 h-4 animate-spin' />
+                Saving...
+              </>
+            ) : (
+              <>
+                <CheckCircle className='w-4 h-4' />
+                Save
+              </>
+            )}
+          </button>
+          <button
+            onClick={handleCancelEditDetails}
+            disabled={savingDetails}
+            className='px-4 py-2 bg-gray-50 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-100 font-semibold transition-all flex items-center gap-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed'
+          >
+            <X className='w-4 h-4' />
+            Cancel
+          </button>
+        </div>
+      )}
 
       {/* Submit Button - Show at top when payment has been completed */}
       {applicationId && handleSubmit && (
@@ -3870,77 +3962,260 @@ const ReviewSubmitStep = ({ formData, stripePrices, applicationId, hoaProperties
       </div>
 
     <div className='grid grid-cols-1 md:grid-cols-2 gap-6'>
-      <div className='bg-white p-6 rounded-lg border border-gray-200'>
-        <h4 className='font-semibold text-gray-900 mb-4 flex items-center'>
-          <Building2 className='h-5 w-5 mr-2 text-green-600' />
-          Property Information
-        </h4>
+      <div className='bg-white p-6 rounded-lg border border-gray-200 relative'>
+        <div className='flex items-center justify-between mb-4'>
+          <h4 className='font-semibold text-gray-900 flex items-center'>
+            <Building2 className='h-5 w-5 mr-2 text-green-600' />
+            Property Information
+          </h4>
+          {!isEditingDetails && (
+            <button
+              onClick={handleStartEditDetails}
+              className='p-1.5 text-blue-600 hover:bg-blue-50 rounded transition-colors'
+              title='Edit details'
+            >
+              <Edit className='w-4 h-4' />
+            </button>
+          )}
+        </div>
         <div className='space-y-2 text-sm'>
-          <div>
-            <span className='font-medium'>HOA:</span> {formData.hoaProperty}
+          <div className="flex items-center gap-1">
+            <span className='font-medium'>HOA:</span> 
+            <span>{formData.hoaProperty}</span>
+            {multiCommunityInfo && multiCommunityInfo.linkedProperties && multiCommunityInfo.linkedProperties.length > 0 && (
+              <span className="relative group inline-flex items-center">
+                <span className="ml-1 px-2 py-0.5 text-xs font-semibold text-blue-700 bg-blue-50 rounded-md border border-blue-200 cursor-help">
+                  Multi-Community
+                </span>
+                {/* Tooltip */}
+                <div className="absolute left-0 top-full mt-2 hidden group-hover:block z-50 w-64 p-3 bg-gray-900 text-white text-xs rounded-lg shadow-xl">
+                  <div className="font-semibold mb-2 text-green-400">Included Properties:</div>
+                  <div className="space-y-1.5">
+                    <div className="flex items-start gap-2">
+                      <div className="w-1.5 h-1.5 rounded-full bg-green-400 mt-1 flex-shrink-0"></div>
+                      <div>
+                        <div className="font-medium">{cleanPropertyName(multiCommunityInfo.primaryProperty.name)}</div>
+                        <div className="text-gray-400 text-[10px]">Primary Property</div>
+                      </div>
+                    </div>
+                    {multiCommunityInfo.linkedProperties.map((prop, idx) => (
+                      <div key={idx} className="flex items-start gap-2">
+                        <div className="w-1.5 h-1.5 rounded-full bg-blue-400 mt-1 flex-shrink-0"></div>
+                        <div className="font-medium">{cleanPropertyName(prop.property_name)}</div>
+                      </div>
+                    ))}
+                  </div>
+                  {/* Arrow */}
+                  <div className="absolute -top-1 left-4 w-2 h-2 bg-gray-900 transform rotate-45"></div>
+                </div>
+              </span>
+            )}
           </div>
           <div>
             <span className='font-medium'>Address:</span>{' '}
-            {formData.propertyAddress}{formData.unitNumber ? ` ${formData.unitNumber}` : ''}
+            {isEditingDetails ? (
+              <input
+                type='text'
+                value={editedDetails.property_address}
+                onChange={(e) => setEditedDetails({ ...editedDetails, property_address: e.target.value })}
+                className='mt-1 w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500'
+                placeholder='Enter property address'
+              />
+            ) : (
+              <span>{formData.propertyAddress}{formData.unitNumber ? ` ${formData.unitNumber}` : ''}</span>
+            )}
           </div>
           <div>
-            <span className='font-medium'>Sale Price:</span> $
-            {formData.salePrice
-              ? Number(formData.salePrice).toLocaleString()
-              : 'N/A'}
+            <span className='font-medium'>Sale Price:</span>{' '}
+            {isEditingDetails ? (
+              <div className='relative mt-1'>
+                <span className='absolute left-3 top-1/2 transform -translate-y-1/2 text-sm text-gray-500'>$</span>
+                <input
+                  type='number'
+                  step='0.01'
+                  min='0'
+                  value={editedDetails.sale_price}
+                  onChange={(e) => setEditedDetails({ ...editedDetails, sale_price: e.target.value })}
+                  className='w-full pl-7 pr-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500'
+                  placeholder='0.00'
+                />
+              </div>
+            ) : (
+              <span>${formData.salePrice
+                ? Number(formData.salePrice).toLocaleString()
+                : 'N/A'}</span>
+            )}
           </div>
           <div>
             <span className='font-medium'>Closing Date:</span>{' '}
-            {formData.closingDate}
+            {isEditingDetails ? (
+              <input
+                type='date'
+                value={editedDetails.closing_date}
+                onChange={(e) => setEditedDetails({ ...editedDetails, closing_date: e.target.value })}
+                className='mt-1 w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500'
+              />
+            ) : (
+              <span>{formData.closingDate || 'Not set'}</span>
+            )}
           </div>
         </div>
       </div>
 
-      <div className='bg-white p-6 rounded-lg border border-gray-200'>
-        <h4 className='font-semibold text-gray-900 mb-4 flex items-center'>
-          <User className='h-5 w-5 mr-2 text-green-600' />
-          Submitter Information
-        </h4>
+      <div className='bg-white p-6 rounded-lg border border-gray-200 relative'>
+        <div className='flex items-center justify-between mb-4'>
+          <h4 className='font-semibold text-gray-900 flex items-center'>
+            <User className='h-5 w-5 mr-2 text-green-600' />
+            Submitter Information
+          </h4>
+          {!isEditingDetails && (
+            <button
+              onClick={handleStartEditDetails}
+              className='p-1.5 text-blue-600 hover:bg-blue-50 rounded transition-colors'
+              title='Edit details'
+            >
+              <Edit className='w-4 h-4' />
+            </button>
+          )}
+        </div>
         <div className='space-y-2 text-sm'>
           <div>
             <span className='font-medium'>Role:</span> {formData.submitterType}
           </div>
           <div>
-            <span className='font-medium'>Name:</span> {formData.submitterName}
+            <span className='font-medium'>Name:</span>{' '}
+            {isEditingDetails ? (
+              <input
+                type='text'
+                value={editedDetails.submitter_name}
+                onChange={(e) => setEditedDetails({ ...editedDetails, submitter_name: e.target.value })}
+                className='mt-1 w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500'
+                placeholder='Enter submitter name'
+              />
+            ) : (
+              <span>{formData.submitterName}</span>
+            )}
           </div>
           <div>
             <span className='font-medium'>Email:</span>{' '}
-            {formData.submitterEmail}
+            {isEditingDetails ? (
+              <input
+                type='email'
+                value={editedDetails.submitter_email}
+                onChange={(e) => setEditedDetails({ ...editedDetails, submitter_email: e.target.value })}
+                className='mt-1 w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500'
+                placeholder='Enter submitter email'
+              />
+            ) : (
+              <span>{formData.submitterEmail}</span>
+            )}
           </div>
           <div>
             <span className='font-medium'>Phone:</span>{' '}
-            {formData.submitterPhone}
+            {isEditingDetails ? (
+              <input
+                type='tel'
+                value={editedDetails.submitter_phone}
+                onChange={(e) => setEditedDetails({ ...editedDetails, submitter_phone: e.target.value })}
+                className='mt-1 w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500'
+                placeholder='Enter phone number'
+              />
+            ) : (
+              <span>{formData.submitterPhone || 'Not provided'}</span>
+            )}
           </div>
         </div>
       </div>
 
       {formData.submitterType !== 'settlement' && (
-        <div className='bg-white p-6 rounded-lg border border-gray-200'>
-          <h4 className='font-semibold text-gray-900 mb-4 flex items-center'>
-            <Users className='h-5 w-5 mr-2 text-green-600' />
-            Transaction Parties
-          </h4>
+        <div className='bg-white p-6 rounded-lg border border-gray-200 relative'>
+          <div className='flex items-center justify-between mb-4'>
+            <h4 className='font-semibold text-gray-900 flex items-center'>
+              <Users className='h-5 w-5 mr-2 text-green-600' />
+              Transaction Parties
+            </h4>
+            {!isEditingDetails && (
+              <button
+                onClick={handleStartEditDetails}
+                className='p-1.5 text-blue-600 hover:bg-blue-50 rounded transition-colors'
+                title='Edit details'
+              >
+                <Edit className='w-4 h-4' />
+              </button>
+            )}
+          </div>
           <div className='space-y-2 text-sm'>
             <div>
-              <span className='font-medium'>Buyer:</span> {formData.buyerName}
+              <span className='font-medium'>Buyer:</span>{' '}
+              {isEditingDetails ? (
+                <input
+                  type='text'
+                  value={editedDetails.buyer_name}
+                  onChange={(e) => setEditedDetails({ ...editedDetails, buyer_name: e.target.value })}
+                  className='mt-1 w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500'
+                  placeholder='Enter buyer name'
+                />
+              ) : (
+                <span>{formData.buyerName}</span>
+              )}
             </div>
             <div>
               <span className='font-medium'>Buyer Email:</span>{' '}
-              {Array.isArray(formData.buyerEmails) && formData.buyerEmails.length > 0
-                ? formData.buyerEmails.join(', ')
-                : (formData.buyerEmail || 'Not provided')}
+              {isEditingDetails ? (
+                <div className='mt-1 space-y-2'>
+                  {(editedDetails.buyer_email.length > 0 ? editedDetails.buyer_email : ['']).map((email, index) => (
+                    <div key={index} className='flex items-center gap-2'>
+                      <input
+                        type='email'
+                        value={email}
+                        onChange={(e) => handleUpdateBuyerEmail(index, e.target.value)}
+                        className='flex-1 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500'
+                        placeholder='Enter buyer email (optional)'
+                      />
+                      {editedDetails.buyer_email.length > 1 && (
+                        <button
+                          type='button'
+                          onClick={() => handleRemoveBuyerEmail(index)}
+                          className='p-1.5 text-red-600 hover:bg-red-50 rounded transition-colors'
+                          title='Remove email'
+                        >
+                          <X className='w-4 h-4' />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                  <button
+                    type='button'
+                    onClick={handleAddBuyerEmail}
+                    className='text-xs text-blue-600 hover:text-blue-700 font-medium flex items-center gap-1'
+                  >
+                    <span>+</span> Add Email
+                  </button>
+                </div>
+              ) : (
+                <span>
+                  {Array.isArray(formData.buyerEmails) && formData.buyerEmails.length > 0
+                    ? formData.buyerEmails.join(', ')
+                    : (formData.buyerEmail || 'Not provided')}
+                </span>
+              )}
             </div>
             <div>
               <span className='font-medium'>Seller:</span> {formData.sellerName}
             </div>
             <div>
               <span className='font-medium'>Seller Email:</span>{' '}
-              {formData.sellerEmail}
+              {isEditingDetails ? (
+                <input
+                  type='email'
+                  value={editedDetails.seller_email}
+                  onChange={(e) => setEditedDetails({ ...editedDetails, seller_email: e.target.value })}
+                  className='mt-1 w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500'
+                  placeholder='Enter seller email (optional)'
+                />
+              ) : (
+                <span>{formData.sellerEmail || 'Not provided'}</span>
+              )}
             </div>
           </div>
         </div>
@@ -3960,9 +4235,27 @@ const ReviewSubmitStep = ({ formData, stripePrices, applicationId, hoaProperties
           </div>
           <div>
             <span className='font-medium'>Payment Method:</span>{' '}
-            {formData.paymentMethod === 'credit_card'
-              ? 'Credit Card'
-              : 'Bank Transfer'}
+            {(() => {
+              // Calculate total to determine if it's free
+              let total = 0;
+              if (multiCommunityPricing && multiCommunityPricing.total !== undefined && multiCommunityPricing.total !== null) {
+                const baseTotal = multiCommunityPricing.total;
+                const convenienceFeeTotal = (formData.paymentMethod === 'credit_card' && baseTotal > 0) ? 
+                  multiCommunityPricing.totalConvenienceFee : 0;
+                total = baseTotal + convenienceFeeTotal;
+              } else {
+                total = calculateTotal(formData, stripePrices, hoaProperties);
+              }
+              
+              // Show N/A for free transactions
+              if (total === 0) {
+                return 'N/A';
+              }
+              
+              return formData.paymentMethod === 'credit_card'
+                ? 'Credit Card'
+                : 'Bank Transfer';
+            })()}
           </div>
           <div>
             <span className='font-medium'>Total:</span> ${(() => {
@@ -4088,7 +4381,22 @@ export default function GMGResaleFlow() {
   const supabase = React.useMemo(() => createClientComponentClient(), []);
   
   const [applications, setApplications] = useState([]);
-  const [currentStep, setCurrentStep] = useState(0);
+  const [currentStep, setCurrentStep] = useState(() => {
+    // Check if returning from payment to prevent homepage flash
+    if (typeof window !== 'undefined') {
+      const urlParams = new URLSearchParams(window.location.search);
+      const paymentSuccess = urlParams.get('payment_success');
+      const paymentCancelled = urlParams.get('payment_cancelled');
+      const sessionId = urlParams.get('session_id');
+      const appId = urlParams.get('app_id');
+      
+      // If returning from payment (success or cancelled), start in loading state (-1)
+      if ((paymentSuccess === 'true' || paymentCancelled === 'true') && appId) {
+        return -1;
+      }
+    }
+    return 0;
+  });
   const [applicationId, setApplicationId] = useState(null);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [authMode, setAuthMode] = useState('signin');
@@ -4388,9 +4696,9 @@ export default function GMGResaleFlow() {
           applicationData.submitter_type === 'lender_questionnaire';
         
         if (isLenderQuestionnaire) {
-          setCurrentStep(6); // Go to lender questionnaire upload step
+          setCurrentStep(5); // Go to lender questionnaire upload step (step 5)
         } else {
-          setCurrentStep(5); // Go to review step
+          setCurrentStep(5); // Go to review step (step 5 for non-lender questionnaire)
         }
       }).catch((error) => {
         console.error('Error in payment success handler:', error);
@@ -4544,7 +4852,7 @@ export default function GMGResaleFlow() {
         setCurrentStep(currentStep - 1);
       }
     }
-  }, [currentStep, formData.submitterType, formData.publicOffering]);
+  }, [currentStep, formData.submitterType, formData.publicOffering, applicationType]);
 
   // Delete draft application
   const deleteDraftApplication = React.useCallback(async (appId) => {
@@ -5638,6 +5946,11 @@ export default function GMGResaleFlow() {
                                         : `Created: ${new Date(app.created_at).toLocaleDateString()}`}
                                     </span>
                                   </div>
+
+                                  <div className='flex items-center gap-1.5 text-xs font-semibold text-gray-600 bg-gray-100 px-2 py-0.5 rounded-md'>
+                                    <Hash className='h-3.5 w-3.5 text-gray-400' />
+                                    <span>App #{app.id}</span>
+                                  </div>
                                   
                                   {isCompleted && (
                                     <div className='flex items-center gap-1.5 text-green-600 font-medium bg-green-50 px-2 py-0.5 rounded-md'>
@@ -5680,9 +5993,26 @@ export default function GMGResaleFlow() {
                                                                     applicationData?.status === 'payment_completed' ||
                                                                     applicationData?.payment_status === 'completed';
                                           
+                                          // Check if this is a lender questionnaire application
+                                          const isLenderQuestionnaire = 
+                                            applicationData?.application_type === 'lender_questionnaire' ||
+                                            applicationData?.submitter_type === 'lender_questionnaire';
+                                          
                                           if (paymentCompleted) {
-                                            // Payment completed - go to review step
-                                            setCurrentStep(5);
+                                            if (isLenderQuestionnaire) {
+                                              // For lender questionnaire: check if file was uploaded
+                                              const hasUploadedFile = !!applicationData?.lender_questionnaire_file_path;
+                                              if (hasUploadedFile) {
+                                                // File uploaded - go to review step (step 6)
+                                                setCurrentStep(6);
+                                              } else {
+                                                // Payment completed but no upload - go to upload step (step 5)
+                                                setCurrentStep(5);
+                                              }
+                                            } else {
+                                              // Non-lender questionnaire: go to review step (step 5)
+                                              setCurrentStep(5);
+                                            }
                                           } else if (app.status === 'pending_payment') {
                                             // Payment pending - go to payment step
                                             setCurrentStep(4);
@@ -6241,8 +6571,8 @@ export default function GMGResaleFlow() {
         { number: 2, title: 'Submitter Info', icon: User },
         { number: 3, title: 'Transaction Details', icon: Users },
         { number: 4, title: 'Package & Payment', icon: CreditCard },
-        { number: 5, title: 'Review & Submit', icon: CheckCircle },
-        { number: 6, title: 'Upload Lender Form', icon: Upload },
+        { number: 5, title: 'Upload Lender Form', icon: Upload },
+        { number: 6, title: 'Review & Submit', icon: CheckCircle },
       ];
     }
     return [
@@ -6301,26 +6631,54 @@ export default function GMGResaleFlow() {
           />
         );
       case 5:
+        // For lender questionnaire: Upload step comes before Review
+        // Check if this is a lender questionnaire application
+        const isLenderQuestionnaire = applicationType === 'lender_questionnaire' || 
+                                       formData.submitterType === 'lender_questionnaire';
+        
+        if (isLenderQuestionnaire) {
+          // Lender Questionnaire Upload Step
+          return (
+            <LenderQuestionnaireUploadStep
+              formData={formData}
+              applicationId={applicationId}
+              setCurrentStep={setCurrentStep}
+              setSnackbarData={setSnackbarData}
+              setShowSnackbar={setShowSnackbar}
+              loadApplications={loadApplications}
+            />
+          );
+        } else {
+          // Review & Submit Step (for non-lender questionnaire)
+          return (
+            <ReviewSubmitStep
+              formData={formData}
+              handleInputChange={handleInputChange}
+              stripePrices={stripePrices}
+              applicationId={applicationId}
+              hoaProperties={hoaProperties}
+              handleSubmit={handleSubmit}
+              isSubmitting={isSubmitting}
+              setSnackbarData={setSnackbarData}
+              setShowSnackbar={setShowSnackbar}
+            />
+          );
+        }
+      case 6:
+        // Review & Submit Step (always the last step)
+        // For lender questionnaire, this comes after upload
+        // For other types, this is step 5 (handled above)
         return (
           <ReviewSubmitStep
             formData={formData}
+            handleInputChange={handleInputChange}
             stripePrices={stripePrices}
             applicationId={applicationId}
             hoaProperties={hoaProperties}
             handleSubmit={handleSubmit}
             isSubmitting={isSubmitting}
-          />
-        );
-      case 6:
-        // Lender Questionnaire Upload Step
-        return (
-          <LenderQuestionnaireUploadStep
-            formData={formData}
-            applicationId={applicationId}
-            setCurrentStep={setCurrentStep}
             setSnackbarData={setSnackbarData}
             setShowSnackbar={setShowSnackbar}
-            loadApplications={loadApplications}
           />
         );
       default:
@@ -6341,6 +6699,25 @@ export default function GMGResaleFlow() {
           </h2>
           <p className='text-sm text-gray-600 mt-2'>
             Authenticating...
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // Payment processing state - prevents homepage flash after payment
+  if (currentStep === -1) {
+    return (
+      <div className='min-h-screen bg-gray-50 flex items-center justify-center'>
+        <div className='text-center'>
+          <div className='w-16 h-16 bg-green-700 rounded-lg flex items-center justify-center mx-auto mb-4 animate-pulse'>
+            <Loader2 className='h-8 w-8 text-white animate-spin' />
+          </div>
+          <h2 className='text-xl font-semibold text-gray-900'>
+            Processing...
+          </h2>
+          <p className='text-sm text-gray-600 mt-2'>
+            Loading your application...
           </p>
         </div>
       </div>
@@ -6677,11 +7054,20 @@ export default function GMGResaleFlow() {
         <div className='fixed bottom-0 left-0 right-0 md:relative md:bottom-auto md:left-auto md:right-auto bg-white border-t border-gray-200 md:border-0 md:bg-transparent shadow-lg md:shadow-none z-40 md:z-auto'>
           <div className='max-w-5xl mx-auto px-3 sm:px-4 lg:px-8 py-3 md:py-0'>
             <div className='flex justify-between gap-3 md:mb-12'>
-              {currentStep !== 5 ? (
+              {/* Show Previous button for all steps except step 1, step 5 (Upload for lender questionnaire), and step 6 (Review) */}
+              {currentStep !== 1 && currentStep !== 5 && currentStep !== 6 ? (
                 <button
                   onClick={prevStep}
                   disabled={currentStep === 1}
                   className='flex-1 md:flex-initial px-4 sm:px-6 py-3 border border-gray-300 rounded-lg text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2 text-sm sm:text-base font-medium'
+                >
+                  Previous
+                </button>
+              ) : currentStep === 6 ? (
+                // For step 6 (Review), show Previous button to go back to step 5 (Upload for lender questionnaire)
+                <button
+                  onClick={prevStep}
+                  className='flex-1 md:flex-initial px-4 sm:px-6 py-3 border border-gray-300 rounded-lg text-gray-700 bg-white hover:bg-gray-50 transition-colors flex items-center justify-center gap-2 text-sm sm:text-base font-medium'
                 >
                   Previous
                 </button>

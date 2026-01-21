@@ -83,6 +83,7 @@ const AdminPropertiesManagement = () => {
   const [linkingProperty, setLinkingProperty] = useState(null);
   const [savingCommentId, setSavingCommentId] = useState(null); // Track which comment is being saved
   const [savingPrimaryComment, setSavingPrimaryComment] = useState(false); // Track primary comment save
+  const [propertySearchTerm, setPropertySearchTerm] = useState(''); // Search term for available properties
 
   // Snackbar state
   const [snackbar, setSnackbar] = useState({ show: false, message: '', type: 'success' });
@@ -576,12 +577,14 @@ const AdminPropertiesManagement = () => {
     try {
       const { data, error } = await supabase
         .from('hoa_properties')
-        .select('id, name, location')
+        .select('id, name, location, is_multi_community')
         .is('deleted_at', null) // Only get non-deleted properties
         .order('name');
 
       if (error) throw error;
-      setAvailableProperties(data || []);
+      // Filter out multi-community properties - they cannot be part of another MC property
+      const filteredData = (data || []).filter(prop => !prop.is_multi_community);
+      setAvailableProperties(filteredData);
     } catch (error) {
       console.error('Error loading available properties:', error);
     }
@@ -591,6 +594,7 @@ const AdminPropertiesManagement = () => {
     setLinkingProperty(property);
     setSelectedLinkedProperties([]);
     setPropertyComments({}); // Reset comments
+    setPropertySearchTerm(''); // Reset search
     loadAvailableProperties();
     
     // Fetch the latest property data from database to ensure we have current multi_community_comment
@@ -644,9 +648,10 @@ const AdminPropertiesManagement = () => {
     if (!linkingProperty || selectedLinkedProperties.length === 0) return;
 
     try {
-      // Store reference to property ID before closing modal
+      // Store reference to property ID
       const propertyIdToUpdate = linkingProperty.id;
       const commentsToSave = { ...propertyComments }; // Capture current comments
+      const propertiesToLink = [...selectedLinkedProperties]; // Store selected properties
       
       // Optimistically update the cache IMMEDIATELY to show the change right away
       if (swrData?.properties) {
@@ -659,14 +664,11 @@ const AdminPropertiesManagement = () => {
         mutate({ ...swrData, properties: updatedProperties }, false);
       }
       
-      // Close modal first for better UX
-      setShowLinkModal(false);
-      setLinkingProperty(null);
+      // Clear selected properties immediately for better UX (but keep modal open)
       setSelectedLinkedProperties([]);
-      setPropertyComments({});
       
       // Now perform the actual database operation with comments
-      await linkProperties(propertyIdToUpdate, selectedLinkedProperties, supabase, commentsToSave);
+      await linkProperties(propertyIdToUpdate, propertiesToLink, supabase, commentsToSave);
       
       // Verify the database update was successful by directly querying the property
       const { data: verifiedProperty, error: verifyError } = await supabase
@@ -730,10 +732,19 @@ const AdminPropertiesManagement = () => {
         // The property should still show as multi-community
       }
       
-      // Reload linked properties to update state (for future modal opens)
+      // Reload linked properties to update the modal display (keep modal open)
       try {
         const linked = await getLinkedProperties(propertyIdToUpdate, supabase);
         setLinkedProperties(linked);
+        
+        // Load existing comments into state for newly linked properties
+        const updatedComments = { ...propertyComments };
+        linked.forEach(link => {
+          if (link.relationship_comment && !updatedComments[link.linked_property_id]) {
+            updatedComments[link.linked_property_id] = link.relationship_comment;
+          }
+        });
+        setPropertyComments(updatedComments);
         
         // Safety check: Ensure is_multi_community matches actual linked properties
         // This fixes any discrepancies if the update didn't work
@@ -772,7 +783,8 @@ const AdminPropertiesManagement = () => {
         setFormData({...formData, is_multi_community: true});
       }
       
-      showSnackbar('Properties linked successfully! The property is now multi-community.', 'success');
+      // Show success message but keep modal open
+      showSnackbar(`${propertiesToLink.length} propert${propertiesToLink.length > 1 ? 'ies' : 'y'} linked successfully!`, 'success');
     } catch (error) {
       console.error('Error linking properties:', error);
       // Revert optimistic update on error by forcing a fresh fetch
@@ -1868,20 +1880,35 @@ const AdminPropertiesManagement = () => {
                       <Search className="w-4 h-4 absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
                       <input
                         type="text"
+                        value={propertySearchTerm}
                         placeholder="Search for a property to link..."
                         className="w-full pl-10 pr-4 py-2 text-sm border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500 shadow-sm"
-                        onChange={(e) => {
-                          // Simple local filter logic could go here if needed
-                        }}
+                        onChange={(e) => setPropertySearchTerm(e.target.value)}
                       />
                     </div>
 
                     <div className="max-h-60 overflow-y-auto border border-gray-200 rounded-xl bg-white">
                       {availableProperties
-                        .filter(prop => prop.id !== linkingProperty.id && !linkedProperties.some(l => l.linked_property_id === prop.id))
+                        .filter(prop => 
+                          prop.id !== linkingProperty.id && 
+                          !linkedProperties.some(l => l.linked_property_id === prop.id) &&
+                          !prop.is_multi_community && // Exclude multi-community properties
+                          (propertySearchTerm === '' || 
+                            prop.name.toLowerCase().includes(propertySearchTerm.toLowerCase()) ||
+                            prop.location.toLowerCase().includes(propertySearchTerm.toLowerCase())
+                          )
+                        )
                         .length > 0 ? (
                           availableProperties
-                            .filter(prop => prop.id !== linkingProperty.id && !linkedProperties.some(l => l.linked_property_id === prop.id))
+                            .filter(prop => 
+                              prop.id !== linkingProperty.id && 
+                              !linkedProperties.some(l => l.linked_property_id === prop.id) &&
+                              !prop.is_multi_community && // Exclude multi-community properties
+                              (propertySearchTerm === '' || 
+                                prop.name.toLowerCase().includes(propertySearchTerm.toLowerCase()) ||
+                                prop.location.toLowerCase().includes(propertySearchTerm.toLowerCase())
+                              )
+                            )
                             .map((property) => {
                               const isSelected = selectedLinkedProperties.includes(property.id);
                               return (
@@ -1913,7 +1940,10 @@ const AdminPropertiesManagement = () => {
                             })
                         ) : (
                           <div className="p-6 text-center text-sm text-gray-500 italic">
-                            No additional properties found to link.
+                            {propertySearchTerm 
+                              ? `No properties found matching "${propertySearchTerm}"`
+                              : 'No additional properties available to link. (Multi-community properties cannot be linked)'
+                            }
                           </div>
                         )}
                     </div>

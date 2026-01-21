@@ -155,13 +155,23 @@ export default async function handler(req, res) {
                 lineItems = sessionLineItems.data.map(item => {
                   // Get product name - prioritize product name over description
                   let itemName = null;
+                  let itemDescription = null;
                   
-                  // First try to get product name (if product is expanded)
+                  // First try to get product name and description (if product is expanded)
                   if (item.price?.product) {
                     const product = typeof item.price.product === 'string' 
                       ? null 
                       : item.price.product;
-                    itemName = product?.name || null;
+                    if (product) {
+                      itemName = product.name || null;
+                      // Product description contains property address/name
+                      itemDescription = product.description || null;
+                    }
+                  }
+                  
+                  // Fallback to line item description if product description not available
+                  if (!itemDescription) {
+                    itemDescription = item.description || null;
                   }
                   
                   // Fallback to description if product name not available
@@ -176,6 +186,7 @@ export default async function handler(req, res) {
                   
                   return {
                     name: itemName,
+                    description: itemDescription, // Include description which contains property address
                     amount: (item.amount_total / 100).toFixed(2),
                     quantity: item.quantity || 1
                   };
@@ -341,13 +352,23 @@ export default async function handler(req, res) {
                   lineItems = sessionLineItems.data.map(item => {
                     // Get product name - prioritize product name over description
                     let itemName = null;
+                    let itemDescription = null;
                     
-                    // First try to get product name (if product is expanded)
+                    // First try to get product name and description (if product is expanded)
                     if (item.price?.product) {
                       const product = typeof item.price.product === 'string' 
                         ? null 
                         : item.price.product;
-                      itemName = product?.name || null;
+                      if (product) {
+                        itemName = product.name || null;
+                        // Product description contains property address/name
+                        itemDescription = product.description || null;
+                      }
+                    }
+                    
+                    // Fallback to line item description if product description not available
+                    if (!itemDescription) {
+                      itemDescription = item.description || null;
                     }
                     
                     // Fallback to description if product name not available
@@ -362,6 +383,7 @@ export default async function handler(req, res) {
                     
                     return {
                       name: itemName,
+                      description: itemDescription, // Include description which contains property address
                       amount: (item.amount_total / 100).toFixed(2),
                       quantity: item.quantity || 1
                     };
