@@ -2875,13 +2875,9 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
 
   // Helper functions for multi-community property tasks
   const canGeneratePDFForProperty = (group) => {
-    // Check if both forms are completed for this property
-    // All properties now require both inspection and resale forms
-    // Use property-group-specific inspection status only (no fallback to application-level)
-    const inspectionStatus = group.inspection_status ?? 'not_started';
-    
-    // All properties need both inspection and resale forms completed
-    return inspectionStatus === 'completed' && group.status === 'completed';
+    // Allow PDF generation/regeneration at any time for flexibility
+    // This allows admins to regenerate PDFs even after completion or after sending emails
+    return true;
   };
 
   const canSendEmailForProperty = (group) => {
@@ -2900,13 +2896,14 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
       // First try property-specific form data from group
       let formData = group.form_data;
       
-      // If no property-specific form data, fetch the latest application-level resale certificate form data from database
+      // If no property-specific form data, fetch the latest property-specific resale certificate form data from database
       if (!formData) {
         const { data: latestResaleForm, error: formError } = await supabase
           .from('property_owner_forms')
           .select('form_data, response_data')
           .eq('application_id', applicationId)
           .eq('form_type', 'resale_certificate')
+          .eq('property_group_id', group.id)  // Filter by property group to get correct property's data
           .maybeSingle();
         
         if (!formError && latestResaleForm) {
