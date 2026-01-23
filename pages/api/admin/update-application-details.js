@@ -132,13 +132,14 @@ export default async function handler(req, res) {
     }
 
     // Validate and add buyer_name if provided (optional)
+    // Only update if it has a value - if empty/null, skip to avoid constraint errors
+    // This safely handles cases where the migration hasn't been applied yet
     if (buyer_name !== undefined) {
       if (buyer_name && buyer_name.trim() !== '') {
         updateData.buyer_name = buyer_name.trim();
-      } else {
-        // Allow clearing buyer name (optional field)
-        updateData.buyer_name = null;
       }
+      // If buyer_name is empty/null, we skip updating it to avoid NOT NULL constraint errors
+      // The existing value in the database will be preserved
     }
 
     // Validate and add sale_price if provided

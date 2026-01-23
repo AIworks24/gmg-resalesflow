@@ -4543,7 +4543,7 @@ export default function GMGResaleFlow() {
       // Loading applications for user
       let query = supabase
         .from('applications')
-        .select('*, hoa_properties(name), application_property_groups(*)')
+        .select('*, hoa_properties(name, is_multi_community), application_property_groups(*)')
         .is('deleted_at', null) // Only get non-deleted applications
         .order('created_at', { ascending: false });
 
@@ -4562,8 +4562,32 @@ export default function GMGResaleFlow() {
         return;
       }
 
+      // For multi-community applications without property groups, fetch linked properties count
+      // Property groups are only created after payment, so we need to show linked properties count before payment
+      const applicationsWithCounts = await Promise.all(
+        (data || []).map(async (app) => {
+          // If it's a multi-community app and has no property groups yet, fetch linked properties count
+          if (app.hoa_properties?.is_multi_community && 
+              (!app.application_property_groups || app.application_property_groups.length === 0) &&
+              app.hoa_property_id) {
+            try {
+              const { data: linkedProps, error: linkedError } = await supabase
+                .rpc('get_linked_properties', { property_id: app.hoa_property_id });
+              
+              if (!linkedError && linkedProps) {
+                // Count = 1 (primary) + linked properties count
+                app._linked_properties_count = 1 + (linkedProps.length || 0);
+              }
+            } catch (err) {
+              console.warn(`Failed to fetch linked properties count for app ${app.id}:`, err);
+            }
+          }
+          return app;
+        })
+      );
+
       // Applications loaded
-      setApplications(data || []);
+      setApplications(applicationsWithCounts);
     } catch (error) {
       console.error('Error in loadApplications:', error);
       // Re-throw auth errors so caller can handle them appropriately
@@ -4578,7 +4602,7 @@ export default function GMGResaleFlow() {
     try {
       const { data, error } = await supabase
         .from('applications')
-        .select('*, hoa_properties(name), application_property_groups(*)')
+        .select('*, hoa_properties(name, is_multi_community), application_property_groups(*)')
         .eq('id', appId)
         .single();
 
@@ -5969,7 +5993,13 @@ export default function GMGResaleFlow() {
                                   {isMultiCommunity && (
                                     <div className='flex items-center gap-1.5 font-medium text-blue-700 bg-blue-50 px-2 py-0.5 rounded-md'>
                                       <Building2 className='h-3.5 w-3.5 text-blue-500' />
-                                      <span>{propertyGroups.length} Properties</span>
+                                      <span>
+                                        {propertyGroups.length > 0 
+                                          ? `${propertyGroups.length} Properties`
+                                          : app._linked_properties_count 
+                                            ? `${app._linked_properties_count} Properties`
+                                            : '0 Properties'}
+                                      </span>
                                     </div>
                                   )}
                                 </div>

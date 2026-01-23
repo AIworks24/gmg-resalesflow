@@ -843,6 +843,7 @@ async function createPropertyOwnerFormsForGroups(applicationId, groups) {
           .insert({
             application_id: applicationId,
             form_type: formType,
+            property_group_id: group.id,  // Associate form with specific property group
             status: 'not_started',
             access_token: generateAccessToken(),
             expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()

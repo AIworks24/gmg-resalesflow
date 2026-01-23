@@ -1879,9 +1879,9 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
         .eq('application_id', applicationId)
         .eq('form_type', formTypeValue);
       
-      // If this is an inspection or settlement form and we have a property group, filter by property_group_id
+      // If this is an inspection, settlement, or resale form and we have a property group, filter by property_group_id
       // This ensures each property has its own form
-      if ((formType === 'inspection' || formType === 'settlement') && group?.id) {
+      if ((formType === 'inspection' || formType === 'settlement' || formType === 'resale') && group?.id) {
         query = query.eq('property_group_id', group.id);
       }
       
@@ -1889,7 +1889,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
       
       // Special handling: If we found a form without property_group_id in a multi-community context,
       // treat it as "not found" and create a new form for this property group
-      if (formData && (formType === 'inspection' || formType === 'settlement') && group?.id && !formData.property_group_id) {
+      if (formData && (formType === 'inspection' || formType === 'settlement' || formType === 'resale') && group?.id && !formData.property_group_id) {
         formError = { code: 'PGRST116' }; // Simulate "not found" to trigger form creation
         formData = null;
       }
@@ -1906,8 +1906,8 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
           created_at: new Date().toISOString()
         };
         
-        // For inspection and settlement forms in multi-community apps, associate with property group
-        if ((formType === 'inspection' || formType === 'settlement') && group?.id) {
+        // For inspection, settlement, and resale forms in multi-community apps, associate with property group
+        if ((formType === 'inspection' || formType === 'settlement' || formType === 'resale') && group?.id) {
           formDataToInsert.property_group_id = group.id;
         }
         
