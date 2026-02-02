@@ -76,6 +76,13 @@ export default async function handler(req, res) {
     // All admin, staff, and accounting users can see all applications
     // (No role-based filtering - accounting users now have full visibility)
 
+    // Fetch all applications with same order as list (most recent first, nulls last) so
+    // urgent count is from the same full set the list uses when status=urgent.
+    const MAX_APPLICATIONS = 10000;
+    query = query
+      .order('submitted_at', { ascending: false, nullsFirst: false })
+      .range(0, MAX_APPLICATIONS - 1);
+
     const { data: applications, error: queryError } = await query;
 
     if (queryError) {
@@ -391,8 +398,8 @@ export default async function handler(req, res) {
       recentActivity
     };
 
-    // Store in cache with 5-minute TTL
-    await setCache(cacheKey, summary, 300);
+    // Store in cache with 1-minute TTL (shorter so urgent metric stays in sync with list)
+    await setCache(cacheKey, summary, 60);
 
     return res.status(200).json({ 
       ...summary,

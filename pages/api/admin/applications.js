@@ -130,15 +130,18 @@ export default async function handler(req, res) {
     const serverSideComputedStatuses = ['completed', 'pending', 'urgent'];
     const needsPostFiltering = serverSideComputedStatuses.includes(status);
     
+    // Match dashboard: NULLS LAST so "first N" are true most recent (not old rows with null submitted_at)
+    const orderOpts = { ascending: isAscending, nullsFirst: false };
+
     if (!needsPostFiltering) {
       // Apply pagination and sorting normally for standard statuses and client-side computed statuses
       const startIndex = (pageNum - 1) * limitNum;
       query = query
         .range(startIndex, startIndex + limitNum - 1)
-        .order(validSortBy, { ascending: isAscending });
+        .order(validSortBy, orderOpts);
     } else {
       // For server-side computed statuses, fetch all (no pagination yet) but still apply sorting
-      query = query.order(validSortBy, { ascending: isAscending });
+      query = query.order(validSortBy, orderOpts);
     }
 
     // Execute query

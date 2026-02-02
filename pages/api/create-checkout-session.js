@@ -18,14 +18,16 @@ export default async function handler(req, res) {
   }
 
   try {
-    // Check if test mode is enabled (defaults to LIVE mode if no valid test code)
-    const useTestMode = getTestModeFromRequest(req);
-    const stripe = getServerStripe(req);
-    
-    // Also check testMode from body (but only if it's explicitly true)
-    const bodyTestMode = req.body?.testMode === true;
-    const finalTestMode = useTestMode || bodyTestMode;
-    
+    let finalTestMode = getTestModeFromRequest(req);
+
+    const { resolveActingUser } = await import('../../lib/impersonation');
+    const identity = await resolveActingUser(req, res);
+    if (identity.isImpersonating) {
+      finalTestMode = true;
+      console.warn('[IMPERSONATION] Forced test mode for payment safety');
+    }
+
+    const stripe = getServerStripe(req, { forceTestMode: identity.isImpersonating || undefined });
     const { packageType, paymentMethod, applicationId, formData, amount } = req.body;
 
     // Validate required fields
@@ -501,7 +503,7 @@ export default async function handler(req, res) {
           // Determine delivery time based on application type
           let deliveryTime = packageType === 'rush' ? '5 business days' : '15 calendar days';
           if (applicationType === 'settlement_nc' || applicationType === 'settlement_va') {
-            deliveryTime = packageType === 'rush' ? '3 business days' : '14 calendar days';
+            deliveryTime = packageType === 'rush' ? '5 business days' : '14 calendar days';
           } else if (applicationType === 'lender_questionnaire') {
             deliveryTime = packageType === 'rush' ? '5 business days' : '10 Calendar Days';
           }
@@ -609,14 +611,21 @@ export default async function handler(req, res) {
     // Create checkout session - redirect back to application flow instead of success page
     const session = await stripe.checkout.sessions.create(sessionData);
 
-    // Update the application with the session ID
-    
+    const applicationUpdate = {
+      stripe_session_id: session.id,
+      payment_status: 'pending',
+    };
+    if (identity.isImpersonating) {
+      applicationUpdate.is_test_transaction = true;
+      applicationUpdate.impersonation_metadata = {
+        admin_id: identity.adminUserId,
+        impersonated_at: new Date().toISOString(),
+      };
+    }
+
     const { error: updateError } = await supabase
       .from('applications')
-      .update({ 
-        stripe_session_id: session.id,
-        payment_status: 'pending'
-      })
+      .update(applicationUpdate)
       .eq('id', applicationId);
 
     if (updateError) {

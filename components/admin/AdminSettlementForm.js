@@ -493,6 +493,9 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
             if (!existingData.capitalContribution_payableTo) {
               existingData.capitalContribution_payableTo = 'Payable to Association';
             }
+            if (!existingData.prepaidAssessments_payableTo) {
+              existingData.prepaidAssessments_payableTo = 'Payable to Association';
+            }
             
             // Ensure all payableTo values from form_data are preserved
             // Check all fee fields and preserve their payableTo values
@@ -729,6 +732,9 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
     }
     if (!initialData.capitalContribution_payableTo) {
       initialData.capitalContribution_payableTo = 'Payable to Association';
+    }
+    if (!initialData.prepaidAssessments_payableTo) {
+      initialData.prepaidAssessments_payableTo = 'Payable to Association';
     }
 
     // Initialize custom fields from saved form data if available
@@ -1611,7 +1617,7 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
         // If the fee has a value but no payableTo, set a default
         if (formDataToSave[feeKey] && !formDataToSave[payableToKey]) {
           // Set defaults based on fee type
-          if (feeKey === 'ownerCurrentBalance' || feeKey === 'capitalContribution') {
+          if (feeKey === 'ownerCurrentBalance' || feeKey === 'capitalContribution' || feeKey === 'prepaidAssessments') {
             formDataToSave[payableToKey] = 'Payable to Association';
           } else if (feeKey === 'transferFee' || feeKey === 'resaleCertificateFee') {
             formDataToSave[payableToKey] = 'Payable to Goodman Management Group';
@@ -1711,7 +1717,7 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
         // If the fee has a value but no payableTo, set a default
         if (formDataToSave[feeKey] && !formDataToSave[payableToKey]) {
           // Set defaults based on fee type
-          if (feeKey === 'ownerCurrentBalance' || feeKey === 'capitalContribution') {
+          if (feeKey === 'ownerCurrentBalance' || feeKey === 'capitalContribution' || feeKey === 'prepaidAssessments') {
             formDataToSave[payableToKey] = 'Payable to Association';
           } else if (feeKey === 'transferFee' || feeKey === 'resaleCertificateFee') {
             formDataToSave[payableToKey] = 'Payable to Goodman Management Group';

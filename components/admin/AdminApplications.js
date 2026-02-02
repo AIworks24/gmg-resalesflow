@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
 import useSWR from 'swr';
 
@@ -65,6 +65,10 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
   const [selectedApplicationType, setSelectedApplicationType] = useState('all');
   const [selectedPackageType, setSelectedPackageType] = useState('all'); // 'all', 'standard', 'rush'
   const [urgencyFilter, setUrgencyFilter] = useState('all'); // 'all', 'overdue', 'near_deadline'
+  const [assigneeFilter, setAssigneeFilter] = useState('all'); // 'all', 'unassigned', or staff email
+  const [assigneeDropdownOpen, setAssigneeDropdownOpen] = useState(false);
+  const [assigneeSearchQuery, setAssigneeSearchQuery] = useState('');
+  const assigneeDropdownRef = useRef(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedApplication, setSelectedApplication] = useState(null);
   const [sendingEmail, setSendingEmail] = useState(false);
@@ -907,7 +911,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
   // Reset to page 1 when filters change
   useEffect(() => {
     setCurrentPage(1);
-  }, [dateFilter, customDateRange, assignedToMe, selectedStatus, selectedApplicationType, selectedPackageType, urgencyFilter, searchTerm]);
+  }, [dateFilter, customDateRange, assignedToMe, selectedStatus, selectedApplicationType, selectedPackageType, urgencyFilter, assigneeFilter, searchTerm]);
 
   // Load SimplePDF script
   useEffect(() => {
@@ -1222,6 +1226,16 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
       });
     }
 
+    // Apply assignee filter
+    if (assigneeFilter !== 'all') {
+      filtered = filtered.filter(app => {
+        if (assigneeFilter === 'unassigned') {
+          return !app.assigned_to || app.assigned_to.trim() === '';
+        }
+        return app.assigned_to && app.assigned_to.toLowerCase() === assigneeFilter.toLowerCase();
+      });
+    }
+
     // Apply search filter
     if (searchTerm) {
       const searchLower = searchTerm.toLowerCase();
@@ -1298,7 +1312,44 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
     const paginated = filtered.slice(startIndex, startIndex + itemsPerPage);
 
     return { applications: paginated, totalCount: count };
-  }, [swrData, dateFilter, customDateRange, selectedStatus, selectedApplicationType, selectedPackageType, urgencyFilter, searchTerm, assignedToMe, userEmail, currentPage, itemsPerPage, userRole]);
+  }, [swrData, dateFilter, customDateRange, selectedStatus, selectedApplicationType, selectedPackageType, urgencyFilter, assigneeFilter, searchTerm, assignedToMe, userEmail, currentPage, itemsPerPage, userRole]);
+
+  // Filtered staff list for assignee dropdown search (by name or email)
+  const filteredStaffForAssignee = useMemo(() => {
+    if (!assigneeSearchQuery.trim()) return staffMembers;
+    const q = assigneeSearchQuery.trim().toLowerCase();
+    return staffMembers.filter(
+      (s) =>
+        (s.first_name && s.first_name.toLowerCase().includes(q)) ||
+        (s.last_name && s.last_name.toLowerCase().includes(q)) ||
+        (s.email && s.email.toLowerCase().includes(q)) ||
+        `${(s.first_name || '').toLowerCase()} ${(s.last_name || '').toLowerCase()}`.includes(q) ||
+        `${(s.last_name || '').toLowerCase()} ${(s.first_name || '').toLowerCase()}`.includes(q)
+    );
+  }, [staffMembers, assigneeSearchQuery]);
+
+  // Close assignee dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (assigneeDropdownRef.current && !assigneeDropdownRef.current.contains(e.target)) {
+        setAssigneeDropdownOpen(false);
+      }
+    };
+    if (assigneeDropdownOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [assigneeDropdownOpen]);
+
+  // Display name for assignee column: always first + last name (or name-like fallback from email)
+  const getAssigneeDisplayName = (assignedTo, staffList) => {
+    if (!assignedTo || !String(assignedTo).trim()) return null;
+    const assignedLower = assignedTo.trim().toLowerCase();
+    const staff = staffList.find((s) => s.email && s.email.toLowerCase() === assignedLower);
+    if (staff) return `${staff.first_name || ''} ${staff.last_name || ''}`.trim() || null;
+    const local = String(assignedTo).split('@')[0] || '';
+    return local ? local.charAt(0).toUpperCase() + local.slice(1).toLowerCase() : '—';
+  };
 
   // Check if application was created before auto-assignment feature was implemented
   // Auto-assignment was implemented on 2025-01-15
@@ -3115,8 +3166,8 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
           </button>
         </div>
 
-        {/* Filters & Search Card */}
-        <div className='bg-white rounded-xl shadow-sm border border-gray-200 mb-6 overflow-hidden'>
+        {/* Filters & Search Card - overflow-visible so Assignee dropdown is not clipped */}
+        <div className='bg-white rounded-xl shadow-sm border border-gray-200 mb-6 overflow-visible'>
           <div className='p-5 space-y-4'>
             {/* Search & Primary Filters */}
             <div className='flex flex-col lg:flex-row gap-4'>
@@ -3275,6 +3326,102 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                 <option value='overdue'>Overdue Only</option>
                 <option value='near_deadline'>Near Deadline Only</option>
               </select>
+            </div>
+
+            {/* Assignee Filter - searchable dropdown for long list */}
+            <div className='space-y-1.5' ref={assigneeDropdownRef}>
+              <label className='text-xs font-semibold text-gray-500 uppercase tracking-wider'>
+                Assignee
+              </label>
+              <div className='relative'>
+                <button
+                  type='button'
+                  onClick={() => {
+                    setAssigneeDropdownOpen((o) => !o);
+                    if (!assigneeDropdownOpen) setAssigneeSearchQuery('');
+                  }}
+                  className='w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all flex items-center justify-between gap-2'
+                >
+                  <span className='truncate'>
+                    {assigneeFilter === 'all'
+                      ? 'All Assignees'
+                      : assigneeFilter === 'unassigned'
+                        ? 'Unassigned'
+                        : (getAssigneeDisplayName(assigneeFilter, staffMembers) ?? '—')}
+                  </span>
+                  <ChevronDown className={`w-4 h-4 text-gray-400 flex-shrink-0 transition-transform ${assigneeDropdownOpen ? 'rotate-180' : ''}`} />
+                </button>
+                {assigneeDropdownOpen && (
+                  <div
+                    className='absolute z-50 mt-1 w-full min-w-[12rem] bg-white border border-gray-200 rounded-lg shadow-lg py-1'
+                    onKeyDown={(e) => {
+                      if (e.key === 'Escape') {
+                        setAssigneeDropdownOpen(false);
+                      }
+                    }}
+                  >
+                    <button
+                      type='button'
+                      onClick={() => {
+                        setAssigneeFilter('all');
+                        setAssigneeDropdownOpen(false);
+                      }}
+                      className={`w-full px-3 py-2 text-left text-sm flex items-center gap-2 ${assigneeFilter === 'all' ? 'bg-blue-50 text-blue-700 font-medium' : 'text-gray-700 hover:bg-gray-50'}`}
+                    >
+                      {assigneeFilter === 'all' && <CheckSquare className='w-4 h-4 flex-shrink-0' />}
+                      <span className={assigneeFilter === 'all' ? 'font-medium' : ''}>All Assignees</span>
+                    </button>
+                    <button
+                      type='button'
+                      onClick={() => {
+                        setAssigneeFilter('unassigned');
+                        setAssigneeDropdownOpen(false);
+                      }}
+                      className={`w-full px-3 py-2 text-left text-sm flex items-center gap-2 ${assigneeFilter === 'unassigned' ? 'bg-blue-50 text-blue-700 font-medium' : 'text-gray-700 hover:bg-gray-50'}`}
+                    >
+                      {assigneeFilter === 'unassigned' && <CheckSquare className='w-4 h-4 flex-shrink-0' />}
+                      <span className={assigneeFilter === 'unassigned' ? 'font-medium' : ''}>Unassigned</span>
+                    </button>
+                    <div className='border-t border-gray-100 px-2 pt-2 pb-1'>
+                      <div className='relative'>
+                        <Search className='w-4 h-4 absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400' />
+                        <input
+                          type='text'
+                          placeholder='Search assignees...'
+                          value={assigneeSearchQuery}
+                          onChange={(e) => setAssigneeSearchQuery(e.target.value)}
+                          onKeyDown={(e) => e.stopPropagation()}
+                          className='w-full pl-8 pr-3 py-1.5 border border-gray-200 rounded-md text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500'
+                          autoFocus
+                        />
+                      </div>
+                    </div>
+                    <div className='max-h-48 overflow-y-auto border-t border-gray-100'>
+                      {filteredStaffForAssignee.length === 0 ? (
+                        <div className='px-3 py-4 text-sm text-gray-500 text-center'>No assignees match</div>
+                      ) : (
+                        filteredStaffForAssignee.map((staff) => (
+                          <button
+                            key={staff.email}
+                            type='button'
+                            onClick={() => {
+                              setAssigneeFilter(staff.email);
+                              setAssigneeDropdownOpen(false);
+                              setAssigneeSearchQuery('');
+                            }}
+                            className={`w-full px-3 py-2 text-left text-sm flex items-center gap-2 ${assigneeFilter === staff.email ? 'bg-blue-50 text-blue-700 font-medium' : 'text-gray-700 hover:bg-gray-50'}`}
+                          >
+                            {assigneeFilter === staff.email && <CheckSquare className='w-4 h-4 flex-shrink-0' />}
+                            <span className={assigneeFilter === staff.email ? 'font-medium' : ''}>
+                              {staff.first_name} {staff.last_name}
+                            </span>
+                          </button>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
 
           </div>
@@ -3442,14 +3589,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                         {app.assigned_to ? (
                           <div className='flex items-center justify-center gap-1'>
                             <User className='w-3 h-3 text-gray-400' />
-                            <span>
-                              {(() => {
-                                const staff = staffMembers.find(s => s.email === app.assigned_to);
-                                return staff 
-                                  ? `${staff.first_name} ${staff.last_name}` 
-                                  : app.assigned_to;
-                              })()}
-                            </span>
+                            <span>{getAssigneeDisplayName(app.assigned_to, staffMembers) ?? '—'}</span>
                           </div>
                         ) : (
                           <span className='text-gray-400 block text-center'>Unassigned</span>
@@ -3476,10 +3616,10 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
             <div className='text-center py-12'>
               <FileText className='w-12 h-12 text-gray-400 mx-auto mb-4' />
               <h3 className='text-lg font-medium text-gray-900 mb-2'>
-                {searchTerm || dateFilter !== 'all' || urgencyFilter !== 'all' || assignedToMe ? 'No applications found' : 'No applications yet'}
+                {searchTerm || dateFilter !== 'all' || urgencyFilter !== 'all' || assigneeFilter !== 'all' || assignedToMe ? 'No applications found' : 'No applications yet'}
               </h3>
               <p className='text-gray-500'>
-                {searchTerm || dateFilter !== 'all' || urgencyFilter !== 'all' || assignedToMe
+                {searchTerm || dateFilter !== 'all' || urgencyFilter !== 'all' || assigneeFilter !== 'all' || assignedToMe
                   ? 'Try adjusting your search criteria or filters'
                   : 'Applications will appear here once submitted'}
               </p>
@@ -3493,10 +3633,10 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
             <div className='bg-white rounded-xl shadow-sm border border-gray-200 p-8 text-center'>
               <FileText className='w-12 h-12 text-gray-400 mx-auto mb-4' />
               <h3 className='text-lg font-medium text-gray-900 mb-2'>
-                {searchTerm || dateFilter !== 'all' || urgencyFilter !== 'all' || assignedToMe ? 'No applications found' : 'No applications yet'}
+                {searchTerm || dateFilter !== 'all' || urgencyFilter !== 'all' || assigneeFilter !== 'all' || assignedToMe ? 'No applications found' : 'No applications yet'}
               </h3>
               <p className='text-gray-500'>
-                {searchTerm || dateFilter !== 'all' || urgencyFilter !== 'all' || assignedToMe
+                {searchTerm || dateFilter !== 'all' || urgencyFilter !== 'all' || assigneeFilter !== 'all' || assignedToMe
                   ? 'Try adjusting your search criteria or filters'
                   : 'Applications will appear here once submitted'}
               </p>
@@ -3612,10 +3752,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                     <div>
                       <div className='text-xs text-gray-500 uppercase tracking-wider font-semibold mb-1'>Assignee</div>
                       <div className='text-sm font-medium text-gray-900'>
-                        {app.assigned_to ? (() => {
-                          const staff = staffMembers.find(s => s.email === app.assigned_to);
-                          return staff ? `${staff.first_name} ${staff.last_name}` : app.assigned_to;
-                        })() : <span className='text-gray-400'>Unassigned</span>}
+                        {app.assigned_to ? (getAssigneeDisplayName(app.assigned_to, staffMembers) ?? '—') : <span className='text-gray-400'>Unassigned</span>}
                       </div>
                     </div>
                   </div>
@@ -4082,24 +4219,6 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                        <div>
                         <label className='text-xs font-medium text-gray-500 uppercase tracking-wider block mb-1'>License</label>
                         <div className='text-sm text-gray-900'>{selectedApplication.realtor_license || 'N/A'}</div>
-                      </div>
-                      <div className='col-span-2'>
-                         <label className='text-xs font-medium text-gray-500 uppercase tracking-wider block mb-1'>Application Type</label>
-                         <div className='inline-flex'>
-                          {(() => {
-                            const appType = selectedApplication.application_type || 'single_property';
-                            let label = 'Single Property';
-                            let color = 'bg-gray-100 text-gray-800';
-                            
-                            if (appType === 'settlement_va') { label = 'Settlement - VA'; color = 'bg-green-100 text-green-800'; }
-                            else if (appType === 'settlement_nc') { label = 'Settlement - NC'; color = 'bg-blue-100 text-blue-800'; }
-                            else if (appType === 'public_offering') { label = 'Public Offering'; color = 'bg-purple-100 text-purple-800'; }
-                            else if (appType === 'multi_community') { label = 'Multi-Community'; color = 'bg-orange-100 text-orange-800'; }
-                            else if (appType === 'lender_questionnaire') { label = 'Lender Questionnaire'; color = 'bg-indigo-100 text-indigo-800'; }
-                            
-                            return <span className={`px-2 py-1 rounded-md text-xs font-medium ${color}`}>{label}</span>;
-                          })()}
-                         </div>
                       </div>
                        <div>
                         <label className='text-xs font-medium text-gray-500 uppercase tracking-wider block mb-1'>Package</label>

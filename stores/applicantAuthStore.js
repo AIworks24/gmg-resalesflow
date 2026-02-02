@@ -91,18 +91,29 @@ const useApplicantAuthStore = create((set, get) => ({
         // If email_confirmed_at is not null, allow access
         
         // Allow applicant roles: requester, realtor, or no role
-        if (!profile?.role || ['requester', 'realtor'].includes(profile.role)) {
+        const isApplicantRole = !profile?.role || ['requester', 'realtor'].includes(profile.role);
+        const isImpersonating = typeof window !== 'undefined' && (() => {
+          try {
+            const raw = sessionStorage.getItem('gmg_impersonation');
+            if (!raw) return false;
+            const data = JSON.parse(raw);
+            return !!data?.id;
+          } catch { return false; }
+        })();
+
+        if (isApplicantRole || isImpersonating) {
           set({
             user,
             profile,
             isLoading: false,
             isInitialized: true,
           });
-          
-          // Load user's applications
-          await get().loadApplications();
+          if (isApplicantRole) {
+            await get().loadApplications();
+          }
+          // When impersonating, index.js loadApplications uses /api/my-applications
         } else {
-          // User is admin/staff, not allowed in applicant section
+          // User is admin/staff, not allowed in applicant section (and not impersonating)
           set({
             user: null,
             profile: null,

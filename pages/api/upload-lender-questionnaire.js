@@ -254,7 +254,7 @@ export default async function handler(req, res) {
                     </tr>
                     <tr>
                       <td style="padding: 8px 0; border-bottom: 1px solid #eee;"><strong>Processing Type:</strong></td>
-                      <td style="padding: 8px 0; border-bottom: 1px solid #eee;">${applicationData.package_type === 'rush' ? 'Rush (3 business days)' : 'Standard (10 calendar days)'}</td>
+                      <td style="padding: 8px 0; border-bottom: 1px solid #eee;">${applicationData.package_type === 'rush' ? 'Rush (5 business days)' : 'Standard (10 calendar days)'}</td>
                     </tr>
                     <tr>
                       <td style="padding: 8px 0; border-bottom: 1px solid #eee;"><strong>Total Amount:</strong></td>

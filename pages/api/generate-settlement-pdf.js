@@ -2,7 +2,7 @@ import { createPagesServerClient } from '@supabase/auth-helpers-nextjs';
 import settlementFormFields from '../../lib/settlementFormFields.json';
 import fs from 'fs';
 import path from 'path';
-import { formatDateTimeInTimezone } from '../../lib/timeUtils';
+import { formatDateTimeInTimezone, formatDateMonthDayYear } from '../../lib/timeUtils';
 
 // Helper function to format property address with unit number
 const formatPropertyAddress = (address, unitNumber) => {
@@ -104,19 +104,13 @@ export default async function handler(req, res) {
     
     console.log('PDF Generation - Document Type:', documentType);
 
-    // Helper function to format values
+    // Helper function to format values (dates as Month-Day-Year e.g. 1-23-2026)
     const formatValue = (value, fieldType) => {
       if (value === null || value === undefined || value === '') return '';
       
       if (fieldType === 'date' && value) {
-        try {
-          const date = new Date(value);
-          if (!isNaN(date.getTime())) {
-            return date.toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit' });
-          }
-        } catch (e) {
-          // If date parsing fails, return as is
-        }
+        const formatted = formatDateMonthDayYear(value, userTimezone);
+        if (formatted) return formatted;
       }
       
       return String(value);

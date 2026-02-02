@@ -1,11 +1,14 @@
 import { useRouter } from 'next/router';
 import { XCircle, ArrowLeft, RefreshCw } from 'lucide-react';
+import ImpersonationBanner from '../../components/ImpersonationBanner';
 
 export default function PaymentCancel() {
   const router = useRouter();
 
   return (
-    <div className="min-h-screen bg-gray-50 flex items-center justify-center py-12">
+    <div className="min-h-screen bg-gray-50 flex flex-col pt-12">
+      <ImpersonationBanner />
+      <div className="flex-1 flex items-center justify-center py-12">
       <div className="max-w-md mx-auto px-4 text-center">
         {/* Cancel Icon */}
         <XCircle className="h-16 w-16 text-red-600 mx-auto mb-6" />
@@ -57,6 +60,7 @@ export default function PaymentCancel() {
             </a>
           </p>
         </div>
+      </div>
       </div>
     </div>
   );

@@ -1,5 +1,7 @@
 import { createPagesServerClient } from '@supabase/auth-helpers-nextjs';
 import { formatEmailsForStorage, validateEmails } from '../../lib/emailUtils';
+import { resolveActingUser } from '../../lib/impersonation';
+import { logApplicationUpdate } from '../../lib/auditLog';
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -7,15 +9,10 @@ export default async function handler(req, res) {
   }
 
   try {
-    // Initialize Supabase client
     const supabase = createPagesServerClient({ req, res });
+    const identity = await resolveActingUser(req, res);
 
-    // Check if user is authenticated
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-
-    if (!session) {
+    if (!identity.authenticated || !identity.actingUserId) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
@@ -36,7 +33,6 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Application ID is required' });
     }
 
-    // Verify that the user owns this application
     const { data: application, error: appError } = await supabase
       .from('applications')
       .select('user_id')
@@ -47,15 +43,8 @@ export default async function handler(req, res) {
       return res.status(404).json({ error: 'Application not found' });
     }
 
-    // Check if user owns the application or is admin/staff
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('role')
-      .eq('id', session.user.id)
-      .single();
-
-    const isAdminOrStaff = profile?.role === 'admin' || profile?.role === 'staff' || profile?.role === 'accounting';
-    const isOwner = application.user_id === session.user.id;
+    const isOwner = application.user_id === identity.actingUserId;
+    const isAdminOrStaff = !identity.isImpersonating && (identity.effectiveRole === 'admin' || identity.effectiveRole === 'staff' || identity.effectiveRole === 'accounting');
 
     if (!isOwner && !isAdminOrStaff) {
       return res.status(403).json({ error: 'Forbidden. You can only update your own applications.' });
@@ -213,6 +202,17 @@ export default async function handler(req, res) {
 
     if (!updatedApplication || updatedApplication.length === 0) {
       return res.status(404).json({ error: 'Application not found' });
+    }
+
+    if (identity.isImpersonating) {
+      logApplicationUpdate({
+        adminUserId: identity.adminUserId,
+        actingUserId: identity.actingUserId,
+        applicationId,
+        changes: updateData,
+        isImpersonating: true,
+        req,
+      });
     }
 
     return res.status(200).json({

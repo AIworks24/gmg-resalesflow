@@ -463,6 +463,7 @@ export async function createNotifications(applicationId, supabaseClient) {
                   isMultiCommunity: isMultiCommunity,
                   linkedProperties: linkedProperties,
                   applicationType: application.application_type,
+                  submitterType: application.submitter_type,
                 }).then(result => {
                   console.log(`[EMAIL_SUCCESS] App ${applicationId}: ✓ Sent to ${emailToSend}`);
                   return result;

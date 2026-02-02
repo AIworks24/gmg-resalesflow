@@ -7,14 +7,17 @@ export default async function handler(req, res) {
   }
 
   try {
-    // Check if test mode is enabled
-    const useTestMode = getTestModeFromRequest(req);
-    const stripe = getServerStripe(req);
-    
-    const { packageType, paymentMethod, applicationId, formData, paymentMethodId, amount, testMode, propertyCount } = req.body;
+    let finalTestMode = getTestModeFromRequest(req);
 
-    // Also check testMode from body
-    const finalTestMode = useTestMode || testMode === true;
+    const { resolveActingUser } = await import('../../lib/impersonation');
+    const identity = await resolveActingUser(req, res);
+    if (identity.isImpersonating) {
+      finalTestMode = true;
+      console.warn('[IMPERSONATION] Forced test mode for payment safety');
+    }
+
+    const stripe = getServerStripe(req, { forceTestMode: identity.isImpersonating || undefined });
+    const { packageType, paymentMethod, applicationId, formData, paymentMethodId, amount, propertyCount } = req.body;
 
     // Validate required fields
     if (!packageType || !paymentMethod) {

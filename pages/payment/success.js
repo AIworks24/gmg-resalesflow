@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/router';
 import { CheckCircle, FileText, Clock, Mail } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
+import ImpersonationBanner from '../../components/ImpersonationBanner';
 
 // Helper function to format property address with unit number
 const formatPropertyAddress = (address, unitNumber) => {
@@ -52,10 +53,13 @@ export default function PaymentSuccess() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-green-600 mx-auto"></div>
-          <p className="mt-4 text-gray-600">Loading your application...</p>
+      <div className="min-h-screen bg-gray-50 flex flex-col pt-12">
+        <ImpersonationBanner />
+        <div className="flex-1 flex items-center justify-center">
+          <div className="text-center">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-green-600 mx-auto"></div>
+            <p className="mt-4 text-gray-600">Loading your application...</p>
+          </div>
         </div>
       </div>
     );
@@ -63,17 +67,20 @@ export default function PaymentSuccess() {
 
   if (!application) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-center">
-          <div className="text-red-600 text-6xl mb-4">⚠️</div>
-          <h1 className="text-2xl font-bold text-gray-900 mb-2">Application Not Found</h1>
-          <p className="text-gray-600 mb-6">We couldn't find your application. Please contact support.</p>
-          <button
-            onClick={() => router.push('/')}
-            className="bg-green-600 text-white px-6 py-3 rounded-lg hover:bg-green-700"
-          >
-            Return to Home
-          </button>
+      <div className="min-h-screen bg-gray-50 flex flex-col pt-12">
+        <ImpersonationBanner />
+        <div className="flex-1 flex items-center justify-center">
+          <div className="text-center">
+            <div className="text-red-600 text-6xl mb-4">⚠️</div>
+            <h1 className="text-2xl font-bold text-gray-900 mb-2">Application Not Found</h1>
+            <p className="text-gray-600 mb-6">We couldn't find your application. Please contact support.</p>
+            <button
+              onClick={() => router.push('/')}
+              className="bg-green-600 text-white px-6 py-3 rounded-lg hover:bg-green-700"
+            >
+              Return to Home
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -83,8 +90,10 @@ export default function PaymentSuccess() {
   const inspectionForm = application.property_owner_forms?.find(f => f.form_type === 'inspection_form');
 
   return (
-    <div className="min-h-screen bg-gray-50 py-12">
-      <div className="max-w-4xl mx-auto px-4">
+    <div className="min-h-screen bg-gray-50 flex flex-col pt-12">
+      <ImpersonationBanner />
+      <div className="flex-1 py-12">
+        <div className="max-w-4xl mx-auto px-4">
         {/* Success Header */}
         <div className="text-center mb-8">
           <CheckCircle className="h-16 w-16 text-green-600 mx-auto mb-4" />
@@ -196,6 +205,7 @@ export default function PaymentSuccess() {
           >
             Print Confirmation
           </button>
+        </div>
         </div>
       </div>
     </div>

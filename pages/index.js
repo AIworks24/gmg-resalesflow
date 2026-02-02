@@ -3,11 +3,14 @@ import { useRouter } from 'next/router';
 import { supabase } from '../lib/supabase';
 import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
 import { loadStripe } from '@stripe/stripe-js';
-import { getStripeWithFallback } from '../lib/stripe';
+import { getStripeWithFallback, getFriendlyPaymentErrorMessage } from '../lib/stripe';
 import { getTestModeFromRequest, setTestModeCookie, getTestModeFromCookie } from '../lib/stripeMode';
 import { useAppContext } from '../lib/AppContext';
 import { useApplicantAuth } from '../providers/ApplicantAuthProvider';
 import useApplicantAuthStore from '../stores/applicantAuthStore';
+import useImpersonationStore from '../stores/impersonationStore';
+import { fetchWithImpersonation } from '../lib/apiWithImpersonation';
+import ImpersonationBanner from '../components/ImpersonationBanner';
 import useRequireVerifiedEmail from '../hooks/useRequireVerifiedEmail';
 import MultiEmailInput from '../components/common/MultiEmailInput';
 // Removed pricingUtils import - using database-driven pricing instead
@@ -1007,6 +1010,8 @@ const PackagePaymentStep = ({
   setShowSnackbar,
   loadApplications,
   isTestMode, // Add test mode prop
+  testModeCode, // Add test mode code for API calls
+  isImpersonating, // When true, payment uses test mode; Stripe.js must use test key
 }) => {
   const [isProcessing, setIsProcessing] = useState(false);
   const [paymentError, setPaymentError] = useState(null);
@@ -1558,22 +1563,28 @@ const PackagePaymentStep = ({
           setApplicationId(createdApplicationId);
         }
 
-        // Get Stripe instance with enhanced error handling (use test mode if enabled)
-        const stripe = await getStripeWithFallback(isTestMode);
+        // Get Stripe instance: use test key when ?test= is set or when impersonating (backend forces test session)
+        const stripe = await getStripeWithFallback(isTestMode || !!isImpersonating);
+
+        // Build API URL with test mode query parameter if enabled
+        const apiUrl = isTestMode && testModeCode
+          ? `/api/create-checkout-session?test=${encodeURIComponent(testModeCode)}`
+          : '/api/create-checkout-session';
 
         // Create checkout session
-        const response = await fetch('/api/create-checkout-session', {
+        const response = await fetchWithImpersonation(apiUrl, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
           },
+          credentials: 'include',
           body: JSON.stringify({
             packageType: formData.packageType,
             paymentMethod: formData.paymentMethod,
             applicationId: createdApplicationId,
             formData: formData,
             amount: Math.round(totalAmount * 100), // Convert to cents
-            testMode: isTestMode, // Pass test mode to API
+            // Note: testMode removed - now passed via query parameter for security
           }),
         });
 
@@ -1613,8 +1624,7 @@ const PackagePaymentStep = ({
       }
     } catch (error) {
       console.error('Payment error:', error);
-      
-      // Check if it's an ad blocker related error
+      const friendlyMessage = getFriendlyPaymentErrorMessage(error);
       if (error.message && (
         error.message.includes('ad blockers') ||
         error.message.includes('browser security settings') ||
@@ -1623,7 +1633,7 @@ const PackagePaymentStep = ({
         setShowAdBlockerWarning(true);
         setPaymentError('Payment system blocked. Please check your browser settings.');
       } else {
-        setPaymentError(error.message || 'Payment failed. Please try again.');
+        setPaymentError(friendlyMessage);
       }
     } finally {
       setIsProcessing(false);
@@ -1947,7 +1957,7 @@ const PackagePaymentStep = ({
                   PRIORITY
                 </span>
               </h4>
-              <p className='text-sm text-gray-600'>{formData.submitterType === 'settlement' ? '3 business days' : '5 business days'}</p>
+              <p className='text-sm text-gray-600'>5 business days</p>
             </div>
             <div className='text-right'>
               <div className='text-lg text-gray-500'>
@@ -2052,7 +2062,7 @@ const PackagePaymentStep = ({
                     <li>Rush Processing</li>
                     <li>Priority queue processing</li>
                     <li>Expedited accounting review</li>
-                    <li>3-day completion guarantee</li>
+                    <li>5-day completion guarantee</li>
                     {(() => {
                       const selectedProperty = hoaProperties?.find(prop => prop.name === formData.hoaProperty);
                       const location = selectedProperty?.location?.toUpperCase() || '';
@@ -2075,7 +2085,7 @@ const PackagePaymentStep = ({
                 <li>Rush Processing</li>
                 <li>Priority queue processing</li>
                 <li>Expedited accounting review</li>
-                <li>3-day completion guarantee</li>
+                <li>5-day completion guarantee</li>
                 {(() => {
                   const selectedProperty = hoaProperties?.find(prop => prop.name === formData.hoaProperty);
                   const location = selectedProperty?.location?.toUpperCase() || '';
@@ -3766,7 +3776,7 @@ const ReviewSubmitStep = ({ formData, handleInputChange, stripePrices, applicati
 
       // If applicationId exists, also update via API
       if (applicationId) {
-        const response = await fetch('/api/update-application-details', {
+        const response = await fetchWithImpersonation('/api/update-application-details', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -4284,6 +4294,7 @@ export default function GMGResaleFlow() {
   
   // Detect test mode from URL parameter (defaults to LIVE mode)
   const [isTestMode, setIsTestMode] = useState(false);
+  const [testModeCode, setTestModeCode] = useState(null); // Store test code for API calls
   
   useEffect(() => {
     // Check URL for test mode parameter
@@ -4298,14 +4309,19 @@ export default function GMGResaleFlow() {
           .then(res => res.json())
           .then(data => {
             if (data.valid) {
-              // Valid test code - enable test mode and store in session cookie
+              // Valid test code - enable test mode and store in session
               setIsTestMode(true);
+              setTestModeCode(testCode); // Store the actual code for API calls
               setTestModeCookie(true);
+              // Store test code in sessionStorage for persistence
+              sessionStorage.setItem('test_mode_code', testCode);
               // Test mode enabled via URL parameter
             } else {
               // Invalid test code - use LIVE mode and clear any test mode cookie
               setIsTestMode(false);
+              setTestModeCode(null);
               setTestModeCookie(false);
+              sessionStorage.removeItem('test_mode_code');
               // Invalid test code, using LIVE mode
             }
           })
@@ -4313,16 +4329,26 @@ export default function GMGResaleFlow() {
             console.error('[Stripe] Error validating test code:', error);
             // On error, default to LIVE mode
             setIsTestMode(false);
+            setTestModeCode(null);
             setTestModeCookie(false);
+            sessionStorage.removeItem('test_mode_code');
           });
       } else {
-        // No test code in URL - check session cookie for persistence
+        // No test code in URL - check session storage and cookie for persistence
+        const storedCode = sessionStorage.getItem('test_mode_code');
         const cookieTestMode = getTestModeFromCookie();
-        setIsTestMode(cookieTestMode);
         
-        if (cookieTestMode) {
-          // Test mode persisted from session cookie
+        if (storedCode && cookieTestMode) {
+          // Both code and cookie present - use test mode
+          setIsTestMode(true);
+          setTestModeCode(storedCode);
+          // Test mode persisted from session
         } else {
+          // Clear everything if incomplete
+          setIsTestMode(false);
+          setTestModeCode(null);
+          sessionStorage.removeItem('test_mode_code');
+          setTestModeCookie(false);
           // Using LIVE mode (default)
         }
       }
@@ -4376,6 +4402,11 @@ export default function GMGResaleFlow() {
   
   // Get router for navigation
   const router = useRouter();
+
+  const { isImpersonating, impersonatedUser, initialize: initImpersonation } = useImpersonationStore();
+  React.useEffect(() => {
+    initImpersonation();
+  }, [initImpersonation]);
   
   // Create Supabase client for Realtime subscriptions
   const supabase = React.useMemo(() => createClientComponentClient(), []);
@@ -4532,24 +4563,43 @@ export default function GMGResaleFlow() {
     }
   }, [router.isReady, router.query, initialize]);
 
-  // Load applications for the current user
+  // Load applications for the current user (or impersonated user)
   const loadApplications = React.useCallback(async () => {
+    if (isImpersonating && impersonatedUser?.id) {
+      try {
+        const response = await fetchWithImpersonation('/api/my-applications', { credentials: 'include' });
+        if (!response.ok) {
+          if (response.status === 401) throw new Error('Unauthorized');
+          return;
+        }
+        const data = await response.json();
+        setApplications(Array.isArray(data) ? data : []);
+      } catch (error) {
+        console.error('Error loading applications (impersonation):', error);
+      }
+      return;
+    }
+
+    // On applicant portal, admin is only here when impersonating. Never show all applications.
+    // If impersonation store hasn't hydrated yet, show nothing until it does (then we'll use API above).
+    if (userRole === 'admin') {
+      setApplications([]);
+      return;
+    }
+
     if (!user) {
       console.warn('Cannot load applications: user not available');
       return;
     }
 
     try {
-      // Loading applications for user
-      let query = supabase
+      // Loading applications for requester (always scoped to this user)
+      const query = supabase
         .from('applications')
         .select('*, hoa_properties(name, is_multi_community), application_property_groups(*)')
         .is('deleted_at', null) // Only get non-deleted applications
-        .order('created_at', { ascending: false });
-
-      if (userRole !== 'admin') {
-        query = query.eq('user_id', user.id);
-      }
+        .order('created_at', { ascending: false })
+        .eq('user_id', user.id);
 
       const { data, error } = await query;
 
@@ -4595,7 +4645,7 @@ export default function GMGResaleFlow() {
         throw error;
       }
     }
-  }, [user, userRole, supabase]);
+  }, [user, userRole, supabase, isImpersonating, impersonatedUser]);
 
   // Load existing draft application
   const loadDraftApplication = React.useCallback(async (appId) => {
@@ -4604,13 +4654,14 @@ export default function GMGResaleFlow() {
         .from('applications')
         .select('*, hoa_properties(name, is_multi_community), application_property_groups(*)')
         .eq('id', appId)
-        .single();
+        .is('deleted_at', null)
+        .maybeSingle();
 
       if (error) throw error;
 
       if (!data) {
-        alert('Application not found');
-        return;
+        alert('Application not found. It may have been deleted or you don’t have access to it.');
+        return null;
       }
 
       // Set application ID first to prevent user profile from overriding data
@@ -4678,7 +4729,10 @@ export default function GMGResaleFlow() {
       return data;
     } catch (error) {
       console.error('Error loading draft:', error);
-      alert('Error loading application draft: ' + error.message);
+      const message = error?.message?.includes('coerce') || error?.message?.includes('single')
+        ? 'Application not found or you don’t have access to it.'
+        : (error?.message || 'Error loading application draft.');
+      alert(message);
       return null;
     }
   }, [hoaProperties]);
@@ -5531,6 +5585,12 @@ export default function GMGResaleFlow() {
       },
     };
 
+    // Dashboard search & filters (used in admin/view-all branch)
+    const [dashboardSearch, setDashboardSearch] = useState('');
+    const [dashboardFilterPackage, setDashboardFilterPackage] = useState('all');
+    const [dashboardFilterStatus, setDashboardFilterStatus] = useState('all');
+    const [dashboardFilterSubmitted, setDashboardFilterSubmitted] = useState('all');
+
     // For regular users, show a cleaner welcome screen
     if (userRole !== 'admin') {
       const [filterStatus, setFilterStatus] = useState('all');
@@ -6336,7 +6396,7 @@ export default function GMGResaleFlow() {
                     </span>
                   </div>
                   <p className='text-gray-500 mb-8 text-lg font-medium'>
-                    {formData.submitterType === 'lender_questionnaire' ? '3 Business Days' : '5 business days guaranteed'}
+                    5 business days guaranteed
                   </p>
                   <div className='flex-1 border-t border-orange-100 pt-8 mb-8'>
                     <ul className='space-y-5'>
@@ -6377,217 +6437,269 @@ export default function GMGResaleFlow() {
       );
     }
 
-    // Admin Dashboard (original code)
+    // Dashboard table view – search, filters, compact table
+    const searchLower = (dashboardSearch || '').trim().toLowerCase();
+    const filteredApplications = applications.filter((app) => {
+      if (searchLower) {
+        const property = (app.hoa_properties?.name || '') + ' ' + (app.property_address || '');
+        const submitter = (app.submitter_name || '') + ' ' + (app.submitter_type || '') + ' ' + (app.application_type || '');
+        const id = (app.id || '');
+        const combined = (property + ' ' + submitter + ' ' + id).toLowerCase();
+        if (!combined.includes(searchLower)) return false;
+      }
+      if (dashboardFilterPackage !== 'all' && (app.package_type || '') !== dashboardFilterPackage) return false;
+      if (dashboardFilterStatus !== 'all' && app.status !== dashboardFilterStatus) return false;
+      if (dashboardFilterSubmitted !== 'all') {
+        if (!app.submitted_at) return false;
+        const submitted = new Date(app.submitted_at).getTime();
+        const now = Date.now();
+        if (dashboardFilterSubmitted === '7d' && now - submitted > 7 * 24 * 60 * 60 * 1000) return false;
+        if (dashboardFilterSubmitted === '30d' && now - submitted > 30 * 24 * 60 * 60 * 1000) return false;
+      }
+      return true;
+    });
+
+    const handleResume = (app) => {
+      loadDraftApplication(app.id).then((applicationData) => {
+        const paymentCompleted = applicationData?.payment_completed_at ||
+          applicationData?.status === 'payment_completed' ||
+          applicationData?.payment_status === 'completed';
+        if (paymentCompleted) setCurrentStep(5);
+        else if (app.status === 'pending_payment') setCurrentStep(4);
+        else setCurrentStep(1);
+      });
+    };
+
     return (
-      <div className='space-y-6'>
-        <div className='flex justify-between items-center'>
-          <h2 className='text-2xl font-bold text-gray-900'>
+      <div className='space-y-4 sm:space-y-6'>
+        {/* Header – stack on mobile, row on sm+ */}
+        <div className='flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between'>
+          <h1 className='text-xl font-bold text-gray-900 sm:text-2xl'>
             Resale Applications Dashboard
-          </h2>
+          </h1>
           <button
-            onClick={startNewApplication}
-            className='bg-green-700 text-white px-6 py-3 rounded-lg hover:bg-green-800 transition-colors flex items-center gap-2'
+            type="button"
+            disabled
+            className='w-full sm:w-auto inline-flex items-center justify-center gap-2 bg-gray-300 text-gray-500 px-5 py-3 rounded-xl font-medium cursor-not-allowed transition-colors shadow-sm min-h-[44px]'
           >
-            <FileText className='h-5 w-5' />
-            New Resale Application
+            <FileText className='h-5 w-5 flex-shrink-0' />
+            New Application
+            <span className='ml-1.5 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-800 border border-amber-200'>
+              Coming Soon
+            </span>
           </button>
         </div>
 
-        {/* Dashboard metrics for admins */}
-        <div className='grid grid-cols-1 md:grid-cols-4 gap-4 mb-6'>
-          <div className='bg-white p-6 rounded-lg shadow border-l-4 border-green-700'>
-            <div className='flex items-center'>
-              <FileText className='h-8 w-8 text-green-700' />
-              <div className='ml-3'>
-                <p className='text-sm font-medium text-gray-500'>
-                  Total Applications
-                </p>
-                <p className='text-2xl font-semibold text-gray-900'>
-                  {applications.length}
-                </p>
+        {/* Applications – search, filters, card on mobile, table on md+ */}
+        <div className='bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden'>
+          <div className='px-4 py-3 sm:px-6 sm:py-4 border-b border-gray-100 bg-gray-50/80'>
+            <div className='flex flex-col gap-3 sm:gap-4'>
+              <div className='flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3'>
+                <div className='relative flex-1 min-w-0'>
+                  <Search className='absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400 pointer-events-none' />
+                  <input
+                    type='search'
+                    placeholder='Search by property, name, type, or ID…'
+                    value={dashboardSearch}
+                    onChange={(e) => setDashboardSearch(e.target.value)}
+                    className='w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 bg-white'
+                  />
+                </div>
+                <div className='flex flex-wrap items-center gap-2'>
+                  <select
+                    value={dashboardFilterPackage}
+                    onChange={(e) => setDashboardFilterPackage(e.target.value)}
+                    className='text-sm border border-gray-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-green-500 focus:border-green-500 bg-white min-w-0'
+                  >
+                    <option value='all'>All packages</option>
+                    <option value='standard'>Standard</option>
+                    <option value='rush'>Rush</option>
+                  </select>
+                  <select
+                    value={dashboardFilterStatus}
+                    onChange={(e) => setDashboardFilterStatus(e.target.value)}
+                    className='text-sm border border-gray-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-green-500 focus:border-green-500 bg-white min-w-0'
+                  >
+                    <option value='all'>All statuses</option>
+                    <option value='draft'>Draft</option>
+                    <option value='pending_payment'>Pending Payment</option>
+                    <option value='payment_completed'>Payment Completed</option>
+                    <option value='submitted'>Submitted</option>
+                    <option value='under_review'>Under Review</option>
+                    <option value='approved'>Completed</option>
+                    <option value='completed'>Completed</option>
+                    <option value='rejected'>Rejected</option>
+                  </select>
+                  <select
+                    value={dashboardFilterSubmitted}
+                    onChange={(e) => setDashboardFilterSubmitted(e.target.value)}
+                    className='text-sm border border-gray-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-green-500 focus:border-green-500 bg-white min-w-0'
+                  >
+                    <option value='all'>Any time</option>
+                    <option value='7d'>Last 7 days</option>
+                    <option value='30d'>Last 30 days</option>
+                  </select>
+                </div>
               </div>
+              <h2 className='text-base font-semibold text-gray-900 sm:text-lg'>
+                All Applications {filteredApplications.length !== applications.length && (
+                  <span className='text-gray-500 font-normal'>({filteredApplications.length} of {applications.length})</span>
+                )}
+              </h2>
             </div>
           </div>
-          <div className='bg-white p-6 rounded-lg shadow border-l-4 border-yellow-500'>
-            <div className='flex items-center'>
-              <Clock className='h-8 w-8 text-yellow-500' />
-              <div className='ml-3'>
-                <p className='text-sm font-medium text-gray-500'>
-                  Under Review
-                </p>
-                <p className='text-2xl font-semibold text-gray-900'>
-                  {
-                    applications.filter((app) => app.status === 'under_review')
-                      .length
-                  }
-                </p>
-              </div>
-            </div>
-          </div>
-          <div className='bg-white p-6 rounded-lg shadow border-l-4 border-green-500'>
-            <div className='flex items-center'>
-              <CheckCircle className='h-8 w-8 text-green-500' />
-              <div className='ml-3'>
-                <p className='text-sm font-medium text-gray-500'>Completed</p>
-                <p className='text-2xl font-semibold text-gray-900'>
-                  {
-                    applications.filter((app) => app.status === 'approved')
-                      .length
-                  }
-                </p>
-              </div>
-            </div>
-          </div>
-          <div className='bg-white p-6 rounded-lg shadow border-l-4 border-green-600'>
-            <div className='flex items-center'>
-              <DollarSign className='h-8 w-8 text-green-600' />
-              <div className='ml-3'>
-                <p className='text-sm font-medium text-gray-500'>
-                  Revenue (Month)
-                </p>
-                <p className='text-2xl font-semibold text-gray-900'>
-                  $
-                  {applications
-                    .reduce((sum, app) => sum + (app.total_amount || 0), 0)
-                    .toLocaleString()}
-                </p>
-              </div>
-            </div>
-          </div>
-        </div>
 
-        <div className='bg-white rounded-lg shadow overflow-hidden'>
-          <div className='px-6 py-4 border-b border-gray-200 bg-green-50'>
-            <h3 className='text-lg font-medium text-green-900'>
-              All Applications
-            </h3>
-          </div>
-          <div className='overflow-x-auto'>
-            <table className='min-w-full divide-y divide-gray-200'>
-              <thead className='bg-gray-50'>
-                <tr>
-                  <th className='px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase'>
-                    Property
-                  </th>
-                  <th className='px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase'>
-                    Submitter
-                  </th>
-                  <th className='px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase'>
-                    Package
-                  </th>
-                  <th className='px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase'>
-                    Status
-                  </th>
-                  <th className='px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase'>
-                    Submitted
-                  </th>
-                  <th className='px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase'>
-                    Total
-                  </th>
-                  <th className='px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase'>
-                    Actions
-                  </th>
-                </tr>
-              </thead>
-              <tbody className='bg-white divide-y divide-gray-200'>
-                {applications.map((app) => {
+          {filteredApplications.length === 0 ? (
+            <div className='flex flex-col items-center justify-center py-12 px-4 text-center'>
+              <div className='w-14 h-14 rounded-xl bg-gray-100 flex items-center justify-center mb-4'>
+                <FileText className='h-7 w-7 text-gray-400' />
+              </div>
+              <p className='text-gray-600 font-medium'>
+                {applications.length === 0 ? 'No applications yet' : 'No applications match your filters'}
+              </p>
+              <p className='text-sm text-gray-500 mt-1 max-w-sm'>
+                {applications.length === 0 ? 'Create your first resale application to see it here.' : 'Try adjusting search or filters.'}
+              </p>
+              {applications.length === 0 && (
+                <button
+                  type="button"
+                  disabled
+                  className='mt-4 inline-flex items-center gap-2 bg-gray-300 text-gray-500 px-4 py-2.5 rounded-lg text-sm font-medium cursor-not-allowed transition-colors'
+                >
+                  <FileText className='h-4 w-4' /> New Application
+                  <span className='ml-1 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-800 border border-amber-200'>
+                    Coming Soon
+                  </span>
+                </button>
+              )}
+            </div>
+          ) : (
+            <>
+              {/* Mobile: card list */}
+              <div className='block md:hidden divide-y divide-gray-100'>
+                {filteredApplications.map((app) => {
                   const StatusIcon = statusConfig[app.status]?.icon || Clock;
-                  const statusStyle =
-                    statusConfig[app.status]?.color ||
-                    'bg-gray-100 text-gray-800';
-                  const statusLabel =
-                    statusConfig[app.status]?.label || app.status;
-
+                  const statusStyle = statusConfig[app.status]?.color || 'bg-gray-100 text-gray-800';
+                  const statusLabel = statusConfig[app.status]?.label || app.status;
+                  const canResume = app.status === 'draft' || app.status === 'pending_payment' || app.status === 'payment_completed';
                   return (
-                    <tr key={app.id} className='hover:bg-gray-50'>
-                      <td className='px-6 py-4 text-sm text-gray-900 max-w-xs'>
-                        <div className='truncate'>
-                          {app.hoa_properties?.name} - {app.property_address}
+                    <div key={app.id} className='p-4'>
+                      <div className='flex flex-col gap-2'>
+                        <div className='flex items-center gap-2 flex-wrap'>
+                          <span className='text-xs font-mono text-gray-500' title={app.id}>{String(app.id).slice(0, 8)}</span>
+                          <span className='text-xs text-gray-400'>·</span>
+                          <p className='text-sm font-medium text-gray-900 truncate flex-1 min-w-0'>
+                            {app.hoa_properties?.name} — {app.property_address}
+                          </p>
                         </div>
-                      </td>
-                      <td className='px-6 py-4 whitespace-nowrap text-sm text-gray-900'>
-                        {app.submitter_name} ({app.submitter_type})
-                      </td>
-                      <td className='px-6 py-4 whitespace-nowrap text-sm text-gray-900'>
-                        <span
-                          className={`px-2 py-1 rounded text-xs ${
-                            app.package_type === 'rush'
-                              ? 'bg-orange-100 text-orange-800'
-                              : 'bg-blue-100 text-blue-800'
-                          }`}
-                        >
-                          {app.package_type === 'rush'
-                            ? 'Rush (5 days)'
-                            : 'Standard'}
-                        </span>
-                      </td>
-                      <td className='px-6 py-4 whitespace-nowrap'>
-                        <span
-                          className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${statusStyle}`}
-                        >
-                          <StatusIcon className='h-3 w-3 mr-1' />
-                          {statusLabel}
-                        </span>
-                      </td>
-                      <td className='px-6 py-4 whitespace-nowrap text-sm text-gray-500'>
-                        {app.submitted_at
-                          ? formatDate(app.submitted_at)
-                          : 'Draft'}
-                      </td>
-                      <td className='px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900'>
-                        ${app.total_amount || 0}
-                      </td>
-                      <td className='px-6 py-4 whitespace-nowrap text-sm font-medium'>
-                                                <div className='flex space-x-2'>
-                          {(app.status === 'draft' || app.status === 'pending_payment' || app.status === 'payment_completed') && (
-                            <>
+                        <p className='text-xs text-gray-500 capitalize'>{(app.application_type || app.submitter_type || '—').replace(/_/g, ' ')}</p>
+                        <div className='flex flex-wrap items-center gap-2 mt-1'>
+                          <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium ${app.package_type === 'rush' ? 'bg-amber-100 text-amber-800' : 'bg-blue-100 text-blue-800'}`}>
+                            {app.package_type === 'rush' ? 'Rush (5 days)' : 'Standard'}
+                          </span>
+                          <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${statusStyle}`}>
+                            <StatusIcon className='h-3 w-3' /> {statusLabel}
+                          </span>
+                        </div>
+                        <div className='flex items-center justify-between mt-2 pt-2 border-t border-gray-100'>
+                          <div>
+                            <span className='text-xs text-gray-500'>{app.submitted_at ? formatDateTime(app.submitted_at) : 'Draft'}</span>
+                            <span className='ml-2 text-sm font-semibold text-gray-900'>${Number(app.total_amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
+                          </div>
+                          {canResume && (
+                            <div className='flex gap-2'>
                               <button
-                                onClick={() => {
-                                  loadDraftApplication(app.id).then((applicationData) => {
-                                    // Check if payment was completed
-                                    const paymentCompleted = applicationData?.payment_completed_at || 
-                                                              applicationData?.status === 'payment_completed' ||
-                                                              applicationData?.payment_status === 'completed';
-                                    
-                                    if (paymentCompleted) {
-                                      // Payment completed - go to review step
-                                      setCurrentStep(5);
-                                    } else if (app.status === 'pending_payment') {
-                                      // Payment pending - go to payment step
-                                      setCurrentStep(4);
-                                    } else {
-                                      // Draft - go to first step
-                                      setCurrentStep(1);
-                                    }
-                                  });
-                                }}
-                                className='text-green-600 hover:text-green-900 flex items-center'
-                                title='Resume Application'
+                                onClick={() => handleResume(app)}
+                                className='min-h-[44px] inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium text-green-700 bg-green-50 hover:bg-green-100'
                               >
-                                <FileText className='h-4 w-4 mr-1' />
-                                Resume
+                                <FileText className='h-4 w-4' /> Resume
                               </button>
                               <button
                                 onClick={() => deleteUnpaidApplication(app.id, app.status)}
-                                className='text-red-600 hover:text-red-900 flex items-center'
-                                title={`Delete ${app.status === 'draft' ? 'Draft' : 'Unpaid Application'}`}
+                                className='min-h-[44px] inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium text-red-700 bg-red-50 hover:bg-red-100'
                               >
-                                <Trash2 className='h-4 w-4 mr-1' />
-                                Delete
+                                <Trash2 className='h-4 w-4' /> Delete
                               </button>
-                            </>
-                          )}
-                          {app.status !== 'draft' && app.status !== 'pending_payment' && (
-                            <span className='text-gray-400'>—</span>
+                            </div>
                           )}
                         </div>
-                      </td>
-                    </tr>
+                      </div>
+                    </div>
                   );
                 })}
-              </tbody>
-            </table>
-          </div>
+              </div>
+
+              {/* Desktop: compact table – minimal horizontal scroll */}
+              <div className='hidden md:block overflow-x-auto'>
+                <table className='w-full divide-y divide-gray-200 table-fixed'>
+                  <thead className='bg-gray-50/80 sticky top-0'>
+                    <tr>
+                      <th className='w-20 px-2 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider'>ID</th>
+                      <th className='min-w-0 px-2 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider'>Property</th>
+                      <th className='w-28 px-2 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider'>Type</th>
+                      <th className='w-24 px-2 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider'>Package</th>
+                      <th className='w-28 px-2 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider'>Status</th>
+                      <th className='w-36 px-2 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider'>Submitted</th>
+                      <th className='w-20 px-2 py-2 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider'>Total</th>
+                      <th className='w-28 px-2 py-2 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider'>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className='bg-white divide-y divide-gray-100'>
+                    {filteredApplications.map((app) => {
+                      const StatusIcon = statusConfig[app.status]?.icon || Clock;
+                      const statusStyle = statusConfig[app.status]?.color || 'bg-gray-100 text-gray-800';
+                      const statusLabel = statusConfig[app.status]?.label || app.status;
+                      const canResume = app.status === 'draft' || app.status === 'pending_payment' || app.status === 'payment_completed';
+                      const appType = (app.application_type || app.submitter_type || '—').replace(/_/g, ' ');
+                      return (
+                        <tr key={app.id} className='hover:bg-gray-50/50 transition-colors'>
+                          <td className='px-2 py-2 text-xs font-mono text-gray-500 truncate' title={app.id}>{String(app.id).slice(0, 8)}</td>
+                          <td className='px-2 py-2 text-sm text-gray-900 min-w-0'>
+                            <span className='truncate block'>{app.hoa_properties?.name} — {app.property_address}</span>
+                          </td>
+                          <td className='px-2 py-2 text-xs text-gray-700 capitalize'>{appType}</td>
+                          <td className='px-2 py-2'>
+                            <span className={`inline-flex px-1.5 py-0.5 rounded text-xs font-medium ${app.package_type === 'rush' ? 'bg-amber-100 text-amber-800' : 'bg-blue-100 text-blue-800'}`}>
+                              {app.package_type === 'rush' ? 'Rush' : 'Standard'}
+                            </span>
+                          </td>
+                          <td className='px-2 py-2'>
+                            <span className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-xs font-medium ${statusStyle}`}>
+                              <StatusIcon className='h-3 w-3 flex-shrink-0' /> <span className='truncate'>{statusLabel}</span>
+                            </span>
+                          </td>
+                          <td className='px-2 py-2 text-xs text-gray-500 whitespace-nowrap'>{app.submitted_at ? formatDateTime(app.submitted_at) : 'Draft'}</td>
+                          <td className='px-2 py-2 text-sm font-semibold text-gray-900 text-right tabular-nums'>
+                            ${Number(app.total_amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                          </td>
+                          <td className='px-2 py-2 text-right'>
+                            {canResume ? (
+                              <div className='flex items-center justify-end gap-2'>
+                                <button
+                                  onClick={() => handleResume(app)}
+                                  className='inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium text-green-700 bg-green-50 hover:bg-green-100 min-h-[36px]'
+                                >
+                                  <FileText className='h-4 w-4' /> Resume
+                                </button>
+                                <button
+                                  onClick={() => deleteUnpaidApplication(app.id, app.status)}
+                                  className='inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium text-red-700 bg-red-50 hover:bg-red-100 min-h-[36px]'
+                                >
+                                  <Trash2 className='h-4 w-4' /> Delete
+                                </button>
+                              </div>
+                            ) : (
+                              <span className='text-gray-400 text-sm'>—</span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
         </div>
       </div>
     );
@@ -6658,6 +6770,8 @@ export default function GMGResaleFlow() {
             setShowSnackbar={setShowSnackbar}
             loadApplications={loadApplications}
             isTestMode={isTestMode}
+            testModeCode={testModeCode}
+            isImpersonating={isImpersonating}
           />
         );
       case 5:
@@ -6738,7 +6852,9 @@ export default function GMGResaleFlow() {
   // Payment processing state - prevents homepage flash after payment
   if (currentStep === -1) {
     return (
-      <div className='min-h-screen bg-gray-50 flex items-center justify-center'>
+      <div className='min-h-screen bg-gray-50 flex flex-col'>
+        <ImpersonationBanner />
+        <div className='flex-1 flex items-center justify-center'>
         <div className='text-center'>
           <div className='w-16 h-16 bg-green-700 rounded-lg flex items-center justify-center mx-auto mb-4 animate-pulse'>
             <Loader2 className='h-8 w-8 text-white animate-spin' />
@@ -6750,6 +6866,7 @@ export default function GMGResaleFlow() {
             Loading your application...
           </p>
         </div>
+        </div>
       </div>
     );
   }
@@ -6757,9 +6874,10 @@ export default function GMGResaleFlow() {
   // Main application render - Dashboard view
   if (currentStep === 0) {
     return (
-      <div className='min-h-screen bg-gray-50'>
+      <div className='min-h-screen bg-gray-50 flex flex-col'>
+        <ImpersonationBanner />
         {/* Header */}
-        <div className='bg-white shadow-sm border-b'>
+        <div className='bg-white shadow-sm border-b flex-shrink-0'>
           <div className='max-w-7xl mx-auto px-4 sm:px-6 lg:px-8'>
             <div className='flex justify-between items-center py-4'>
               <div className='flex items-center space-x-4'>
@@ -6775,9 +6893,11 @@ export default function GMGResaleFlow() {
               <div className='flex items-center space-x-4'>
                 {isAuthenticated ? (
                   <div className='flex items-center space-x-4'>
-                    <span className='text-sm text-gray-600'>
-                      Welcome, {profile?.first_name || user?.email}!
-                    </span>
+                    {!isImpersonating && (
+                      <span className='text-sm text-gray-600'>
+                        Welcome, {profile?.first_name || user?.email}!
+                      </span>
+                    )}
                     <button
                       onClick={handleSignOut}
                       className='text-gray-600 hover:text-green-700 px-3 py-2 rounded-md text-sm font-medium transition-colors'
@@ -6798,12 +6918,14 @@ export default function GMGResaleFlow() {
           </div>
         </div>
 
-        <div className='max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8'>
-          <Dashboard />
-        </div>
+        <main className='flex-1 flex flex-col'>
+          <div className='max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full'>
+            <Dashboard />
+          </div>
+        </main>
 
-        {/* Footer */}
-        <div className='bg-green-900 text-white py-8 mt-12'>
+        {/* Footer – sticks to bottom of viewport when content is short */}
+        <footer className='bg-green-900 text-white py-8 mt-auto flex-shrink-0'>
           <div className='max-w-7xl mx-auto px-4 sm:px-6 lg:px-8'>
             <div className='flex flex-col md:flex-row justify-between items-center'>
               <div className='mb-4 md:mb-0'>
@@ -6820,7 +6942,7 @@ export default function GMGResaleFlow() {
               </div>
             </div>
           </div>
-        </div>
+        </footer>
 
         {/* Auth Modal */}
         {showAuthModal && (
@@ -6864,6 +6986,7 @@ export default function GMGResaleFlow() {
   // Form view
   return (
     <div className='min-h-screen bg-gray-50 pb-20 md:pb-8'>
+      <ImpersonationBanner />
       {/* Header */}
       <div className='bg-white shadow-sm border-b sticky top-0 z-50'>
         <div className='max-w-7xl mx-auto px-3 sm:px-4 lg:px-8'>
@@ -6892,12 +7015,6 @@ export default function GMGResaleFlow() {
               >
                 {userRole === 'admin' ? 'Dashboard' : 'Home'}
               </button>
-              {isAuthenticated && (
-                <div className='flex items-center space-x-1.5 sm:space-x-2'>
-                  <div className='w-2 h-2 sm:w-3 sm:h-3 bg-green-400 rounded-full flex-shrink-0'></div>
-                  <span className='text-xs sm:text-sm text-gray-600 truncate max-w-[100px] sm:max-w-none'>{user?.email}</span>
-                </div>
-              )}
             </div>
           </div>
         </div>

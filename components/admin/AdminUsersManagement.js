@@ -19,8 +19,10 @@ import {
   ChevronLeft,
   ChevronRight,
   CheckCircle,
+  UserCircle,
 } from 'lucide-react';
 import useAdminAuthStore from '../../stores/adminAuthStore';
+import useImpersonationStore from '../../stores/impersonationStore';
 import {
   useUsers,
   useUserStats,
@@ -52,6 +54,8 @@ const AdminUsersManagement = () => {
   const [selectedUser, setSelectedUser] = useState(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [userToDelete, setUserToDelete] = useState(null);
+  const [showImpersonateConfirm, setShowImpersonateConfirm] = useState(false);
+  const [impersonateTargetUser, setImpersonateTargetUser] = useState(null);
   const [userApplicationCount, setUserApplicationCount] = useState(0);
   const [isCheckingApplications, setIsCheckingApplications] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
@@ -86,7 +90,12 @@ const AdminUsersManagement = () => {
 
   const router = useRouter();
   const { signOut, user, role } = useAdminAuthStore();
+  const { startImpersonation } = useImpersonationStore();
   const prefetchUser = usePrefetchUser();
+  const [impersonatingUserId, setImpersonatingUserId] = useState(null);
+
+  // Impersonation feature: set NEXT_PUBLIC_IMPERSONATE_DISABLED=true in env to disable
+  const IMPERSONATE_FEATURE_DISABLED = process.env.NEXT_PUBLIC_IMPERSONATE_DISABLED === 'true';
 
   // Redirect staff users away from user management (admin only)
   React.useEffect(() => {
@@ -307,6 +316,39 @@ const AdminUsersManagement = () => {
       await checkUserApplications(userItem.id);
     } else {
       setUserApplicationCount(0);
+    }
+  };
+
+  const handleImpersonateClick = (userItem) => {
+    if (IMPERSONATE_FEATURE_DISABLED) return;
+    if (userItem.role !== 'requester' && userItem.role !== null) return;
+    setImpersonateTargetUser(userItem);
+    setShowImpersonateConfirm(true);
+  };
+
+  const handleConfirmImpersonate = async () => {
+    if (!impersonateTargetUser) return;
+    const userItem = impersonateTargetUser;
+    setImpersonatingUserId(userItem.id);
+    try {
+      const res = await fetch('/api/admin/impersonation-start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ targetUserId: userItem.id }),
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || 'Failed to start impersonation');
+      }
+      startImpersonation(userItem);
+      setShowImpersonateConfirm(false);
+      setImpersonateTargetUser(null);
+      window.location.href = '/';
+    } catch (err) {
+      setSnackbar({ show: true, message: err.message || 'Impersonation failed', type: 'error' });
+    } finally {
+      setImpersonatingUserId(null);
     }
   };
 
@@ -725,6 +767,32 @@ const AdminUsersManagement = () => {
                               )}
                             </button>
                           )}
+                          {activeTab === 'requester' && (userItem.role === 'requester' || userItem.role == null) && (
+                            <button
+                              type="button"
+                              onClick={() => handleImpersonateClick(userItem)}
+                              disabled={IMPERSONATE_FEATURE_DISABLED || impersonatingUserId === userItem.id}
+                              title={IMPERSONATE_FEATURE_DISABLED ? 'Coming soon' : undefined}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors disabled:opacity-60 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-500 disabled:hover:bg-gray-100 bg-amber-50 text-amber-700 hover:bg-amber-100"
+                            >
+                              {impersonatingUserId === userItem.id ? (
+                                <>
+                                  <RefreshCw className="w-3 h-3 animate-spin" />
+                                  <span>Starting...</span>
+                                </>
+                              ) : IMPERSONATE_FEATURE_DISABLED ? (
+                                <>
+                                  <UserCircle className="w-3 h-3" />
+                                  <span>Impersonate</span>
+                                </>
+                              ) : (
+                                <>
+                                  <UserCircle className="w-3 h-3" />
+                                  <span>Impersonate</span>
+                                </>
+                              )}
+                            </button>
+                          )}
                           <button
                             onClick={() => handleEditUser(userItem)}
                             className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 transition-colors"
@@ -840,6 +908,32 @@ const AdminUsersManagement = () => {
                         <>
                           <CheckCircle className="w-4 h-4" />
                           <span>Verify User</span>
+                        </>
+                      )}
+                    </button>
+                  )}
+                  {activeTab === 'requester' && (userItem.role === 'requester' || userItem.role == null) && (
+                    <button
+                      type="button"
+                      onClick={() => handleImpersonateClick(userItem)}
+                      disabled={IMPERSONATE_FEATURE_DISABLED || impersonatingUserId === userItem.id}
+                      title={IMPERSONATE_FEATURE_DISABLED ? 'Coming soon' : undefined}
+                      className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg transition-colors font-medium text-sm disabled:opacity-60 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-500 disabled:hover:bg-gray-100 bg-amber-50 text-amber-700 hover:bg-amber-100"
+                    >
+                      {impersonatingUserId === userItem.id ? (
+                        <>
+                          <RefreshCw className="w-4 h-4 animate-spin" />
+                          <span>Starting...</span>
+                        </>
+                      ) : IMPERSONATE_FEATURE_DISABLED ? (
+                        <>
+                          <UserCircle className="w-4 h-4" />
+                          <span>Impersonate</span>
+                        </>
+                      ) : (
+                        <>
+                          <UserCircle className="w-4 h-4" />
+                          <span>Impersonate</span>
                         </>
                       )}
                     </button>
@@ -1076,6 +1170,55 @@ const AdminUsersManagement = () => {
                   </button>
                 </div>
               </form>
+            </div>
+          </div>
+        )}
+
+        {/* Impersonation Confirmation Modal */}
+        {showImpersonateConfirm && impersonateTargetUser && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+            <div className="bg-white rounded-xl max-w-md w-full shadow-lg">
+              <div className="px-6 py-5 border-b border-gray-200 flex items-center gap-3">
+                <div className="flex-shrink-0 w-10 h-10 rounded-full bg-amber-50 flex items-center justify-center">
+                  <UserCircle className="w-5 h-5 text-amber-600" />
+                </div>
+                <h2 className="text-xl font-semibold text-gray-900">Enter impersonation mode</h2>
+              </div>
+              <div className="p-6">
+                <p className="text-gray-600 mb-4">
+                  You are about to enter impersonation mode for the user{' '}
+                  <span className="font-medium text-gray-900">{impersonateTargetUser.email}</span>.
+                </p>
+                <ul className="text-sm text-gray-600 space-y-2 mb-6 list-disc list-inside">
+                  <li>You will see the applicant portal as this user.</li>
+                  <li>Your permissions will be limited to requester-only actions.</li>
+                  <li>All payments will be in test mode—no real charges will be made.</li>
+                  <li>All actions are logged for audit.</li>
+                </ul>
+                <div className="flex justify-end gap-3 pt-4 border-t border-gray-200">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowImpersonateConfirm(false);
+                      setImpersonateTargetUser(null);
+                    }}
+                    className="px-4 py-2 border border-gray-200 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors text-sm font-medium"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleConfirmImpersonate}
+                    disabled={impersonatingUserId === impersonateTargetUser?.id}
+                    className="px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm font-medium shadow-sm"
+                  >
+                    {impersonatingUserId === impersonateTargetUser?.id && (
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                    )}
+                    <span>Enter impersonation</span>
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         )}
