@@ -6033,7 +6033,7 @@ export default function GMGResaleFlow() {
 
                                   <div className='flex items-center gap-1.5 text-xs font-semibold text-gray-600 bg-gray-100 px-2 py-0.5 rounded-md'>
                                     <Hash className='h-3.5 w-3.5 text-gray-400' />
-                                    <span>App #{app.id}</span>
+                                    <span>App {app.id}</span>
                                   </div>
                                   
                                   {isCompleted && (
@@ -6484,9 +6484,6 @@ export default function GMGResaleFlow() {
           >
             <FileText className='h-5 w-5 flex-shrink-0' />
             New Application
-            <span className='ml-1.5 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-800 border border-amber-200'>
-              Coming Soon
-            </span>
           </button>
         </div>
 
@@ -6567,9 +6564,6 @@ export default function GMGResaleFlow() {
                   className='mt-4 inline-flex items-center gap-2 bg-gray-300 text-gray-500 px-4 py-2.5 rounded-lg text-sm font-medium cursor-not-allowed transition-colors'
                 >
                   <FileText className='h-4 w-4' /> New Application
-                  <span className='ml-1 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-800 border border-amber-200'>
-                    Coming Soon
-                  </span>
                 </button>
               )}
             </div>

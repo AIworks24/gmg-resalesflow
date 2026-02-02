@@ -40,7 +40,7 @@ import {
 } from 'lucide-react';
 import { useRouter } from 'next/router';
 import { mapFormDataToPDFFields } from '../../lib/pdfFieldMapper';
-import { formatDate, formatDateTime, formatDateTimeFull } from '../../lib/timeUtils';
+import { formatDate, formatDateTime, formatDateTimeFull, formatFormCompletionDateTime } from '../../lib/timeUtils';
 import { parseEmails } from '../../lib/emailUtils';
 import AdminPropertyInspectionForm from './AdminPropertyInspectionForm';
 import AdminResaleCertificateForm from './AdminResaleCertificateForm';
@@ -1695,7 +1695,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
     }
   };
 
-  const TaskCard = ({ step, icon, title, description, status, children, completedAt }) => (
+  const TaskCard = ({ step, icon, title, description, status, children, completedAt, useFormCompletionDateFormat }) => (
     <div className={`border rounded-xl p-4 sm:p-5 bg-white shadow-sm transition-all ${getTaskStatusColor(status)}`}>
        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div className="flex items-start gap-3 sm:gap-4 flex-1 min-w-0">
@@ -1712,7 +1712,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                 {description && <p className='text-sm text-gray-500 mt-1'>{description}</p>}
                 {completedAt && (
                    <div className="mt-2 text-xs text-green-600 bg-green-50 px-2 py-1 rounded inline-block">
-                      Completed: {formatDateTimeFull(completedAt)}
+                      Completed: {useFormCompletionDateFormat ? formatFormCompletionDateTime(completedAt) : formatDateTimeFull(completedAt)}
                    </div>
                 )}
              </div>
@@ -3470,7 +3470,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                             <div className='text-xs text-gray-500 flex items-center gap-1.5'>
                               <span className='inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-semibold text-gray-600'>
                                 <Hash className='h-3 w-3 text-gray-400' />
-                                App #{app.id}
+                                App {app.id}
                               </span>
                               <span className='text-gray-300'>•</span>
                               <span className='font-medium text-gray-700'>{app.submitter_name}</span>
@@ -3567,16 +3567,19 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                             <div className='flex items-center justify-center gap-1 text-xs'>
                               <Clock className='w-3 h-3 text-gray-400' />
                               <span className='text-gray-600'>
-                                Deadline: {(() => {
-                                  const submittedDate = new Date(app.submitted_at);
-                                  let deadline;
-                                  if (app.package_type === 'rush') {
-                                    deadline = calculateBusinessDaysDeadline(submittedDate, 5);
-                                  } else {
-                                    deadline = calculateCalendarDaysDeadline(submittedDate, 15);
-                                  }
-                                  return formatDate(deadline.toISOString());
-                                })()}
+                                <span className='font-semibold text-amber-700'>Deadline:</span>{' '}
+                                <span className='font-semibold text-amber-700'>
+                                  {(() => {
+                                    const submittedDate = new Date(app.submitted_at);
+                                    let deadline;
+                                    if (app.package_type === 'rush') {
+                                      deadline = calculateBusinessDaysDeadline(submittedDate, 5);
+                                    } else {
+                                      deadline = calculateCalendarDaysDeadline(submittedDate, 15);
+                                    }
+                                    return formatDate(deadline.toISOString());
+                                  })()}
+                                </span>
                               </span>
                             </div>
                           </div>
@@ -3656,7 +3659,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                       </div>
                       <div className='mt-2 inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-semibold text-gray-600'>
                         <Hash className='h-3 w-3 text-gray-400' />
-                        App #{app.id}
+                        App {app.id}
                       </div>
                     </div>
                     {app.status === 'rejected' ? (
@@ -3733,16 +3736,19 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                         <div className='space-y-0.5'>
                           <div className='text-sm font-medium text-gray-900'>{formatDate(app.submitted_at)}</div>
                           <div className='text-xs text-gray-500'>
-                            Due: {(() => {
-                              const submittedDate = new Date(app.submitted_at);
-                              let deadline;
-                              if (app.package_type === 'rush') {
-                                deadline = calculateBusinessDaysDeadline(submittedDate, 5);
-                              } else {
-                                deadline = calculateCalendarDaysDeadline(submittedDate, 15);
-                              }
-                              return formatDate(deadline.toISOString());
-                            })()}
+                            <span className='font-semibold text-amber-700'>Due:</span>{' '}
+                            <span className='font-semibold text-amber-700'>
+                              {(() => {
+                                const submittedDate = new Date(app.submitted_at);
+                                let deadline;
+                                if (app.package_type === 'rush') {
+                                  deadline = calculateBusinessDaysDeadline(submittedDate, 5);
+                                } else {
+                                  deadline = calculateCalendarDaysDeadline(submittedDate, 15);
+                                }
+                                return formatDate(deadline.toISOString());
+                              })()}
+                            </span>
                           </div>
                         </div>
                       ) : (
@@ -4812,6 +4818,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                                                     description={inspectionStatusForGroup === 'not_started' ? 'Not Started' : 'Complete property inspection checklist'}
                                                     status={inspectionStatusForGroup}
                                                     completedAt={group.inspection_completed_at}
+                                                    useFormCompletionDateFormat
                                                 >
                                                     <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2">
                                                        <button onClick={() => handleCompleteForm(selectedApplication.id, 'inspection', group)} className="w-full sm:w-auto px-3 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 active:bg-gray-100 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap">
@@ -4978,7 +4985,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
 
                         return (
                           <>
-                             <TaskCard step="1" status={taskStatuses.settlement} title="Settlement Form" description="Complete form with assessment details" completedAt={selectedApplication.settlement_form_completed_at}>
+                             <TaskCard step="1" status={taskStatuses.settlement} title="Settlement Form" description="Complete form with assessment details" completedAt={selectedApplication.settlement_form_completed_at} useFormCompletionDateFormat>
                                 <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2">
                                    <button onClick={() => handleCompleteForm(selectedApplication.id, 'settlement')} disabled={loadingFormData} className="w-full sm:w-auto px-3 sm:px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 active:bg-gray-100 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed">
                                       {loadingFormData ? (
@@ -5032,7 +5039,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
 
                         return (
                            <>
-                              <TaskCard step="1" status={taskStatuses.inspection} title="Inspection Form" description="Complete property inspection checklist" completedAt={selectedApplication.inspection_form_completed_at}>
+                              <TaskCard step="1" status={taskStatuses.inspection} title="Inspection Form" description="Complete property inspection checklist" completedAt={selectedApplication.inspection_form_completed_at} useFormCompletionDateFormat>
                                  <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2">
                                     <button onClick={() => handleCompleteForm(selectedApplication.id, 'inspection')} disabled={loadingFormData} className="w-full sm:w-auto px-3 sm:px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 active:bg-gray-100 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed">
                                        {loadingFormData ? (
@@ -5048,7 +5055,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                                  </div>
                               </TaskCard>
 
-                              <TaskCard step="2" status={taskStatuses.resale} title="Resale Certificate" description="Fill out Virginia resale disclosure" completedAt={selectedApplication.resale_certificate_completed_at}>
+                              <TaskCard step="2" status={taskStatuses.resale} title="Resale Certificate" description="Fill out Virginia resale disclosure" completedAt={selectedApplication.resale_certificate_completed_at} useFormCompletionDateFormat>
                                  <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2">
                                     <button onClick={() => handleCompleteForm(selectedApplication.id, 'resale')} disabled={loadingFormData} className="w-full sm:w-auto px-3 sm:px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 active:bg-gray-100 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed">
                                        {loadingFormData ? (
