@@ -616,10 +616,14 @@ export default async function handler(req, res) {
       payment_status: 'pending',
     };
     if (identity.isImpersonating) {
+      const sendEmailsHeader = req.headers['x-impersonate-send-emails'];
+      const sendEmails = sendEmailsHeader === 'true';
+      
       applicationUpdate.is_test_transaction = true;
       applicationUpdate.impersonation_metadata = {
         admin_id: identity.adminUserId,
         impersonated_at: new Date().toISOString(),
+        send_emails: sendEmails,
       };
     }
 

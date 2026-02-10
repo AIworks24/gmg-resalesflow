@@ -178,6 +178,8 @@ export default async function handler(req, res) {
     // Calculate metrics
     const total = applications.length;
     const completed = applications.filter(app => {
+      // Rejected applications count as completed (terminal state)
+      if (app.status === 'rejected') return true;
       // For multi-community settlement applications, use special completion check
       if (isMultiCommunitySettlementCompleted(app)) {
         return true;
@@ -188,12 +190,68 @@ export default async function handler(req, res) {
     }).length;
     const pending = total - completed;
 
-    // Today's submissions
-    const today = new Date();
-    const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-    const todaySubmissions = applications.filter(app => 
-      new Date(app.created_at) >= todayStart
-    ).length;
+    // Today's submissions - calculate based on user's timezone
+    // Get timezone from query parameter (defaults to UTC if not provided)
+    const userTimezone = req.query.timezone || 'UTC';
+    
+    // Helper function to get start of today in user's timezone, converted to UTC
+    const getTodayStartUTC = (timezone) => {
+      const now = new Date();
+      
+      // Get today's date string in user's timezone (YYYY-MM-DD format)
+      const todayDateStr = now.toLocaleDateString('en-CA', { timeZone: timezone });
+      const [year, month, day] = todayDateStr.split('-').map(Number);
+      
+      // Find the UTC time that corresponds to midnight (00:00:00) in the user's timezone
+      // We'll binary search by trying different UTC times until we find one that
+      // displays as midnight in the user's timezone
+      
+      // Start with a reasonable guess: UTC midnight for today's date
+      let candidateUTC = new Date(Date.UTC(year, month - 1, day, 0, 0, 0));
+      
+      // Check what time this shows in user's timezone
+      let checkTime = candidateUTC.toLocaleTimeString('en-US', {
+        timeZone: timezone,
+        hour12: false,
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+      let checkDate = candidateUTC.toLocaleDateString('en-CA', { timeZone: timezone });
+      
+      // If it's not midnight on the right date, adjust
+      // We'll search within a ±24 hour window
+      let iterations = 0;
+      const maxIterations = 48; // Max 48 hours offset
+      
+      while (iterations < maxIterations && (checkDate !== todayDateStr || checkTime !== '00:00')) {
+        if (checkDate < todayDateStr || (checkDate === todayDateStr && checkTime < '00:00')) {
+          // Too early, move forward
+          candidateUTC.setUTCHours(candidateUTC.getUTCHours() + 1);
+        } else {
+          // Too late, move backward
+          candidateUTC.setUTCHours(candidateUTC.getUTCHours() - 1);
+        }
+        
+        checkTime = candidateUTC.toLocaleTimeString('en-US', {
+          timeZone: timezone,
+          hour12: false,
+          hour: '2-digit',
+          minute: '2-digit'
+        });
+        checkDate = candidateUTC.toLocaleDateString('en-CA', { timeZone: timezone });
+        iterations++;
+      }
+      
+      return candidateUTC;
+    };
+    
+    // Get start of today in user's timezone (as UTC timestamp)
+    const todayStartUTC = getTodayStartUTC(userTimezone);
+    
+    const todaySubmissions = applications.filter(app => {
+      const appDate = new Date(app.created_at);
+      return appDate >= todayStartUTC;
+    }).length;
 
     // Helper function to calculate business days deadline
     const calculateBusinessDaysDeadline = (startDate, businessDays) => {
@@ -225,7 +283,8 @@ export default async function handler(req, res) {
     let overdueCount = 0;
 
     applications.forEach(app => {
-      // Skip completed applications (use strict completion check)
+      // Skip completed and rejected applications (rejected is terminal)
+      if (app.status === 'rejected') return;
       if (isMultiCommunitySettlementCompleted(app)) {
         return;
       }

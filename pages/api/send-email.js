@@ -1,5 +1,6 @@
 import { createPagesServerClient } from '@supabase/auth-helpers-nextjs';
 import { sendApplicationSubmissionEmail, sendApprovalEmail, sendPaymentConfirmationEmail } from '../../lib/emailService';
+import { resolveActingUser } from '../../lib/impersonation';
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -11,6 +12,20 @@ export default async function handler(req, res) {
 
     if (!emailType) {
       return res.status(400).json({ error: 'Email type is required' });
+    }
+
+    // Check if impersonating and if emails should be sent
+    const identity = await resolveActingUser(req, res);
+    const sendEmailsHeader = req.headers['x-impersonate-send-emails'];
+    const shouldSendEmails = sendEmailsHeader === 'true';
+
+    if (identity.isImpersonating && !shouldSendEmails) {
+      console.log('[Impersonation] Skipping email - sendEmails is disabled');
+      return res.status(200).json({ 
+        success: true, 
+        message: 'Email skipped (impersonation mode - emails disabled)',
+        skipped: true
+      });
     }
 
     let result;
@@ -28,6 +43,7 @@ export default async function handler(req, res) {
           submitterType,
           applicationType,
           linkedProperties,
+          buyerName,
         } = emailData;
 
         // Validate required fields
@@ -36,6 +52,13 @@ export default async function handler(req, res) {
             error: 'Missing required fields: applicationId, customerName, propertyAddress, customerEmail' 
           });
         }
+
+        // For Builder/Developer or Licensed Realtor: address email to buyer name if present, else requester first name
+        const isBuilderOrRealtor = submitterType === 'builder' || submitterType === 'realtor';
+        const trimmedBuyerName = typeof buyerName === 'string' ? buyerName.trim() : '';
+        const greetingName = isBuilderOrRealtor
+          ? (trimmedBuyerName || (customerName.split(/\s+/)[0] || customerName))
+          : customerName;
 
         // Fetch linked properties for multi-community applications if not provided
         // Note: We check for linked properties regardless of applicationType because
@@ -120,7 +143,7 @@ export default async function handler(req, res) {
           result = await sendApplicationSubmissionEmail({
             to: customerEmail, // Use the submitter email from application data
             applicationId,
-            customerName,
+            customerName: greetingName, // Builder/Realtor: buyer name if set, else requester first name
             propertyAddress,
             packageType,
             totalAmount,

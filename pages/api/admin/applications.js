@@ -33,6 +33,7 @@ export default async function handler(req, res) {
       page = 1, 
       limit = 1000,  // Default to high limit for backward compatibility
       status = 'all', 
+      urgency = 'all',  // 'all' | 'overdue' | 'near_deadline' – when set, we fetch all and filter so list matches metric
       search = '',
       dateStart = null,
       dateEnd = null,
@@ -46,7 +47,7 @@ export default async function handler(req, res) {
     const shouldBypassCache = bypassCache === 'true' || bypassCache === true;
 
     // Generate dynamic cache key based on filters (including sort parameters and user ID to prevent collisions)
-    const cacheKey = `admin:applications:${user.id}:${status}:${search}:${dateStart || 'null'}:${dateEnd || 'null'}:${sortBy}:${sortOrder}:${pageNum}:${limitNum}`;
+    const cacheKey = `admin:applications:${user.id}:${status}:${urgency}:${search}:${dateStart || 'null'}:${dateEnd || 'null'}:${sortBy}:${sortOrder}:${pageNum}:${limitNum}`;
     
     // Try to get from cache first (unless bypassed for real-time updates)
     if (!shouldBypassCache) {
@@ -127,8 +128,10 @@ export default async function handler(req, res) {
 
     // For computed statuses that can be calculated server-side, we need to fetch all applications first
     // Statuses that require workflow steps (ongoing, payment_confirmed, approved) are handled client-side
+    // When urgency=overdue or urgency=near_deadline we must fetch all so the list matches the dashboard metric
     const serverSideComputedStatuses = ['completed', 'pending', 'urgent'];
-    const needsPostFiltering = serverSideComputedStatuses.includes(status);
+    const urgencyRequiresFullFetch = urgency === 'overdue' || urgency === 'near_deadline';
+    const needsPostFiltering = serverSideComputedStatuses.includes(status) || urgencyRequiresFullFetch;
     
     // Match dashboard: NULLS LAST so "first N" are true most recent (not old rows with null submitted_at)
     const orderOpts = { ascending: isAscending, nullsFirst: false };
@@ -243,6 +246,8 @@ export default async function handler(req, res) {
     
     if (status === 'completed') {
       filteredApplications = filteredApplications.filter(app => {
+        // Rejected applications count as completed (terminal state)
+        if (app.status === 'rejected') return true;
         // For multi-community settlement applications, use special completion check
         if (isMultiCommunitySettlementCompleted(app)) {
           return true;
@@ -251,8 +256,9 @@ export default async function handler(req, res) {
         return isRegularApplicationCompleted(app);
       });
     } else if (status === 'pending') {
-      // Pending = all non-completed applications (same logic as dashboard: total - completed)
+      // Pending = all non-completed applications (exclude completed and rejected)
       filteredApplications = filteredApplications.filter(app => {
+        if (app.status === 'rejected') return false;
         // For multi-community settlement applications, use special completion check
         if (isMultiCommunitySettlementCompleted(app)) {
           return false; // Completed, so not pending
@@ -310,6 +316,39 @@ export default async function handler(req, res) {
         // Urgent if overdue (at/past deadline) or within 48 hours (2 days) of deadline
         return hoursUntilDeadline < 48;
       });
+    }
+
+    // Apply urgency filter (overdue / near_deadline) so list matches dashboard metric
+    // When user selects "Overdue Only" or "Near Deadline Only", we already fetched all (urgencyRequiresFullFetch)
+    if (urgency === 'overdue' || urgency === 'near_deadline') {
+      const calculateBusinessDaysDeadline = (startDate, businessDays) => {
+        const date = new Date(startDate);
+        let daysAdded = 0;
+        while (daysAdded < businessDays) {
+          date.setDate(date.getDate() + 1);
+          if (date.getDay() !== 0 && date.getDay() !== 6) daysAdded++;
+        }
+        return date;
+      };
+      const calculateCalendarDaysDeadline = (startDate, calendarDays) => {
+        const date = new Date(startDate);
+        date.setDate(date.getDate() + calendarDays);
+        return date;
+      };
+      const now = new Date();
+      filteredApplications = filteredApplications.filter(app => {
+        if (isMultiCommunitySettlementCompleted(app)) return false;
+        if (isRegularApplicationCompleted(app)) return false;
+        const submittedDate = new Date(app.submitted_at || app.created_at);
+        const deadline = app.package_type === 'rush'
+          ? calculateBusinessDaysDeadline(submittedDate, 5)
+          : calculateCalendarDaysDeadline(submittedDate, 15);
+        const hoursUntilDeadline = (deadline - now) / (1000 * 60 * 60);
+        if (urgency === 'overdue') return hoursUntilDeadline <= 0;
+        if (urgency === 'near_deadline') return hoursUntilDeadline > 0 && hoursUntilDeadline < 48;
+        return false;
+      });
+      finalCount = filteredApplications.length;
     }
     
     // Recalculate count and apply pagination for custom statuses

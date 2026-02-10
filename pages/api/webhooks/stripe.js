@@ -108,7 +108,7 @@ export default async function handler(req, res) {
           .from('applications')
           .update(updateData)
           .eq('stripe_session_id', session.id)
-          .select('id, application_type')
+          .select('id, application_type, impersonation_metadata')
           .single();
 
         // Get receipt and send receipt email
@@ -200,27 +200,36 @@ export default async function handler(req, res) {
               console.warn('[Webhook] Could not retrieve line items:', lineItemsError.message);
             }
 
-            // Send receipt email
-            const recipientEmail = session.customer_email || session.metadata.customerEmail;
+            // Check if this was created during impersonation and if emails should be sent
+            const impersonationMeta = updatedApp.impersonation_metadata;
+            const isImpersonated = !!impersonationMeta;
+            const shouldSendEmails = impersonationMeta?.send_emails !== false; // Default to true if not specified
             
-            console.log(`[Webhook] Sending receipt email with paymentMethod: ${paymentMethod}, lineItems count: ${lineItems.length}`);
-            
-            await sendInvoiceReceiptEmail({
-              to: recipientEmail,
-              applicationId: updatedApp.id,
-              customerName: session.metadata.customerName || 'Customer',
-              propertyAddress: session.metadata.propertyAddress || '',
-              packageType: session.metadata.packageType || 'standard',
-              totalAmount: (session.amount_total / 100).toFixed(2),
-              invoiceNumber: receiptNumber || `PAY-${updatedApp.id}`, // Use receipt number or generate one
-              invoicePdfUrl: receiptUrl, // Use Stripe receipt URL
-              hostedInvoiceUrl: receiptUrl, // Same URL for hosted view
-              stripeChargeId: session.payment_intent,
-              invoiceDate: new Date().toISOString(),
-              applicationType: updatedApp.application_type || 'single_property', // Pass application type for dynamic content
-              paymentMethod: paymentMethod, // Payment method (e.g., "VISA - 8008")
-              lineItems: lineItems, // Itemized breakdown
-            });
+            if (isImpersonated && !shouldSendEmails) {
+              console.log(`[Webhook] Skipping receipt email - impersonation mode with send_emails disabled for application ${updatedApp.id}`);
+            } else {
+              // Send receipt email
+              const recipientEmail = session.customer_email || session.metadata.customerEmail;
+              
+              console.log(`[Webhook] Sending receipt email with paymentMethod: ${paymentMethod}, lineItems count: ${lineItems.length}`);
+              
+              await sendInvoiceReceiptEmail({
+                to: recipientEmail,
+                applicationId: updatedApp.id,
+                customerName: session.metadata.customerName || 'Customer',
+                propertyAddress: session.metadata.propertyAddress || '',
+                packageType: session.metadata.packageType || 'standard',
+                totalAmount: (session.amount_total / 100).toFixed(2),
+                invoiceNumber: receiptNumber || `PAY-${updatedApp.id}`, // Use receipt number or generate one
+                invoicePdfUrl: receiptUrl, // Use Stripe receipt URL
+                hostedInvoiceUrl: receiptUrl, // Same URL for hosted view
+                stripeChargeId: session.payment_intent,
+                invoiceDate: new Date().toISOString(),
+                applicationType: updatedApp.application_type || 'single_property', // Pass application type for dynamic content
+                paymentMethod: paymentMethod, // Payment method (e.g., "VISA - 8008")
+                lineItems: lineItems, // Itemized breakdown
+              });
+            }
           } catch (receiptError) {
             console.error('[Webhook] Failed to get receipt or send receipt email:', receiptError);
             // Fallback to payment confirmation email
@@ -269,7 +278,8 @@ export default async function handler(req, res) {
             property_address,
             package_type,
             total_amount,
-            application_type
+            application_type,
+            impersonation_metadata
           `)
           .single();
 
@@ -288,7 +298,8 @@ export default async function handler(req, res) {
               property_address,
               package_type,
               total_amount,
-              application_type
+              application_type,
+              impersonation_metadata
             `)
             .single();
           
@@ -400,25 +411,34 @@ export default async function handler(req, res) {
               // This is a fallback for PaymentIntents created directly (not via CheckoutSession)
             }
 
-            // Send receipt email
-            console.log(`[Webhook] Sending receipt email with paymentMethod: ${paymentMethod}, lineItems count: ${lineItems.length}`);
+            // Check if this was created during impersonation and if emails should be sent
+            const impersonationMeta = updatedApplication.impersonation_metadata;
+            const isImpersonated = !!impersonationMeta;
+            const shouldSendEmails = impersonationMeta?.send_emails !== false; // Default to true if not specified
             
-            await sendInvoiceReceiptEmail({
-              to: updatedApplication.submitter_email,
-              applicationId: updatedApplication.id,
-              customerName: updatedApplication.submitter_name || paymentIntent.metadata.customerName || 'Customer',
-              propertyAddress: updatedApplication.property_address || paymentIntent.metadata.propertyAddress || 'Unknown',
-              packageType: updatedApplication.package_type || paymentIntent.metadata.packageType || 'standard',
-              totalAmount: (updatedApplication.total_amount || (paymentIntent.amount_total / 100)).toFixed(2),
-              invoiceNumber: receiptNumber || `PAY-${updatedApplication.id}`, // Use receipt number or generate one
-              invoicePdfUrl: receiptUrl, // Use Stripe receipt URL
-              hostedInvoiceUrl: receiptUrl, // Same URL for hosted view
-              stripeChargeId: paymentIntent.id,
-              invoiceDate: new Date().toISOString(),
-              applicationType: updatedApplication.application_type || 'single_property', // Pass application type for dynamic content
-              paymentMethod: paymentMethod, // Payment method (e.g., "VISA - 8008")
-              lineItems: lineItems, // Itemized breakdown
-            });
+            if (isImpersonated && !shouldSendEmails) {
+              console.log(`[Webhook] Skipping receipt email - impersonation mode with send_emails disabled for application ${updatedApplication.id}`);
+            } else {
+              // Send receipt email
+              console.log(`[Webhook] Sending receipt email with paymentMethod: ${paymentMethod}, lineItems count: ${lineItems.length}`);
+              
+              await sendInvoiceReceiptEmail({
+                to: updatedApplication.submitter_email,
+                applicationId: updatedApplication.id,
+                customerName: updatedApplication.submitter_name || paymentIntent.metadata.customerName || 'Customer',
+                propertyAddress: updatedApplication.property_address || paymentIntent.metadata.propertyAddress || 'Unknown',
+                packageType: updatedApplication.package_type || paymentIntent.metadata.packageType || 'standard',
+                totalAmount: (updatedApplication.total_amount || (paymentIntent.amount_total / 100)).toFixed(2),
+                invoiceNumber: receiptNumber || `PAY-${updatedApplication.id}`, // Use receipt number or generate one
+                invoicePdfUrl: receiptUrl, // Use Stripe receipt URL
+                hostedInvoiceUrl: receiptUrl, // Same URL for hosted view
+                stripeChargeId: paymentIntent.id,
+                invoiceDate: new Date().toISOString(),
+                applicationType: updatedApplication.application_type || 'single_property', // Pass application type for dynamic content
+                paymentMethod: paymentMethod, // Payment method (e.g., "VISA - 8008")
+                lineItems: lineItems, // Itemized breakdown
+              });
+            }
           } catch (emailError) {
             console.error('[Webhook] Failed to send receipt email:', emailError);
             // Don't fail the webhook if email fails

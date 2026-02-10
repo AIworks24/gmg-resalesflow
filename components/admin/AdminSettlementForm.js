@@ -1267,9 +1267,20 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
         if (customField.value) {
           const cleaned = customField.value.toString().replace(/[^0-9.]/g, '');
           if (cleaned) {
-            const num = parseFloat(cleaned);
-            if (!isNaN(num)) {
-              numericValue = num.toString();
+            // Check if the value is in an incomplete decimal state (ends with "." or has exactly one digit after decimal)
+            const decimalIndex = cleaned.indexOf('.');
+            const hasIncompleteDecimal = cleaned.endsWith('.') || 
+              (decimalIndex !== -1 && cleaned.substring(decimalIndex + 1).length === 1);
+            
+            if (hasIncompleteDecimal) {
+              // Preserve the raw string to maintain the incomplete decimal (e.g., "20.0" stays "20.0")
+              numericValue = cleaned;
+            } else {
+              // Value is complete, use parseFloat to normalize
+              const num = parseFloat(cleaned);
+              if (!isNaN(num)) {
+                numericValue = num.toString();
+              }
             }
           }
         }
@@ -1291,7 +1302,19 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
                   }
                   const num = parseFloat(inputValue);
                   if (!isNaN(num) && num >= 0) {
-                    handleCustomFieldChange(customIndex, 'value', `$${num.toFixed(2)}`);
+                    // Allow user to type freely - don't format while typing
+                    // Check if it ends with "." or has exactly one digit after decimal point
+                    const decimalIndex = inputValue.indexOf('.');
+                    const hasIncompleteDecimal = inputValue.endsWith('.') || 
+                      (decimalIndex !== -1 && inputValue.substring(decimalIndex + 1).length === 1);
+                    
+                    if (hasIncompleteDecimal) {
+                      // User is still typing decimals, store raw numeric value
+                      handleCustomFieldChange(customIndex, 'value', inputValue);
+                    } else {
+                      // Value is complete, format with $ and 2 decimal places
+                      handleCustomFieldChange(customIndex, 'value', `$${num.toFixed(2)}`);
+                    }
                   } else {
                     handleCustomFieldChange(customIndex, 'value', inputValue);
                   }
@@ -1394,9 +1417,20 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
         // Remove $ and any non-numeric characters except decimal point
         const cleaned = value.toString().replace(/[^0-9.]/g, '');
         if (cleaned) {
-          const num = parseFloat(cleaned);
-          if (!isNaN(num)) {
-            numericValue = num.toString();
+          // Check if the value is in an incomplete decimal state (ends with "." or has exactly one digit after decimal)
+          const decimalIndex = cleaned.indexOf('.');
+          const hasIncompleteDecimal = cleaned.endsWith('.') || 
+            (decimalIndex !== -1 && cleaned.substring(decimalIndex + 1).length === 1);
+          
+          if (hasIncompleteDecimal) {
+            // Preserve the raw string to maintain the incomplete decimal (e.g., "20.0" stays "20.0")
+            numericValue = cleaned;
+          } else {
+            // Value is complete, use parseFloat to normalize
+            const num = parseFloat(cleaned);
+            if (!isNaN(num)) {
+              numericValue = num.toString();
+            }
           }
         }
       }
@@ -1417,11 +1451,24 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
                   handleInputChange(field.key, '');
                   return;
                 }
-                // Parse the number
+                // Allow user to type freely - don't format while typing
+                // Check if the value is a valid number or in the process of being typed
                 const num = parseFloat(inputValue);
                 if (!isNaN(num) && num >= 0) {
-                  // Format with $ and 2 decimal places
-                  handleInputChange(field.key, `$${num.toFixed(2)}`);
+                  // Only format if the value doesn't end with a decimal point or has incomplete decimal
+                  // This allows typing "20.0" without immediately formatting to "20.00"
+                  // Check if it ends with "." or has exactly one digit after decimal point
+                  const decimalIndex = inputValue.indexOf('.');
+                  const hasIncompleteDecimal = inputValue.endsWith('.') || 
+                    (decimalIndex !== -1 && inputValue.substring(decimalIndex + 1).length === 1);
+                  
+                  if (hasIncompleteDecimal) {
+                    // User is still typing decimals, store raw numeric value
+                    handleInputChange(field.key, inputValue);
+                  } else {
+                    // Value is complete, format with $ and 2 decimal places
+                    handleInputChange(field.key, `$${num.toFixed(2)}`);
+                  }
                 } else {
                   // If invalid, just store the raw value temporarily
                   handleInputChange(field.key, inputValue);
@@ -2427,9 +2474,20 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
                             if (fieldEditorData.value) {
                               const cleaned = fieldEditorData.value.toString().replace(/[^0-9.]/g, '');
                               if (cleaned) {
-                                const num = parseFloat(cleaned);
-                                if (!isNaN(num)) {
-                                  numericValue = num.toString();
+                                // Check if the value is in an incomplete decimal state (ends with "." or has exactly one digit after decimal)
+                                const decimalIndex = cleaned.indexOf('.');
+                                const hasIncompleteDecimal = cleaned.endsWith('.') || 
+                                  (decimalIndex !== -1 && cleaned.substring(decimalIndex + 1).length === 1);
+                                
+                                if (hasIncompleteDecimal) {
+                                  // Preserve the raw string to maintain the incomplete decimal (e.g., "20.0" stays "20.0")
+                                  numericValue = cleaned;
+                                } else {
+                                  // Value is complete, use parseFloat to normalize
+                                  const num = parseFloat(cleaned);
+                                  if (!isNaN(num)) {
+                                    numericValue = num.toString();
+                                  }
                                 }
                               }
                             }
@@ -2445,8 +2503,19 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
                             // Parse the number
                             const num = parseFloat(inputValue);
                             if (!isNaN(num) && num >= 0) {
-                              // Format with $ and 2 decimal places
-                              setFieldEditorData({ ...fieldEditorData, value: `$${num.toFixed(2)}` });
+                              // Allow user to type freely - don't format while typing
+                              // Check if it ends with "." or has exactly one digit after decimal point
+                              const decimalIndex = inputValue.indexOf('.');
+                              const hasIncompleteDecimal = inputValue.endsWith('.') || 
+                                (decimalIndex !== -1 && inputValue.substring(decimalIndex + 1).length === 1);
+                              
+                              if (hasIncompleteDecimal) {
+                                // User is still typing decimals, store raw numeric value
+                                setFieldEditorData({ ...fieldEditorData, value: inputValue });
+                              } else {
+                                // Value is complete, format with $ and 2 decimal places
+                                setFieldEditorData({ ...fieldEditorData, value: `$${num.toFixed(2)}` });
+                              }
                             } else {
                               // If invalid, just store the raw value temporarily
                               setFieldEditorData({ ...fieldEditorData, value: inputValue });

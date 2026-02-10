@@ -32,9 +32,12 @@ const AdminDashboardMetrics = ({ userRole }) => {
     return res.json();
   };
 
+  // Get user's timezone
+  const userTimezone = typeof Intl !== 'undefined' && Intl.DateTimeFormat?.().resolvedOptions?.().timeZone || 'UTC';
+  
   // Fetch dashboard summary using SWR
   const { data: swrData, error: swrError, isLoading, mutate } = useSWR(
-    '/api/admin/dashboard-summary',
+    `/api/admin/dashboard-summary?timezone=${encodeURIComponent(userTimezone)}`,
     fetcher,
     {
       refreshInterval: 0, // Disable auto-refresh (manual refresh only)
@@ -46,7 +49,7 @@ const AdminDashboardMetrics = ({ userRole }) => {
   // Function to force refresh with cache bypass
   const forceRefresh = async () => {
     await mutate(
-      fetch('/api/admin/dashboard-summary?bypass=true').then(res => res.json()),
+      fetch(`/api/admin/dashboard-summary?bypass=true&timezone=${encodeURIComponent(userTimezone)}`).then(res => res.json()),
       { revalidate: false }
     );
   };
@@ -72,7 +75,7 @@ const AdminDashboardMetrics = ({ userRole }) => {
           
           // Refresh dashboard data with cache bypass when any change occurs
           await mutate(
-            fetch('/api/admin/dashboard-summary?bypass=true').then(res => res.json()),
+            fetch(`/api/admin/dashboard-summary?bypass=true&timezone=${encodeURIComponent(userTimezone)}`).then(res => res.json()),
             { revalidate: false }
           );
         }

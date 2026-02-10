@@ -1012,7 +1012,10 @@ const PackagePaymentStep = ({
   isTestMode, // Add test mode prop
   testModeCode, // Add test mode code for API calls
   isImpersonating, // When true, payment uses test mode; Stripe.js must use test key
+  impersonatedUser, // When impersonating, use this user's ID for application creation
 }) => {
+  // Get sendEmails flag from store
+  const { sendEmails } = useImpersonationStore();
   const [isProcessing, setIsProcessing] = useState(false);
   const [paymentError, setPaymentError] = useState(null);
   const [multiCommunityPricing, setMultiCommunityPricing] = useState(null);
@@ -1211,8 +1214,11 @@ const PackagePaymentStep = ({
             (h) => h.name === formData.hoaProperty
           );
 
+          // Use impersonated user's ID when impersonating, otherwise use current user's ID
+          const actingUserId = isImpersonating && impersonatedUser?.id ? impersonatedUser.id : user.id;
+
           const applicationData = {
-            user_id: user.id,
+            user_id: actingUserId,
             hoa_property_id: hoaProperty?.id,
             property_address: formData.propertyAddress,
             unit_number: formData.unitNumber,
@@ -1325,33 +1331,39 @@ const PackagePaymentStep = ({
         // Forms are created automatically by the API for free transactions
         // No need to call createPropertyOwnerForms here
 
-        // Send confirmation email
+        // Send confirmation email (only if not impersonating or sendEmails is enabled)
         try {
-          const hoaProperty = (hoaProperties || []).find(
-            (h) => h.name === formData.hoaProperty
-          );
-          
-          const emailResponse = await fetch('/api/send-email', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              emailType: 'application_submission',
-              applicationId: createdApplicationId,
-              customerName: formData.submitterName,
-              customerEmail: formData.submitterEmail,
-              propertyAddress: formData.propertyAddress,
-              packageType: formData.packageType,
-              totalAmount: totalAmount,
-              hoaName: hoaProperty?.name || 'Unknown HOA',
-              submitterType: formData.submitterType,
-              applicationType: applicationType,
-            }),
-          });
+          const { isImpersonating: isCurrentlyImpersonating, sendEmails: shouldSendEmails } = useImpersonationStore.getState();
+          if (!isCurrentlyImpersonating || shouldSendEmails) {
+            const hoaProperty = (hoaProperties || []).find(
+              (h) => h.name === formData.hoaProperty
+            );
+            
+            const emailResponse = await fetchWithImpersonation('/api/send-email', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                emailType: 'application_submission',
+                applicationId: createdApplicationId,
+                customerName: formData.submitterName,
+                customerEmail: formData.submitterEmail,
+                propertyAddress: formData.propertyAddress,
+                packageType: formData.packageType,
+                totalAmount: totalAmount,
+                hoaName: hoaProperty?.name || 'Unknown HOA',
+                submitterType: formData.submitterType,
+                applicationType: applicationType,
+                buyerName: formData.buyerName || '',
+              }),
+            });
 
-          if (!emailResponse.ok) {
-            throw new Error('Failed to send confirmation email');
+            if (!emailResponse.ok) {
+              throw new Error('Failed to send confirmation email');
+            }
+          } else {
+            console.log('[Impersonation] Skipping email - sendEmails is disabled');
           }
         } catch (emailError) {
           console.error('Error sending confirmation email:', emailError);
@@ -1472,8 +1484,11 @@ const PackagePaymentStep = ({
             (h) => h.name === formData.hoaProperty
           );
 
+          // Use impersonated user's ID when impersonating, otherwise use current user's ID
+          const actingUserId = isImpersonating && impersonatedUser?.id ? impersonatedUser.id : user.id;
+
           const applicationData = {
-            user_id: user.id,
+            user_id: actingUserId,
             hoa_property_id: hoaProperty?.id,
             property_address: formData.propertyAddress,
             unit_number: formData.unitNumber,
@@ -4817,8 +4832,11 @@ export default function GMGResaleFlow() {
         appType = determineApplicationType(formData.submitterType, hoaProperty, formData.publicOffering);
       }
 
+      // Use impersonated user's ID when impersonating, otherwise use current user's ID
+      const actingUserId = isImpersonating && impersonatedUser?.id ? impersonatedUser.id : user.id;
+
       const draftData = {
-        user_id: user.id,
+        user_id: actingUserId,
         hoa_property_id: hoaProperty?.id,
         property_address: formData.propertyAddress,
         unit_number: formData.unitNumber,
@@ -5030,18 +5048,21 @@ export default function GMGResaleFlow() {
     setIsStartingApplication(true);
     
     try {
-      // First, refresh profile to ensure we have latest data
-      await initialize();
-      
-      // Get the fresh profile data
-      const freshProfile = useApplicantAuthStore.getState().profile;
-      
-      // Now check if email is verified
-      const isVerified = freshProfile?.email_confirmed_at !== null && freshProfile?.email_confirmed_at !== undefined;
-      
-      if (!isVerified) {
-        router.push('/auth/verification-pending');
-        return;
+      // Skip email verification check when impersonating
+      if (!isImpersonating) {
+        // First, refresh profile to ensure we have latest data
+        await initialize();
+        
+        // Get the fresh profile data
+        const freshProfile = useApplicantAuthStore.getState().profile;
+        
+        // Now check if email is verified
+        const isVerified = freshProfile?.email_confirmed_at !== null && freshProfile?.email_confirmed_at !== undefined;
+        
+        if (!isVerified) {
+          router.push('/auth/verification-pending');
+          return;
+        }
       }
     
     // Reset application ID first
@@ -5050,7 +5071,15 @@ export default function GMGResaleFlow() {
     
     // Get user profile data for auto-population
     let autoFillData = { submitterName: '', submitterEmail: '' };
-    if (user) {
+    
+    // When impersonating, use impersonated user's info
+    if (isImpersonating && impersonatedUser) {
+      const fullName = [impersonatedUser.first_name, impersonatedUser.last_name].filter(Boolean).join(' ');
+      autoFillData = {
+        submitterName: fullName || '',
+        submitterEmail: impersonatedUser.email || '',
+      };
+    } else if (user) {
       if (profile) {
         const fullName = [profile.first_name, profile.last_name].filter(Boolean).join(' ');
         autoFillData = {
@@ -5091,7 +5120,7 @@ export default function GMGResaleFlow() {
     } finally {
       setIsStartingApplication(false);
     }
-  }, [user, profile, initialize, router]);
+  }, [user, profile, initialize, router, isImpersonating, impersonatedUser]);
 
   // Load applications when user or role changes
   useEffect(() => {
@@ -5248,10 +5277,13 @@ export default function GMGResaleFlow() {
       
       if (!existingApplicationId) {
         // Try to find a pending payment or payment_completed application for this user with matching details
+        // Use impersonated user's ID when impersonating, otherwise use current user's ID
+        const actingUserId = isImpersonating && impersonatedUser?.id ? impersonatedUser.id : user.id;
+        
         const { data: pendingApps, error: searchError } = await supabase
           .from('applications')
           .select('id')
-          .eq('user_id', user.id)
+          .eq('user_id', actingUserId)
           .in('status', ['pending_payment', 'payment_completed'])
           .eq('submitter_email', formData.submitterEmail)
           .eq('property_address', formData.propertyAddress)
@@ -5315,6 +5347,7 @@ export default function GMGResaleFlow() {
               hoaName: hoaProperty?.name || 'Unknown HOA',
               submitterType: data.submitter_type,
               applicationType: data.application_type,
+              buyerName: data.buyer_name || '',
             }),
           });
 
@@ -5365,8 +5398,11 @@ export default function GMGResaleFlow() {
           throw new Error('Please select a valid HOA property.');
         }
 
+        // Use impersonated user's ID when impersonating, otherwise use current user's ID
+        const actingUserId = isImpersonating && impersonatedUser?.id ? impersonatedUser.id : user.id;
+
         const applicationData = {
-          user_id: user.id,
+          user_id: actingUserId,
           hoa_property_id: hoaProperty.id,
           property_address: formData.propertyAddress,
           unit_number: formData.unitNumber,
@@ -5439,33 +5475,39 @@ export default function GMGResaleFlow() {
           // Don't fail the submission if notification creation fails
         }
 
-        // Send confirmation email
+        // Send confirmation email (only if not impersonating or sendEmails is enabled)
         try {
-          const hoaProperty = (hoaProperties || []).find(
-            (h) => h.id === data[0].hoa_property_id
-          );
-          
-          const emailResponse = await fetch('/api/send-email', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              emailType: 'application_submission',
-              applicationId: data[0].id,
-              customerName: data[0].submitter_name,
-              customerEmail: data[0].submitter_email,
-              propertyAddress: data[0].property_address,
-              packageType: data[0].package_type,
-              totalAmount: data[0].total_amount,
-              hoaName: hoaProperty?.name || 'Unknown HOA',
-              submitterType: data[0].submitter_type,
-              applicationType: data[0].application_type,
-            }),
-          });
+          const { isImpersonating: isCurrentlyImpersonating, sendEmails: shouldSendEmails } = useImpersonationStore.getState();
+          if (!isCurrentlyImpersonating || shouldSendEmails) {
+            const hoaProperty = (hoaProperties || []).find(
+              (h) => h.id === data[0].hoa_property_id
+            );
+            
+            const emailResponse = await fetchWithImpersonation('/api/send-email', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                emailType: 'application_submission',
+                applicationId: data[0].id,
+                customerName: data[0].submitter_name,
+                customerEmail: data[0].submitter_email,
+                propertyAddress: data[0].property_address,
+                packageType: data[0].package_type,
+                totalAmount: data[0].total_amount,
+                hoaName: hoaProperty?.name || 'Unknown HOA',
+                submitterType: data[0].submitter_type,
+                applicationType: data[0].application_type,
+                buyerName: data[0].buyer_name || '',
+              }),
+            });
 
-          if (!emailResponse.ok) {
-            console.warn('Failed to send confirmation email, but application was submitted successfully');
+            if (!emailResponse.ok) {
+              console.warn('Failed to send confirmation email, but application was submitted successfully');
+            }
+          } else {
+            console.log('[Impersonation] Skipping email - sendEmails is disabled');
           }
         } catch (emailError) {
           console.error('Error sending confirmation email:', emailError);
@@ -6033,7 +6075,7 @@ export default function GMGResaleFlow() {
 
                                   <div className='flex items-center gap-1.5 text-xs font-semibold text-gray-600 bg-gray-100 px-2 py-0.5 rounded-md'>
                                     <Hash className='h-3.5 w-3.5 text-gray-400' />
-                                    <span>App {app.id}</span>
+                                    image.png                                    <span>App {app.id}</span>
                                   </div>
                                   
                                   {isCompleted && (
@@ -6479,8 +6521,13 @@ export default function GMGResaleFlow() {
           </h1>
           <button
             type="button"
-            disabled
-            className='w-full sm:w-auto inline-flex items-center justify-center gap-2 bg-gray-300 text-gray-500 px-5 py-3 rounded-xl font-medium cursor-not-allowed transition-colors shadow-sm min-h-[44px]'
+            disabled={!isImpersonating}
+            onClick={isImpersonating ? startNewApplication : undefined}
+            className={`w-full sm:w-auto inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl font-medium transition-colors shadow-sm min-h-[44px] ${
+              isImpersonating
+                ? 'bg-green-600 text-white hover:bg-green-700 cursor-pointer'
+                : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+            }`}
           >
             <FileText className='h-5 w-5 flex-shrink-0' />
             New Application
@@ -6560,8 +6607,13 @@ export default function GMGResaleFlow() {
               {applications.length === 0 && (
                 <button
                   type="button"
-                  disabled
-                  className='mt-4 inline-flex items-center gap-2 bg-gray-300 text-gray-500 px-4 py-2.5 rounded-lg text-sm font-medium cursor-not-allowed transition-colors'
+                  disabled={!isImpersonating}
+                  onClick={isImpersonating ? startNewApplication : undefined}
+                  className={`mt-4 inline-flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                    isImpersonating
+                      ? 'bg-green-600 text-white hover:bg-green-700 cursor-pointer'
+                      : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                  }`}
                 >
                   <FileText className='h-4 w-4' /> New Application
                 </button>
@@ -6766,6 +6818,7 @@ export default function GMGResaleFlow() {
             isTestMode={isTestMode}
             testModeCode={testModeCode}
             isImpersonating={isImpersonating}
+            impersonatedUser={impersonatedUser}
           />
         );
       case 5:

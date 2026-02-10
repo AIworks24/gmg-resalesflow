@@ -48,6 +48,17 @@ import AdminSettlementForm from './AdminSettlementForm';
 import AdminLayout from './AdminLayout';
 import useAdminAuthStore from '../../stores/adminAuthStore';
 
+// Map old status values to new ones for backward compatibility
+const mapOldStatusToNew = (status) => {
+  if (status === 'payment_confirmed' || status === 'ongoing') {
+    return 'pending';
+  }
+  if (status === 'approved') {
+    return 'completed';
+  }
+  return status;
+};
+
 const AdminApplications = ({ userRole: userRoleProp }) => {
   // Get userRole from store if not provided as prop
   const { role: userRoleFromStore } = useAdminAuthStore();
@@ -56,7 +67,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
   const router = useRouter();
 
   // Get parameters from URL query (for dashboard navigation)
-  const urlStatus = router.query.status || 'all';
+  const urlStatus = mapOldStatusToNew(router.query.status || 'all');
   const sortBy = router.query.sortBy || 'submitted_at';  // Default to submitted_at (booked/received date)
   const sortOrder = router.query.sortOrder || 'desc';
 
@@ -129,7 +140,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
 
   // Sync selectedStatus with URL query parameter when it changes (for dashboard navigation)
   useEffect(() => {
-    const statusFromUrl = router.query.status || 'all';
+    const statusFromUrl = mapOldStatusToNew(router.query.status || 'all');
     if (statusFromUrl !== selectedStatus) {
       setSelectedStatus(statusFromUrl);
     }
@@ -152,9 +163,9 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
     }
   }, [selectedApplication?.id]);
 
-  // Build dynamic API URL with sort and status parameters
-  // Include status in API URL so server-side filtering happens
-  const apiUrl = `/api/admin/applications?status=${selectedStatus}&sortBy=${sortBy}&sortOrder=${sortOrder}`;
+  // Build dynamic API URL with sort, status, and urgency parameters
+  // When urgency=overdue|near_deadline the API fetches all and filters so the list matches the dashboard metric
+  const apiUrl = `/api/admin/applications?status=${selectedStatus}&sortBy=${sortBy}&sortOrder=${sortOrder}${urgencyFilter !== 'all' ? `&urgency=${urgencyFilter}` : ''}`;
 
   // SWR fetcher function
   const fetcher = async (url) => {
@@ -1081,36 +1092,20 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
 
     // Apply status filter
     if (selectedStatus !== 'all') {
-      if (selectedStatus === 'payment_confirmed') {
-        // Not Started = step 1
+      if (selectedStatus === 'pending') {
+        // Pending = all non-completed applications (combines "Not Started" and "Ongoing")
+        // Exclude completed and rejected (rejected counts as completed for filter purposes)
         filtered = filtered.filter(app => {
-          const workflowStep = getWorkflowStep(app);
-          return workflowStep.step === 1;
-        });
-      } else if (selectedStatus === 'ongoing') {
-        // Ongoing = in progress but not completed
-        // Different application types have different step counts, so we check the text to exclude completed
-        filtered = filtered.filter(app => {
-          const workflowStep = getWorkflowStep(app);
-          // Exclude completed applications by checking the text
-          if (workflowStep.text === 'Completed') {
-            return false;
-          }
-          // Include steps 2, 3, or 4 that are not completed
-          return workflowStep.step === 2 || workflowStep.step === 3 || workflowStep.step === 4;
-        });
-      } else if (selectedStatus === 'approved') {
-        // Completed = check by text since different app types have different step counts
-        // Settlement apps: step 4 = Completed, Standard apps: step 5 = Completed, Lender: step 4 = Completed
-        filtered = filtered.filter(app => {
-          const workflowStep = getWorkflowStep(app);
-          return workflowStep.text === 'Completed';
-        });
-      } else if (selectedStatus === 'pending') {
-        // Pending = all non-completed applications (use workflow step to handle all app types correctly)
-        filtered = filtered.filter(app => {
+          if (app.status === 'rejected') return false;
           const workflowStep = getWorkflowStep(app);
           return workflowStep.text !== 'Completed';
+        });
+      } else if (selectedStatus === 'completed') {
+        // Completed = workflow completed OR rejected (rejected is a terminal state)
+        filtered = filtered.filter(app => {
+          if (app.status === 'rejected') return true;
+          const workflowStep = getWorkflowStep(app);
+          return workflowStep.text === 'Completed';
         });
       } else if (selectedStatus === 'urgent') {
         // Urgent = applications that are overdue (at/past deadline) or near deadline (within 48 hours)
@@ -1138,9 +1133,9 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
           return hoursUntilDeadline < 48;
         });
       } else if (selectedStatus === 'completed') {
-        // Completed = check by workflow step text to handle all app types correctly
-        // This ensures multi-community settlement apps are only marked completed when ALL properties are done
+        // Completed = workflow completed OR rejected (rejected is a terminal state)
         filtered = filtered.filter(app => {
+          if (app.status === 'rejected') return true;
           const workflowStep = getWorkflowStep(app);
           return workflowStep.text === 'Completed';
         });
@@ -3253,9 +3248,8 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                 className='w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all'
               >
                 <option value='all'>All Steps</option>
-                <option value='payment_confirmed'>Not Started</option>
-                <option value='ongoing'>Ongoing</option>
-                <option value='approved'>Completed</option>
+                <option value='pending'>Pending</option>
+                <option value='completed'>Completed</option>
               </select>
             </div>
 
