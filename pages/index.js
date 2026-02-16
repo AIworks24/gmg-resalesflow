@@ -2143,7 +2143,7 @@ const PackagePaymentStep = ({
                   </span>
                   {calculateTotal(formData, stripePrices, hoaProperties) > 0 && (
                     <span className='text-sm text-gray-500'>
-                      + ${stripePrices ? stripePrices.convenienceFee.display.toFixed(2) : '9.95'} convenience fee
+                      + ${stripePrices ? stripePrices.convenienceFee.display.toFixed(2) : '9.95'} non-refundable convenience fee
                     </span>
                   )}
                 </div>
@@ -2204,7 +2204,7 @@ const PackagePaymentStep = ({
                     )}
                     {formData.paymentMethod === 'credit_card' && (association.basePrice + association.rushFee) > 0 && (
                       <div className='flex justify-between ml-4'>
-                        <span>Convenience Fee:</span>
+                        <span>Non-refundable convenience fee:</span>
                         <span>+${association.convenienceFee.toFixed(2)}</span>
                       </div>
                     )}
@@ -2306,7 +2306,7 @@ const PackagePaymentStep = ({
                 )}
                 {formData.paymentMethod === 'credit_card' && calculateTotal(formData, stripePrices, hoaProperties) > 0 && (
                   <div className='flex justify-between'>
-                    <span>Convenience Fee:</span>
+                    <span>Non-refundable convenience fee:</span>
                     <span>+${stripePrices ? stripePrices.convenienceFee.display.toFixed(2) : '9.95'}</span>
                   </div>
                 )}
@@ -2316,6 +2316,9 @@ const PackagePaymentStep = ({
                 </div>
               </>
             )}
+            <p className='text-xs text-green-700/80 mt-3'>
+              The convenience fee is non-refundable.
+            </p>
           </div>
         </div>
 
@@ -3980,6 +3983,7 @@ const ReviewSubmitStep = ({ formData, handleInputChange, stripePrices, applicati
               </p>
               <p>• You will receive email updates throughout the process</p>
               <p>• Payment will be processed securely upon submission</p>
+              <p>• The convenience fee is non-refundable</p>
               <p>• All documents will be delivered electronically</p>
             </div>
           </div>
@@ -4296,6 +4300,19 @@ const ReviewSubmitStep = ({ formData, handleInputChange, stripePrices, applicati
               return calculateTotal(formData, stripePrices, hoaProperties).toFixed(2);
             })()}
           </div>
+          {(() => {
+            let total = 0;
+            if (multiCommunityPricing?.total != null) {
+              total = multiCommunityPricing.total + ((formData.paymentMethod === 'credit_card' && multiCommunityPricing.total > 0) ? multiCommunityPricing.totalConvenienceFee : 0);
+            } else {
+              total = calculateTotal(formData, stripePrices, hoaProperties);
+            }
+            return total > 0 ? (
+              <p className='text-xs text-gray-500 mt-2'>
+                The convenience fee is non-refundable.
+              </p>
+            ) : null;
+          })()}
         </div>
       </div>
     </div>

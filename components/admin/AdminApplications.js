@@ -1111,6 +1111,8 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
         // Urgent = applications that are overdue (at/past deadline) or near deadline (within 48 hours)
         const now = new Date();
         filtered = filtered.filter(app => {
+          // Skip rejected (terminal state)
+          if (app.status === 'rejected') return false;
           // Skip completed applications (use workflow step to handle all app types correctly)
           const workflowStep = getWorkflowStep(app);
           if (workflowStep.text === 'Completed') {
@@ -1193,6 +1195,8 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
     if (urgencyFilter !== 'all') {
       const now = new Date();
       filtered = filtered.filter(app => {
+        // Skip rejected (terminal state)
+        if (app.status === 'rejected') return false;
         // Skip completed applications
         const workflowStep = getWorkflowStep(app);
         if (workflowStep.text === 'Completed') {

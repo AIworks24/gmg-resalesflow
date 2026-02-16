@@ -700,8 +700,9 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
     // Use the JSON-based initializer with the correct state
     const initialData = initializeFormData(effectiveState, applicationData, userData);
 
-    // Set auto-generated fields
-    initialData.datePrepared = new Date().toISOString().split('T')[0];
+    // Set auto-generated fields (use local date - toISOString() uses UTC and can shift date)
+    const now = new Date();
+    initialData.datePrepared = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
     initialData.preparerSignature = userToUse?.name || managerFromProperty || '';
     initialData.preparerName = userToUse?.name || managerFromProperty || '';
     

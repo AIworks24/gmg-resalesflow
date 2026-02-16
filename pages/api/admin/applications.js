@@ -132,7 +132,12 @@ export default async function handler(req, res) {
     const serverSideComputedStatuses = ['completed', 'pending', 'urgent'];
     const urgencyRequiresFullFetch = urgency === 'overdue' || urgency === 'near_deadline';
     const needsPostFiltering = serverSideComputedStatuses.includes(status) || urgencyRequiresFullFetch;
-    
+
+    // For urgent: use 1000 so metric and list match (dashboard counts urgent from first 1000 only)
+    // For completed/pending: use 10000 to ensure we get full counts
+    const MAX_FOR_URGENT = 1000;
+    const MAX_FOR_OTHER_COMPUTED = 10000;
+
     // Match dashboard: NULLS LAST so "first N" are true most recent (not old rows with null submitted_at)
     const orderOpts = { ascending: isAscending, nullsFirst: false };
 
@@ -143,8 +148,10 @@ export default async function handler(req, res) {
         .range(startIndex, startIndex + limitNum - 1)
         .order(validSortBy, orderOpts);
     } else {
-      // For server-side computed statuses, fetch all (no pagination yet) but still apply sorting
-      query = query.order(validSortBy, orderOpts);
+      const maxFetch = status === 'urgent' ? MAX_FOR_URGENT : MAX_FOR_OTHER_COMPUTED;
+      query = query
+        .order(validSortBy, orderOpts)
+        .range(0, maxFetch - 1);
     }
 
     // Execute query
@@ -155,44 +162,34 @@ export default async function handler(req, res) {
       throw queryError;
     }
 
-    // Helper function to check if a multi-community settlement application is fully completed
-    const isMultiCommunitySettlementCompleted = (app) => {
+    // Helper: check if multi-community application is fully completed (matches getMultiCommunityWorkflowStep)
+    const isMultiCommunityCompleted = (app) => {
       const propertyGroups = app.application_property_groups || [];
-      
-      // If no property groups, it's not a multi-community application
-      if (propertyGroups.length === 0) {
-        return false;
-      }
+      if (propertyGroups.length === 0) return false;
 
-      // Check if this is a settlement application
-      const isSettlementApp = app.submitter_type === 'settlement' || 
-                              app.application_type?.startsWith('settlement');
-      
-      // Only apply special logic for settlement multi-community applications
-      if (!isSettlementApp) {
-        return false;
-      }
+      const isSettlementApp = app.submitter_type === 'settlement' || app.application_type?.startsWith('settlement');
+      let completedProperties = 0;
 
-      // For multi-community settlement applications, ALL properties must be completed
-      // Each property needs: settlement form completed, PDF generated, and email sent
       for (const group of propertyGroups) {
-        // Find settlement form for this property group
-        const settlementForm = app.property_owner_forms?.find(
-          form => form.form_type === 'settlement_form' && form.property_group_id === group.id
-        );
-        
-        const formCompleted = settlementForm?.status === 'completed';
+        let formsCompleted = false;
+        if (isSettlementApp) {
+          const settlementForm = app.property_owner_forms?.find(
+            form => form.form_type === 'settlement_form' && form.property_group_id === group.id
+          );
+          formsCompleted = settlementForm?.status === 'completed';
+        } else {
+          const inspectionStatus = group.inspection_status ?? 'not_started';
+          const resaleStatus = group.status === 'completed';
+          formsCompleted = inspectionStatus === 'completed' && resaleStatus;
+        }
+
         const pdfCompleted = group.pdf_status === 'completed' || !!group.pdf_url;
         const emailCompleted = group.email_status === 'completed' || !!group.email_completed_at;
-        
-        // If any property is not fully completed, the application is not completed
-        if (!formCompleted || !pdfCompleted || !emailCompleted) {
-          return false;
+        if (formsCompleted && pdfCompleted && emailCompleted) {
+          completedProperties++;
         }
       }
-      
-      // All properties are completed
-      return true;
+      return completedProperties === propertyGroups.length;
     };
 
     // Helper function to check if a regular (non-multi-community) application is fully completed
@@ -249,7 +246,7 @@ export default async function handler(req, res) {
         // Rejected applications count as completed (terminal state)
         if (app.status === 'rejected') return true;
         // For multi-community settlement applications, use special completion check
-        if (isMultiCommunitySettlementCompleted(app)) {
+        if (isMultiCommunityCompleted(app)) {
           return true;
         }
         // For regular applications, use strict completion check (matches getWorkflowStep logic)
@@ -260,7 +257,7 @@ export default async function handler(req, res) {
       filteredApplications = filteredApplications.filter(app => {
         if (app.status === 'rejected') return false;
         // For multi-community settlement applications, use special completion check
-        if (isMultiCommunitySettlementCompleted(app)) {
+        if (isMultiCommunityCompleted(app)) {
           return false; // Completed, so not pending
         }
         // For regular applications, use strict completion check
@@ -293,8 +290,10 @@ export default async function handler(req, res) {
       // Urgent = applications that are overdue (at/past deadline) or near deadline (within 48 hours)
       const now = new Date();
       filteredApplications = filteredApplications.filter(app => {
+        // Skip rejected (terminal state)
+        if (app.status === 'rejected') return false;
         // Skip completed applications (use strict completion check)
-        if (isMultiCommunitySettlementCompleted(app)) {
+        if (isMultiCommunityCompleted(app)) {
           return false;
         }
         if (isRegularApplicationCompleted(app)) {
@@ -337,7 +336,8 @@ export default async function handler(req, res) {
       };
       const now = new Date();
       filteredApplications = filteredApplications.filter(app => {
-        if (isMultiCommunitySettlementCompleted(app)) return false;
+        if (app.status === 'rejected') return false;
+        if (isMultiCommunityCompleted(app)) return false;
         if (isRegularApplicationCompleted(app)) return false;
         const submittedDate = new Date(app.submitted_at || app.created_at);
         const deadline = app.package_type === 'rush'

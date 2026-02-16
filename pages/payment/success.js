@@ -105,6 +105,24 @@ export default function PaymentSuccess() {
           </p>
         </div>
 
+        {/* Payment Summary - shown when payment was required */}
+        {(application.total_amount ?? 0) > 0 && (
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-8">
+            <h2 className="text-xl font-semibold text-gray-900 mb-4">Payment Summary</h2>
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+              <div>
+                <p className="text-2xl font-semibold text-gray-900">
+                  ${Number(application.total_amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </p>
+                <p className="text-sm text-gray-500 mt-1">Total paid</p>
+              </div>
+              <p className="text-sm text-gray-600 max-w-md">
+                The convenience fee is non-refundable.
+              </p>
+            </div>
+          </div>
+        )}
+
         {/* Application Details */}
         <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-8">
           <h2 className="text-xl font-semibold text-gray-900 mb-4">Application Details</h2>
