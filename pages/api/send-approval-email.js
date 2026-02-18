@@ -200,15 +200,29 @@ export default async function handler(req, res) {
     }
     
     // Add property documents for this HOA property as download links (excluding Public Offering Statement)
-    if (application.hoa_property_id) {
+    // For multi-community, use the property group's property_id so each property gets its own docs
+    let propertyIdForDocs = application.hoa_property_id;
+    if (propertyGroupId) {
+      const { data: propertyGroupData } = await supabase
+        .from('application_property_groups')
+        .select('property_id')
+        .eq('id', propertyGroupId)
+        .eq('application_id', applicationId)
+        .single();
+      if (propertyGroupData?.property_id) {
+        propertyIdForDocs = propertyGroupData.property_id;
+      }
+    }
+    
+    if (propertyIdForDocs) {
       try {
-        console.log('Creating download links for property documents, HOA property ID:', application.hoa_property_id);
+        console.log('Creating download links for property documents, property ID:', propertyIdForDocs);
         
         // Get property documents from property_documents table (excluding Public Offering Statement)
         const { data: propertyDocuments, error: docsError } = await supabase
           .from('property_documents')
           .select('*')
-          .eq('property_id', application.hoa_property_id)
+          .eq('property_id', propertyIdForDocs)
           .neq('document_key', 'public_offering_statement') // Exclude Public Offering Statement
           .not('file_path', 'is', null); // Only documents with files
 
@@ -256,7 +270,7 @@ export default async function handler(req, res) {
           try {
             const { data: propertyFilesList, error: storageError } = await supabase.storage
               .from('bucket0')
-              .list(`property_files/${application.hoa_property_id}`, {
+              .list(`property_files/${propertyIdForDocs}`, {
                 limit: 100,
                 offset: 0
               });
@@ -278,7 +292,7 @@ export default async function handler(req, res) {
                   // Create 30-day signed URL for each file
                   const { data: urlData, error: urlError } = await supabase.storage
                     .from('bucket0')
-                    .createSignedUrl(`property_files/${application.hoa_property_id}/${file.name}`, EXPIRY_30_DAYS, {
+                    .createSignedUrl(`property_files/${propertyIdForDocs}/${file.name}`, EXPIRY_30_DAYS, {
                       download: file.name.split('_').slice(1).join('_') // Clean filename for download
                     });
 
@@ -330,19 +344,38 @@ export default async function handler(req, res) {
     };
 
     const buyerEmails = parseBuyerEmails(application.buyer_email);
-    
+
+    // For multi-community property-specific emails, show both primary context and which
+    // association's documents this package contains (primary or sub)
+    const primaryPropertyName = application.hoa_properties.name;
+    const displayHoaName = isPropertySpecific && propertyName
+      ? propertyName
+      : application.hoa_properties.name;
+
+    // When property-specific: "123 in [Primary]. This package contains documents specific to [Primary or Sub]"
+    const usePropertySpecificMessage = isPropertySpecific && propertyName;
+
     // Send email to submitter with buyer emails as CC
     try {
       await sendApprovalEmail({
         to: application.submitter_email,
         submitterName: application.submitter_name,
         propertyAddress: application.property_address,
-        hoaName: application.hoa_properties.name,
+        hoaName: displayHoaName,
         pdfUrl: publicUrl,
         applicationId: applicationId,
         downloadLinks: downloadLinks,
         comments: application.comments || null,
-        cc: buyerEmails // Include buyer emails as CC recipients
+        cc: buyerEmails, // Include buyer emails as CC recipients
+        customSubject: usePropertySpecificMessage
+          ? `Your Resale Certificate for ${displayHoaName} is Ready for Download`
+          : null,
+        customTitle: usePropertySpecificMessage
+          ? `Your Resale Certificate for ${displayHoaName} is Ready!`
+          : null,
+        customMessage: usePropertySpecificMessage
+          ? `Your resale certificate and supporting documents for <strong>${application.property_address}</strong> in <strong>${primaryPropertyName}</strong> are now ready for download. This package contains documents specific to <strong>${displayHoaName}</strong>.`
+          : null,
       });
       if (buyerEmails.length > 0) {
         console.log(`Email sent successfully to submitter: ${application.submitter_email} (CC: ${buyerEmails.join(', ')})`);

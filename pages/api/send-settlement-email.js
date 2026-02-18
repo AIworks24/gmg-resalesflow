@@ -200,25 +200,38 @@ export default async function handler(req, res) {
     }
 
     // For Settlement - NC applications, automatically include all property documents (excluding Public Offering Statement)
+    // For multi-community, use the property group's property_id so each property gets its own docs
     if (propertyState === 'NC') {
       try {
-        // Get the application to access hoa_property_id
-        const { data: fullApplication, error: appError } = await supabase
-          .from('applications')
-          .select('hoa_property_id')
-          .eq('id', applicationId)
-          .single();
+        let propertyIdForDocs = null;
+        if (propertyGroupId) {
+          const { data: propertyGroupData } = await supabase
+            .from('application_property_groups')
+            .select('property_id')
+            .eq('id', propertyGroupId)
+            .eq('application_id', applicationId)
+            .single();
+          propertyIdForDocs = propertyGroupData?.property_id;
+        }
+        if (!propertyIdForDocs) {
+          const { data: fullApplication, error: appError } = await supabase
+            .from('applications')
+            .select('hoa_property_id')
+            .eq('id', applicationId)
+            .single();
+          if (!appError && fullApplication?.hoa_property_id) {
+            propertyIdForDocs = fullApplication.hoa_property_id;
+          }
+        }
 
-        if (appError) {
-          console.error('Error fetching application for property documents:', appError);
-        } else if (fullApplication?.hoa_property_id) {
-          console.log('Including property documents for NC settlement, property ID:', fullApplication.hoa_property_id);
+        if (propertyIdForDocs) {
+          console.log('Including property documents for NC settlement, property ID:', propertyIdForDocs);
           
           // Get property documents from property_documents table (excluding Public Offering Statement)
           const { data: propertyDocuments, error: docsError } = await supabase
             .from('property_documents')
             .select('*')
-            .eq('property_id', fullApplication.hoa_property_id)
+            .eq('property_id', propertyIdForDocs)
             .neq('document_key', 'public_offering_statement') // Exclude Public Offering Statement
             .not('file_path', 'is', null); // Only documents with files
 
