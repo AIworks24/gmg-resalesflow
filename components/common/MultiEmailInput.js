@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { X, User, AlertCircle, CheckCircle } from 'lucide-react';
+import { X, User, AlertCircle, CheckCircle, UserCheck } from 'lucide-react';
 import { normalizeEmail } from '../../lib/emailUtils';
 
 /**
@@ -9,6 +9,7 @@ import { normalizeEmail } from '../../lib/emailUtils';
  * Features:
  * - Visual chips/tags for each email
  * - Autocomplete suggestions from admin/staff/accounting users
+ * - Optional: checkbox to select default assignee when multiple emails
  * - Warning if email is not a registered user
  * - Enter, comma, or semicolon to confirm email
  * - Individual email validation
@@ -21,6 +22,9 @@ import { normalizeEmail } from '../../lib/emailUtils';
  * @param {string} className - Additional CSS classes
  * @param {string} placeholder - Placeholder text
  * @param {boolean} enableAutocomplete - Whether to enable user autocomplete/search (default: true)
+ * @param {boolean} showDefaultAssigneeSelector - When true, show checkbox to select default assignee
+ * @param {string} defaultAssigneeEmail - The email currently selected as default assignee
+ * @param {Function} onDefaultAssigneeChange - Callback when default assignee changes: (email: string) => void
  */
 const MultiEmailInput = ({ 
   value = [], 
@@ -28,7 +32,10 @@ const MultiEmailInput = ({
   required = false,
   className = '',
   placeholder = 'Type to search users or enter email addresses',
-  enableAutocomplete = true
+  enableAutocomplete = true,
+  showDefaultAssigneeSelector = false,
+  defaultAssigneeEmail = null,
+  onDefaultAssigneeChange = null
 }) => {
   const [inputValue, setInputValue] = useState('');
   const [error, setError] = useState('');
@@ -300,6 +307,8 @@ const MultiEmailInput = ({
         {emails.map((email, index) => {
           const normalizedEmail = normalizeEmail(email);
           const isRegistered = emailStatus[normalizedEmail];
+          const isDefaultAssignee = showDefaultAssigneeSelector && onDefaultAssigneeChange &&
+            (defaultAssigneeEmail ? normalizeEmail(defaultAssigneeEmail) === normalizedEmail : index === 0);
           return (
             <span
               key={index}
@@ -311,6 +320,19 @@ const MultiEmailInput = ({
                   : 'bg-blue-100 text-blue-800'
               }`}
             >
+              {showDefaultAssigneeSelector && onDefaultAssigneeChange && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDefaultAssigneeChange(email);
+                  }}
+                  className={`rounded p-0.5 transition-colors ${isDefaultAssignee ? 'text-blue-600' : 'text-gray-400 hover:text-blue-500'}`}
+                  title={isDefaultAssignee ? 'Default assignee (click to change)' : 'Set as default assignee'}
+                >
+                  <UserCheck className="w-3.5 h-3.5" />
+                </button>
+              )}
               <span>{email}</span>
               {isRegistered === true && (
                 <CheckCircle className="w-3 h-3" title="Registered user" />
@@ -410,6 +432,9 @@ const MultiEmailInput = ({
       {!error && emails.length > 0 && !emails.some(email => emailStatus[normalizeEmail(email)] === false) && (
         <p className="mt-1 text-xs text-gray-500">
           {emails.length} email{emails.length !== 1 ? 's' : ''} added
+          {showDefaultAssigneeSelector && emails.length > 1 && (
+            <span className="ml-1">• Click the <UserCheck className="w-3 h-3 inline" /> icon to set default assignee (all receive notifications)</span>
+          )}
         </p>
       )}
 

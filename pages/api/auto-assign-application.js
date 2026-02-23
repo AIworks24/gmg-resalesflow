@@ -60,6 +60,7 @@ async function autoAssignApplication(applicationId, supabase) {
           id,
           name,
           property_owner_email,
+          default_assignee_email,
           is_multi_community
         )
       `)
@@ -97,8 +98,12 @@ async function autoAssignApplication(applicationId, supabase) {
       return { success: false, error: 'No valid property owner emails found' };
     }
 
-    // Use the first email for assignment (notifications will go to all)
-    let ownerEmail = ownerEmails[0];
+    // Use default_assignee_email if set and valid, otherwise first email (notifications go to all)
+    const defaultEmail = (property.default_assignee_email || '').trim().toLowerCase();
+    const defaultInList = defaultEmail && ownerEmails.some(e => (e || '').trim().toLowerCase() === defaultEmail);
+    let ownerEmail = defaultInList 
+      ? ownerEmails.find(e => (e || '').trim().toLowerCase() === defaultEmail) || ownerEmails[0]
+      : ownerEmails[0];
     
     // Remove "owner." prefix if present
     ownerEmail = ownerEmail.replace(/^owner\./, '');

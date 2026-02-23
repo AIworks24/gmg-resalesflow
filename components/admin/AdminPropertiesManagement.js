@@ -87,6 +87,8 @@ const AdminPropertiesManagement = () => {
 
   // Snackbar state
   const [snackbar, setSnackbar] = useState({ show: false, message: '', type: 'success' });
+  // Owner name from GMG user (read-only when true)
+  const [ownerNameFromGmg, setOwnerNameFromGmg] = useState(false);
 
   // Snackbar helper function
   const showSnackbar = (message, type = 'success') => {
@@ -101,6 +103,7 @@ const AdminPropertiesManagement = () => {
     location: '',
     property_owner_name: '',
     property_owner_email: [], // Changed to array for multiple emails
+    default_assignee_email: null, // Which email is the default assignee when multiple listed
     property_owner_phone: '',
     management_contact: '',
     phone: '',
@@ -188,7 +191,8 @@ const AdminPropertiesManagement = () => {
       name: '',
       location: '',
       property_owner_name: '',
-      property_owner_email: [], // Changed to array for multiple emails
+      property_owner_email: [],
+      default_assignee_email: null,
       property_owner_phone: '',
       management_contact: '',
       phone: '',
@@ -205,8 +209,42 @@ const AdminPropertiesManagement = () => {
       multi_community_comment: ''
     });
     setLinkedProperties([]);
+    setOwnerNameFromGmg(false);
     setShowModal(true);
   };
+
+  // When default assignee email is a GMG user (staff/admin/accounting), auto-fill owner name and make read-only
+  useEffect(() => {
+    const email = formData.default_assignee_email || (formData.property_owner_email?.[0] || null);
+    if (!email || !showModal) {
+      setOwnerNameFromGmg(false);
+      return;
+    }
+    let cancelled = false;
+    const fetchGmgUser = async () => {
+      try {
+        const res = await fetch(`/api/admin/search-users-by-email?q=${encodeURIComponent(email.trim())}&limit=1`);
+        if (!res.ok || cancelled) return;
+        const data = await res.json();
+        const user = data.users?.[0];
+        if (user && ['admin', 'staff', 'accounting'].includes(user.role) && (user.email || '').toLowerCase() === email.trim().toLowerCase()) {
+          const name = [user.first_name, user.last_name].filter(Boolean).join(' ')?.trim();
+          if (name && !cancelled) {
+            setFormData(prev => ({ ...prev, property_owner_name: name }));
+            setOwnerNameFromGmg(true);
+          } else {
+            setOwnerNameFromGmg(false);
+          }
+        } else {
+          setOwnerNameFromGmg(false);
+        }
+      } catch {
+        if (!cancelled) setOwnerNameFromGmg(false);
+      }
+    };
+    fetchGmgUser();
+    return () => { cancelled = true; };
+  }, [formData.default_assignee_email, formData.property_owner_email?.[0], showModal]);
 
   const openEditModal = async (property) => {
     setModalMode('edit');
@@ -223,11 +261,17 @@ const AdminPropertiesManagement = () => {
     // Multi-community status is automatically managed by linked properties
     const actuallyMultiCommunity = linked.length > 0;
     
+    const parsedEmails = parseEmails(property.property_owner_email);
+    const defaultAssignee = property.default_assignee_email && parsedEmails.some(e => 
+      (e || '').toLowerCase().trim() === (property.default_assignee_email || '').toLowerCase().trim()
+    ) ? property.default_assignee_email : (parsedEmails[0] || null);
+
     setFormData({
       name: property.name || '',
       location: normalizeLocation(property.location),
       property_owner_name: property.property_owner_name || '',
-      property_owner_email: parseEmails(property.property_owner_email), // Parse emails into array
+      property_owner_email: parsedEmails,
+      default_assignee_email: defaultAssignee,
       property_owner_phone: property.property_owner_phone || '',
       management_contact: property.management_contact || '',
       phone: property.phone || '',
@@ -273,6 +317,7 @@ const AdminPropertiesManagement = () => {
             location: formData.location,
             property_owner_name: formData.property_owner_name,
             property_owner_email: emailsForStorage,
+            default_assignee_email: formData.default_assignee_email || null,
             property_owner_phone: formData.property_owner_phone,
             management_contact: formData.management_contact,
             phone: formData.phone,
@@ -307,6 +352,7 @@ const AdminPropertiesManagement = () => {
             location: formData.location,
             property_owner_name: formData.property_owner_name,
             property_owner_email: emailsForStorage,
+            default_assignee_email: formData.default_assignee_email || null,
             property_owner_phone: formData.property_owner_phone,
             management_contact: formData.management_contact,
             phone: formData.phone,
@@ -1511,13 +1557,21 @@ const AdminPropertiesManagement = () => {
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">
                         Owner Name
+                        {ownerNameFromGmg && (
+                          <span className="ml-1 text-xs text-blue-600 font-normal">(from GMG account)</span>
+                        )}
                       </label>
                       <input
                         type="text"
                         required
+                        readOnly={ownerNameFromGmg}
                         value={formData.property_owner_name}
-                        onChange={(e) => setFormData({...formData, property_owner_name: e.target.value})}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        onChange={(e) => !ownerNameFromGmg && setFormData({...formData, property_owner_name: e.target.value})}
+                        className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                          ownerNameFromGmg 
+                            ? 'border-gray-200 bg-gray-50 text-gray-700 cursor-not-allowed' 
+                            : 'border-gray-300'
+                        }`}
                       />
                     </div>
 
@@ -1527,7 +1581,18 @@ const AdminPropertiesManagement = () => {
                       </label>
                       <MultiEmailInput
                         value={formData.property_owner_email}
-                        onChange={(emails) => setFormData({...formData, property_owner_email: emails})}
+                        onChange={(emails) => {
+                          const defaultEmail = formData.default_assignee_email;
+                          const defaultStillValid = defaultEmail && emails.some(e => (e || '').toLowerCase() === (defaultEmail || '').toLowerCase());
+                          setFormData({
+                            ...formData,
+                            property_owner_email: emails,
+                            default_assignee_email: defaultStillValid ? defaultEmail : (emails[0] || null)
+                          });
+                        }}
+                        defaultAssigneeEmail={formData.default_assignee_email}
+                        onDefaultAssigneeChange={(email) => setFormData({...formData, default_assignee_email: email})}
+                        showDefaultAssigneeSelector={true}
                         required
                       />
                     </div>

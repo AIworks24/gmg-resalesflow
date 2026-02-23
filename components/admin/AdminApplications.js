@@ -102,6 +102,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
   const [assignedToMe, setAssignedToMe] = useState(false);
   const [staffMembers, setStaffMembers] = useState([]);
   const [assigningApplication, setAssigningApplication] = useState(null);
+  const [assigningPropertyGroup, setAssigningPropertyGroup] = useState(null);
   const [showInspectionFormModal, setShowInspectionFormModal] = useState(false);
   const [showResaleFormModal, setShowResaleFormModal] = useState(false);
   const [showSettlementFormModal, setShowSettlementFormModal] = useState(false);
@@ -137,6 +138,19 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
     closing_date: '',
   });
   const [savingDetails, setSavingDetails] = useState(false);
+  // Tree view: Set of multi-community app IDs that are collapsed (empty = all expanded by default)
+  const [collapsedMultiCommunityApps, setCollapsedMultiCommunityApps] = useState(() => new Set());
+  // When opening modal from a specific property row, scroll to that property in the modal
+  const [scrollToPropertyGroupId, setScrollToPropertyGroupId] = useState(null);
+
+  const toggleMultiCommunityExpand = (appId) => {
+    setCollapsedMultiCommunityApps((prev) => {
+      const next = new Set(prev);
+      if (next.has(appId)) next.delete(appId);
+      else next.add(appId);
+      return next;
+    });
+  };
 
   // Sync selectedStatus with URL query parameter when it changes (for dashboard navigation)
   useEffect(() => {
@@ -718,6 +732,50 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
   };
 
   // Helper function to extract rejection reason from notes
+  // Check if app is multi-community with property groups (tree view)
+  const isMultiCommunityTreeApp = (app) =>
+    (app.application_type === 'multi_community' || app.application_type?.startsWith('mc_') || app.hoa_properties?.is_multi_community) &&
+    app.application_property_groups &&
+    app.application_property_groups.length > 0;
+
+  // Get property owner display for assignee column (per-property owner in multi-community)
+  const getPropertyOwnerDisplay = (group) => {
+    const name = group.hoa_properties?.property_owner_name;
+    if (name && String(name).trim()) return name.trim();
+    const email = group.property_owner_email || group.hoa_properties?.property_owner_email;
+    if (email) {
+      const local = String(email).split('@')[0] || '';
+      return local ? local.charAt(0).toUpperCase() + local.slice(1).replace(/\./g, ' ') : null;
+    }
+    return null;
+  };
+
+  // Default assignee from property: default_assignee_email from settings, or first in property_owner_email list
+  const getDefaultPropertyAssigneeEmail = (group) => {
+    const hoa = group.hoa_properties;
+    const emails = parseEmails(hoa?.property_owner_email || group.property_owner_email);
+    if (!emails.length) return null;
+    if (hoa?.default_assignee_email && emails.some(e => e.toLowerCase() === hoa.default_assignee_email.toLowerCase())) {
+      return hoa.default_assignee_email;
+    }
+    return emails[0];
+  };
+
+  // Effective assignee display: staff if assigned_to set, else property owner default (reflects property settings)
+  const getEffectiveAssigneeDisplay = (group, staffList) => {
+    if (group.assigned_to) {
+      return getAssigneeDisplayName(group.assigned_to, staffList) ?? group.assigned_to;
+    }
+    const defaultEmail = getDefaultPropertyAssigneeEmail(group);
+    if (!defaultEmail) return null;
+    const staff = staffList?.find(s => s.email?.toLowerCase() === defaultEmail.toLowerCase());
+    if (staff) return `${staff.first_name || ''} ${staff.last_name || ''}`.trim() || defaultEmail;
+    const name = group.hoa_properties?.property_owner_name;
+    if (name && String(name).trim()) return name.trim();
+    const local = String(defaultEmail).split('@')[0] || '';
+    return local ? local.charAt(0).toUpperCase() + local.slice(1).replace(/\./g, ' ') : defaultEmail;
+  };
+
   const getRejectionReason = (application) => {
     if (application.status !== 'rejected' || !application.notes) {
       return null;
@@ -1069,6 +1127,19 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
     propertyGroups.length
   ]);
 
+  // Auto-scroll to specific property when opening modal from multi-community tree View
+  useEffect(() => {
+    if (!selectedApplication || !scrollToPropertyGroupId || !propertyGroups.length) return;
+    const el = document.getElementById(`property-group-${scrollToPropertyGroupId}`);
+    if (el) {
+      const timer = setTimeout(() => {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        setScrollToPropertyGroupId(null);
+      }, 200);
+      return () => clearTimeout(timer);
+    }
+  }, [selectedApplication?.id, scrollToPropertyGroupId, propertyGroups.length]);
+
   // Client-side filtering and pagination using useMemo
   const { applications, totalCount } = useMemo(() => {
     // API response structure: { data: [...], count: X, page: Y, limit: Z }
@@ -1157,7 +1228,12 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
           return app.submitter_type === 'builder';
         }
         
-        // Handle MC Settlement filters
+        // Multi Community = all MC apps (multi_community, settlement_va+mc, settlement_nc+mc)
+        if (selectedApplicationType === 'multi_community') {
+          return appType === 'multi_community' || (appType === 'settlement_va' && isMultiCommunity) || (appType === 'settlement_nc' && isMultiCommunity) || (appType?.startsWith('mc_') && isMultiCommunity);
+        }
+        
+        // Handle MC Settlement filters (narrower than Multi Community)
         if (selectedApplicationType === 'mc_settlement_va') {
           return appType === 'settlement_va' && isMultiCommunity;
         }
@@ -1228,6 +1304,30 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
     // Apply assignee filter
     if (assigneeFilter !== 'all') {
       filtered = filtered.filter(app => {
+        const isMC = (app.application_type === 'multi_community' || app.application_type?.startsWith('mc_') || app.hoa_properties?.is_multi_community) && app.application_property_groups?.length > 0;
+        if (isMC) {
+          const groups = app.application_property_groups || [];
+          if (assigneeFilter === 'unassigned') {
+            return groups.every(g => !g.assigned_to || !String(g.assigned_to).trim());
+          }
+          // Match app-level assignee (e.g. primary) or any property group (primary or secondary)
+          if (app.assigned_to && app.assigned_to.toLowerCase() === assigneeFilter.toLowerCase()) return true;
+          const hasMatchingGroup = groups.some(g => g.assigned_to && g.assigned_to.toLowerCase() === assigneeFilter.toLowerCase());
+          if (hasMatchingGroup) return true;
+          // Also match effective assignee (property owner default) when group.assigned_to is null
+          const hasMatchingEffective = groups.some(g => {
+            if (g.assigned_to) return false;
+            const defaultEmail = (() => {
+              const hoa = g.hoa_properties;
+              const emails = parseEmails(hoa?.property_owner_email || g.property_owner_email);
+              if (!emails.length) return null;
+              if (hoa?.default_assignee_email && emails.some(e => e.toLowerCase() === (hoa.default_assignee_email || '').toLowerCase())) return hoa.default_assignee_email;
+              return emails[0];
+            })();
+            return defaultEmail && defaultEmail.toLowerCase() === assigneeFilter.toLowerCase();
+          });
+          return hasMatchingEffective;
+        }
         if (assigneeFilter === 'unassigned') {
           return !app.assigned_to || app.assigned_to.trim() === '';
         }
@@ -1268,8 +1368,23 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
             }
           }
           
-        // 3. For multi-community properties, also check property groups
+        // 3. For multi-community properties, also check property groups (assigned_to staff and owner default)
         if (app.hoa_properties?.is_multi_community && app.application_property_groups) {
+          const isAssignedToAnyGroup = app.application_property_groups.some(group => {
+            if (group.assigned_to && group.assigned_to.toLowerCase() === userEmail.toLowerCase()) return true;
+            if (!group.assigned_to) {
+              const defaultEmail = (() => {
+                const hoa = group.hoa_properties;
+                const emails = parseEmails(hoa?.property_owner_email || group.property_owner_email);
+                if (!emails.length) return null;
+                if (hoa?.default_assignee_email && emails.some(e => e.toLowerCase() === (hoa.default_assignee_email || '').toLowerCase())) return hoa.default_assignee_email;
+                return emails[0];
+              })();
+              if (defaultEmail && defaultEmail.toLowerCase() === userEmail.toLowerCase()) return true;
+            }
+            return false;
+          });
+          if (isAssignedToAnyGroup) return true;
           // Check all property groups for owner email match
           const isOwnerInAnyGroup = app.application_property_groups.some(group => {
             // Check property_owner_email from the group
@@ -1395,6 +1510,38 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
       showSnackbar('Failed to assign application', 'error');
     } finally {
       setAssigningApplication(null);
+    }
+  };
+
+  const handleAssignPropertyGroup = async (propertyGroupId, assignedTo) => {
+    setAssigningPropertyGroup(propertyGroupId);
+    try {
+      const response = await fetch('/api/assign-property-group', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ propertyGroupId, assignedTo }),
+      });
+
+      if (response.ok) {
+        showSnackbar(assignedTo ? `Property assigned to ${assignedTo}` : 'Property unassigned', 'success');
+        await mutate();
+        if (selectedApplication?.application_property_groups) {
+          setSelectedApplication({
+            ...selectedApplication,
+            application_property_groups: selectedApplication.application_property_groups.map((g) =>
+              g.id === propertyGroupId ? { ...g, assigned_to: assignedTo } : g
+            ),
+          });
+        }
+      } else {
+        const err = await response.json();
+        showSnackbar(err.error || 'Failed to assign property', 'error');
+      }
+    } catch (error) {
+      console.error('Error assigning property group:', error);
+      showSnackbar('Failed to assign property', 'error');
+    } finally {
+      setAssigningPropertyGroup(null);
     }
   };
 
@@ -1726,6 +1873,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
   // Helper function to close modal and clean up URL
   const handleCloseModal = () => {
     setSelectedApplication(null);
+    setScrollToPropertyGroupId(null);
     // Remove applicationId from URL query parameters
     const { applicationId, ...restQuery } = router.query;
     if (applicationId) {
@@ -1736,9 +1884,10 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
     }
   };
 
-  const handleApplicationClick = async (application) => {
+  const handleApplicationClick = async (application, propertyGroupId = null) => {
     try {
       setSelectedApplication(null); // Clear previous selection first
+      setScrollToPropertyGroupId(null);
       setLoadingFormData(true);
       
       // Add a small delay to ensure state is cleared
@@ -1755,6 +1904,8 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
             id,
             property_name,
             property_location,
+            property_owner_email,
+            assigned_to,
             is_primary,
             status,
             pdf_url,
@@ -1763,7 +1914,8 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
             email_status,
             email_completed_at,
             form_data,
-            property_id
+            property_id,
+            hoa_properties(id, name, location, property_owner_email, property_owner_name, default_assignee_email)
           )
         `)
         .eq('id', application.id)
@@ -1799,6 +1951,9 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
       };
 
       setSelectedApplication(processedApp);
+      if (propertyGroupId) {
+        setScrollToPropertyGroupId(propertyGroupId);
+      }
       
     } catch (error) {
       console.error('❌ Failed to load application:', error);
@@ -2029,9 +2184,9 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
           hoa_properties(name, property_owner_email, property_owner_name, is_multi_community),
           property_owner_forms(id, form_type, status, completed_at, form_data, response_data, property_group_id),
           notifications(id, notification_type, status, sent_at),
-          application_property_groups(id, property_id, property_name, property_location, is_primary, status, inspection_status, inspection_completed_at,
+          application_property_groups(id, property_id, property_name, property_location, property_owner_email, assigned_to, is_primary, status, inspection_status, inspection_completed_at,
             pdf_url, pdf_status, pdf_completed_at, email_status, email_completed_at,
-            hoa_properties(id, name, location)
+            hoa_properties(id, name, location, property_owner_email, property_owner_name, default_assignee_email)
           )
         `)
         .eq('id', applicationId)
@@ -3429,6 +3584,26 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
 
         {/* Applications Table (Desktop) */}
         <div className='hidden sm:block bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden'>
+          {applications.some((a) => isMultiCommunityTreeApp(a)) && (
+            <div className='px-4 py-2 bg-gray-50/80 border-b border-gray-100 flex items-center gap-2'>
+              <span className='text-xs text-gray-500 font-medium'>Multi-Community:</span>
+              <button
+                type='button'
+                onClick={() => setCollapsedMultiCommunityApps(new Set())}
+                className='text-xs font-medium text-blue-600 hover:text-blue-700 hover:underline'
+              >
+                Expand all
+              </button>
+              <span className='text-gray-300'>|</span>
+              <button
+                type='button'
+                onClick={() => setCollapsedMultiCommunityApps(new Set(applications.filter((a) => isMultiCommunityTreeApp(a)).map((a) => a.id)))}
+                className='text-xs font-medium text-gray-600 hover:text-gray-700 hover:underline'
+              >
+                Collapse all
+              </button>
+            </div>
+          )}
           <div className='overflow-x-auto'>
             <table className='w-full table-fixed'>
               <thead className='bg-gray-50/80 border-b border-gray-100'>
@@ -3456,157 +3631,210 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
               <tbody className='divide-y divide-gray-50'>
                 {applications.map((app) => {
                   const workflowStep = getWorkflowStep(app);
-                  return (
-                    <tr key={app.id} className='hover:bg-blue-50/30 transition-colors'>
-                      <td className='px-6 py-4'>
-                        <div className='flex items-center gap-3'>
-                          <Building className='w-5 h-5 text-gray-400' />
-                          <div>
-                            <div className='text-sm font-semibold text-gray-900 mb-0.5'>
-                              {formatPropertyAddress(app.property_address, app.unit_number)}
-                            </div>
-                            <div className='text-xs text-gray-500 flex items-center gap-1.5'>
-                              <span className='inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-semibold text-gray-600'>
-                                <Hash className='h-3 w-3 text-gray-400' />
-                                App {app.id}
-                              </span>
-                              <span className='text-gray-300'>•</span>
-                              <span className='font-medium text-gray-700'>{app.submitter_name}</span>
-                              <span className='text-gray-300'>•</span>
-                              <span>{app.hoa_properties?.name || 'Unknown HOA'}</span>
-                            </div>
-                          </div>
-                        </div>
-                      </td>
+                  const isMC = isMultiCommunityTreeApp(app);
+                  const groups = (app.application_property_groups || []).sort((a, b) => (a.is_primary ? -1 : 0) - (b.is_primary ? -1 : 0));
+                  const primaryGroup = groups.find((g) => g.is_primary) || groups[0];
+                  const isExpanded = isMC && !collapsedMultiCommunityApps.has(app.id);
 
-                      <td className='px-6 py-4 text-center'>
-                        <div className='flex justify-center'>
-                          {(() => {
-                            const appType = app.application_type || 'single_property';
-                            const isRush = app.package_type === 'rush';
-                            
-                            let typeLabel = '';
-                            let typeColor = '';
-                            
-                            if (appType === 'settlement_va') {
-                              typeLabel = 'Settlement - VA';
-                              typeColor = 'bg-green-100 text-green-800';
-                            } else if (appType === 'settlement_nc') {
-                              typeLabel = 'Settlement - NC';
-                              typeColor = 'bg-blue-100 text-blue-800';
-                            } else if (appType === 'public_offering') {
-                              typeLabel = 'Public Offering';
-                              typeColor = 'bg-purple-100 text-purple-800';
-                            } else if (appType === 'multi_community') {
-                              typeLabel = 'Multi-Community';
-                              typeColor = 'bg-orange-100 text-orange-800';
-                            } else if (appType === 'lender_questionnaire') {
-                              typeLabel = 'Lender Questionnaire';
-                              typeColor = 'bg-indigo-100 text-indigo-800';
-                            } else {
-                              typeLabel = 'Single Property';
-                              typeColor = 'bg-gray-100 text-gray-800';
-                            }
-                            
-                            return (
-                              <div className='flex items-center gap-2'>
-                                <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${typeColor}`}>
-                                  {typeLabel}
-                                </span>
-                                {isRush && (
-                                  <span className='inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-orange-100 text-orange-800'>
-                                    RUSH
-                                  </span>
-                                )}
-                                {appType === 'settlement_va' && !isRush && (
-                                  <span className='text-xs text-gray-500'>FREE</span>
-                                )}
-                              </div>
-                            );
-                          })()}
-                        </div>
-                      </td>
+                  const renderTypeBadge = (appTypeOverride) => {
+                    const appType = appTypeOverride ?? app.application_type ?? 'single_property';
+                    const isRush = app.package_type === 'rush';
+                    let typeLabel = '';
+                    let typeColor = '';
+                    if (appType === 'settlement_va') { typeLabel = 'Settlement - VA'; typeColor = 'bg-green-100 text-green-800'; }
+                    else if (appType === 'settlement_nc') { typeLabel = 'Settlement - NC'; typeColor = 'bg-blue-100 text-blue-800'; }
+                    else if (appType === 'mc_settlement_va') { typeLabel = 'MC Settlement - VA'; typeColor = 'bg-teal-100 text-teal-800'; }
+                    else if (appType === 'mc_settlement_nc') { typeLabel = 'MC Settlement - NC'; typeColor = 'bg-cyan-100 text-cyan-800'; }
+                    else if (appType === 'public_offering') { typeLabel = 'Public Offering'; typeColor = 'bg-purple-100 text-purple-800'; }
+                    else if (appType === 'multi_community') { typeLabel = 'Multi-Community'; typeColor = 'bg-orange-100 text-orange-800'; }
+                    else if (appType === 'lender_questionnaire') { typeLabel = 'Lender Questionnaire'; typeColor = 'bg-indigo-100 text-indigo-800'; }
+                    else { typeLabel = 'Single Property'; typeColor = 'bg-gray-100 text-gray-800'; }
+                    return (
+                      <div className='flex items-center justify-center gap-2'>
+                        <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${typeColor}`}>{typeLabel}</span>
+                        {isRush && <span className='inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-orange-100 text-orange-800'>RUSH</span>}
+                        {appType === 'settlement_va' && !isRush && <span className='text-xs text-gray-500'>FREE</span>}
+                      </div>
+                    );
+                  };
 
-                      <td className='px-6 py-4 text-center'>
-                        {app.status === 'rejected' ? (
-                          <div className='group relative inline-block'>
-                            <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold shadow-sm ${workflowStep.color} cursor-help transition-all hover:scale-105`}>
-                              {workflowStep.icon}
-                              {workflowStep.text}
+                  const renderDateCell = () => (
+                    app.submitted_at ? (
+                      <div className='space-y-1 text-center'>
+                        <div className='flex items-center justify-center gap-1'>
+                          <Calendar className='w-3 h-3 text-gray-400' />
+                          <span>{formatDate(app.submitted_at)}</span>
+                        </div>
+                        <div className='flex items-center justify-center gap-1 text-xs'>
+                          <Clock className='w-3 h-3 text-gray-400' />
+                          <span className='text-gray-600'>
+                            <span className='font-semibold text-amber-700'>Deadline:</span>{' '}
+                            <span className='font-semibold text-amber-700'>
+                              {formatDate((() => {
+                                const d = new Date(app.submitted_at);
+                                return app.package_type === 'rush'
+                                  ? calculateBusinessDaysDeadline(d, 5)
+                                  : calculateCalendarDaysDeadline(d, 15);
+                              })().toISOString())}
                             </span>
-                            {getRejectionReason(app) && (
-                              <div className='absolute left-1/2 transform -translate-x-1/2 bottom-full mb-3 hidden group-hover:block z-[100] transition-all animate-in fade-in slide-in-from-bottom-1'>
-                                <div className='bg-gray-900/95 backdrop-blur-md text-white text-xs rounded-xl py-3 px-4 shadow-2xl border border-white/10 w-64'>
-                                  <div className='text-red-400 mb-1 font-bold uppercase tracking-tight text-[10px]'>
-                                    Rejection Reason:
-                                  </div>
-                                  <div className='text-gray-200 leading-relaxed font-medium'>{getRejectionReason(app)}</div>
-                                  <div className='absolute left-1/2 transform -translate-x-1/2 top-full w-0 h-0 border-l-[6px] border-r-[6px] border-t-[6px] border-transparent border-t-gray-900/95'></div>
-                                </div>
-                              </div>
-                            )}
-                          </div>
-                        ) : (
-                          <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${workflowStep.color}`}>
-                            Step {workflowStep.step}: {workflowStep.text}
                           </span>
-                        )}
-                      </td>
+                        </div>
+                      </div>
+                    ) : (
+                      <span className='text-gray-400 block text-center'>Not submitted</span>
+                    )
+                  );
 
-                      <td className='px-6 py-4 text-sm text-gray-900'>
-                        {app.submitted_at ? (
-                          <div className='space-y-1 text-center'>
-                            <div className='flex items-center justify-center gap-1'>
-                              <Calendar className='w-3 h-3 text-gray-400' />
-                              <span>
-                                {formatDate(app.submitted_at)}
-                              </span>
-                            </div>
-                            <div className='flex items-center justify-center gap-1 text-xs'>
-                              <Clock className='w-3 h-3 text-gray-400' />
-                              <span className='text-gray-600'>
-                                <span className='font-semibold text-amber-700'>Deadline:</span>{' '}
-                                <span className='font-semibold text-amber-700'>
-                                  {(() => {
-                                    const submittedDate = new Date(app.submitted_at);
-                                    let deadline;
-                                    if (app.package_type === 'rush') {
-                                      deadline = calculateBusinessDaysDeadline(submittedDate, 5);
-                                    } else {
-                                      deadline = calculateCalendarDaysDeadline(submittedDate, 15);
-                                    }
-                                    return formatDate(deadline.toISOString());
-                                  })()}
-                                </span>
-                              </span>
-                            </div>
-                          </div>
-                        ) : (
-                          <span className='text-gray-400 block text-center'>Not submitted</span>
-                        )}
-                      </td>
-
-                      <td className='px-6 py-4 text-sm text-gray-900'>
-                        {app.assigned_to ? (
+                  const renderAssigneeCell = (group) => {
+                    if (group) {
+                      const display = getEffectiveAssigneeDisplay(group, staffMembers);
+                      if (display) {
+                        return (
                           <div className='flex items-center justify-center gap-1'>
                             <User className='w-3 h-3 text-gray-400' />
-                            <span>{getAssigneeDisplayName(app.assigned_to, staffMembers) ?? '—'}</span>
+                            <span className='text-xs' title={group.property_owner_email || group.hoa_properties?.property_owner_email}>{display}</span>
                           </div>
-                        ) : (
-                          <span className='text-gray-400 block text-center'>Unassigned</span>
-                        )}
-                      </td>
+                        );
+                      }
+                      return (
+                        <span className='text-gray-400 block text-center text-xs'>Unassigned</span>
+                      );
+                    }
+                    return app.assigned_to ? (
+                      <div className='flex items-center justify-center gap-1'>
+                        <User className='w-3 h-3 text-gray-400' />
+                        <span>{getAssigneeDisplayName(app.assigned_to, staffMembers) ?? '—'}</span>
+                      </div>
+                    ) : (
+                      <span className='text-gray-400 block text-center'>Unassigned</span>
+                    );
+                  };
 
-                      <td className='px-6 py-4 text-sm font-medium text-right'>
-                        <button
-                          onClick={() => handleApplicationClick(app)}
-                          className='inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 transition-colors'
-                        >
-                          <Eye className='w-4 h-4' />
-                          <span>View</span>
-                        </button>
-                      </td>
-                    </tr>
+                  return (
+                    <React.Fragment key={app.id}>
+                      {/* Parent row (or single-property row) */}
+                      <tr className={`hover:bg-blue-50/30 transition-colors ${isMC ? 'bg-orange-50/30' : ''}`}>
+                        <td className='px-6 py-4'>
+                          <div className='flex items-center gap-3'>
+                            {isMC ? (
+                              <button
+                                type='button'
+                                onClick={() => toggleMultiCommunityExpand(app.id)}
+                                className='flex-shrink-0 p-0.5 rounded hover:bg-gray-200/80 transition-colors'
+                                aria-label={isExpanded ? 'Collapse' : 'Expand'}
+                              >
+                                {isExpanded ? (
+                                  <ChevronDown className='w-4 h-4 text-gray-500' />
+                                ) : (
+                                  <ChevronRight className='w-4 h-4 text-gray-500' />
+                                )}
+                              </button>
+                            ) : (
+                              <span className='w-4 flex-shrink-0' />
+                            )}
+                            <Building className='w-5 h-5 text-gray-400 flex-shrink-0' />
+                            <div className='min-w-0'>
+                              <div className='text-sm font-semibold text-gray-900 mb-0.5'>
+                                {isMC && primaryGroup
+                                  ? (primaryGroup.property_name || formatPropertyAddress(app.property_address, app.unit_number))
+                                  : formatPropertyAddress(app.property_address, app.unit_number)}
+                              </div>
+                              <div className='text-xs text-gray-500 flex items-center gap-1.5 flex-wrap'>
+                                <span className='inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-semibold text-gray-600'>
+                                  <Hash className='h-3 w-3 text-gray-400' />
+                                  App {app.id}
+                                </span>
+                                <span className='text-gray-300'>•</span>
+                                <span className='font-medium text-gray-700'>{app.submitter_name}</span>
+                                <span className='text-gray-300'>•</span>
+                                <span>{app.hoa_properties?.name || 'Unknown HOA'}</span>
+                                {isMC && groups.length > 1 && !isExpanded && (
+                                  <>
+                                    <span className='text-gray-300'>•</span>
+                                    <span className='text-orange-600 font-medium'>+{groups.length - 1} more</span>
+                                  </>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        </td>
+                        <td className='px-6 py-4 text-center'>{renderTypeBadge()}</td>
+                        <td className='px-6 py-4 text-center'>
+                          {app.status === 'rejected' ? (
+                            <div className='group relative inline-block'>
+                              <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold shadow-sm ${workflowStep.color} cursor-help transition-all hover:scale-105`}>
+                                {workflowStep.icon}
+                                {workflowStep.text}
+                              </span>
+                              {getRejectionReason(app) && (
+                                <div className='absolute left-1/2 transform -translate-x-1/2 bottom-full mb-3 hidden group-hover:block z-[100] transition-all animate-in fade-in slide-in-from-bottom-1'>
+                                  <div className='bg-gray-900/95 backdrop-blur-md text-white text-xs rounded-xl py-3 px-4 shadow-2xl border border-white/10 w-64'>
+                                    <div className='text-red-400 mb-1 font-bold uppercase tracking-tight text-[10px]'>Rejection Reason:</div>
+                                    <div className='text-gray-200 leading-relaxed font-medium'>{getRejectionReason(app)}</div>
+                                    <div className='absolute left-1/2 transform -translate-x-1/2 top-full w-0 h-0 border-l-[6px] border-r-[6px] border-t-[6px] border-transparent border-t-gray-900/95' />
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          ) : (
+                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${workflowStep.color}`}>
+                              Step {workflowStep.step}: {workflowStep.text}
+                            </span>
+                          )}
+                        </td>
+                        <td className='px-6 py-4 text-sm text-gray-900'>{renderDateCell()}</td>
+                        <td className='px-6 py-4 text-sm text-gray-900'>
+                          {isMC && primaryGroup ? renderAssigneeCell(primaryGroup) : renderAssigneeCell(null)}
+                        </td>
+                        <td className='px-6 py-4 text-sm font-medium text-right'>
+                          <button
+                            onClick={() => handleApplicationClick(app, isMC && primaryGroup ? primaryGroup.id : null)}
+                            className='inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 transition-colors'
+                          >
+                            <Eye className='w-4 h-4' />
+                            <span>View</span>
+                          </button>
+                        </td>
+                      </tr>
+                      {/* Child rows (secondary properties) - tree view */}
+                      {isMC && isExpanded && groups.length > 1 && groups.slice(1).map((group) => (
+                        <tr key={`${app.id}-group-${group.id}`} className='hover:bg-blue-50/20 transition-colors bg-gray-50/50'>
+                          <td className='px-6 py-3'>
+                            <div className='flex items-center gap-3 pl-10'>
+                              <Building className='w-4 h-4 text-gray-400 flex-shrink-0' />
+                              <div className='min-w-0'>
+                                <div className='text-sm font-medium text-gray-800'>
+                                  {group.property_name || group.hoa_properties?.name || '—'}
+                                  {group.property_location && (
+                                    <span className='text-gray-500 font-normal'> ({group.property_location})</span>
+                                  )}
+                                </div>
+                                <span className='text-[11px] text-gray-500 font-medium'>Secondary Property</span>
+                              </div>
+                            </div>
+                          </td>
+                          <td className='px-6 py-3 text-center'>
+                            <span className='text-xs text-gray-400'>—</span>
+                          </td>
+                          <td className='px-6 py-3 text-center'>
+                            <span className='text-xs text-gray-500'>—</span>
+                          </td>
+                          <td className='px-6 py-3 text-sm text-gray-500 text-center'>—</td>
+                          <td className='px-6 py-3 text-sm text-gray-900'>
+                            {renderAssigneeCell(group)}
+                          </td>
+                          <td className='px-6 py-3 text-sm font-medium text-right'>
+                            <button
+                              onClick={() => handleApplicationClick(app, group.id)}
+                              className='inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-gray-600 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors'
+                            >
+                              <Eye className='w-3.5 h-3.5' />
+                              View
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </React.Fragment>
                   );
                 })}
               </tbody>
@@ -3645,23 +3873,71 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
           ) : (
             applications.map((app) => {
               const workflowStep = getWorkflowStep(app);
+              const isMC = isMultiCommunityTreeApp(app);
+              const groups = (app.application_property_groups || []).sort((a, b) => (a.is_primary ? -1 : 0) - (b.is_primary ? -1 : 0));
+              const primaryGroup = groups.find((g) => g.is_primary) || groups[0];
+              const isExpanded = isMC && !collapsedMultiCommunityApps.has(app.id);
+
+              const renderAssigneeMobile = (group) => {
+                if (group) {
+                  const display = getEffectiveAssigneeDisplay(group, staffMembers);
+                  return display ? <span className='text-sm font-medium text-gray-900'>{display}</span> : <span className='text-gray-400'>Unassigned</span>;
+                }
+                return app.assigned_to ? (getAssigneeDisplayName(app.assigned_to, staffMembers) ?? '—') : <span className='text-gray-400'>Unassigned</span>;
+              };
+
+              const appType = app.application_type || 'single_property';
+              const isRush = app.package_type === 'rush';
+              let typeLabel = 'Single Property';
+              let typeColor = 'bg-gray-100 text-gray-800';
+              if (appType === 'settlement_va') { typeLabel = 'Settlement - VA'; typeColor = 'bg-green-100 text-green-800'; }
+              else if (appType === 'settlement_nc') { typeLabel = 'Settlement - NC'; typeColor = 'bg-blue-100 text-blue-800'; }
+              else if (appType === 'mc_settlement_va') { typeLabel = 'MC Settlement - VA'; typeColor = 'bg-teal-100 text-teal-800'; }
+              else if (appType === 'mc_settlement_nc') { typeLabel = 'MC Settlement - NC'; typeColor = 'bg-cyan-100 text-cyan-800'; }
+              else if (appType === 'public_offering') { typeLabel = 'Public Offering'; typeColor = 'bg-purple-100 text-purple-800'; }
+              else if (appType === 'multi_community') { typeLabel = 'Multi-Community'; typeColor = 'bg-orange-100 text-orange-800'; }
+              else if (appType === 'lender_questionnaire') { typeLabel = 'Lender Questionnaire'; typeColor = 'bg-indigo-100 text-indigo-800'; }
+
               return (
-                <div key={app.id} className='bg-white rounded-xl shadow-sm border border-gray-200 p-4 space-y-4'>
+                <div key={app.id} className={`rounded-xl shadow-sm border p-4 space-y-4 ${isMC ? 'bg-orange-50/30 border-orange-200' : 'bg-white border-gray-200'}`}>
                   {/* Header: Address and Status */}
-                  <div className='flex justify-between items-start'>
-                    <div>
-                      <h3 className='text-base font-semibold text-gray-900'>{formatPropertyAddress(app.property_address, app.unit_number)}</h3>
-                      <div className='text-sm text-gray-500 mt-0.5 flex flex-col'>
-                        <span className='font-medium'>{app.submitter_name}</span>
-                        <span className='text-xs opacity-75'>{app.hoa_properties?.name || 'Unknown HOA'}</span>
-                      </div>
-                      <div className='mt-2 inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-semibold text-gray-600'>
-                        <Hash className='h-3 w-3 text-gray-400' />
-                        App {app.id}
+                  <div className='flex justify-between items-start gap-3'>
+                    <div className='min-w-0 flex-1'>
+                      <div className='flex items-start gap-2'>
+                        {isMC && (
+                          <button
+                            type='button'
+                            onClick={() => toggleMultiCommunityExpand(app.id)}
+                            className='flex-shrink-0 p-1 rounded hover:bg-gray-200/80 mt-0.5'
+                            aria-label={isExpanded ? 'Collapse' : 'Expand'}
+                          >
+                            {isExpanded ? <ChevronDown className='w-4 h-4 text-gray-500' /> : <ChevronRight className='w-4 h-4 text-gray-500' />}
+                          </button>
+                        )}
+                        <div className='min-w-0 flex-1'>
+                        <h3 className='text-base font-semibold text-gray-900'>
+                          {isMC && primaryGroup
+                            ? (primaryGroup.property_name || formatPropertyAddress(app.property_address, app.unit_number))
+                            : formatPropertyAddress(app.property_address, app.unit_number)}
+                        </h3>
+                        <div className='text-sm text-gray-500 mt-0.5 flex flex-col'>
+                          <span className='font-medium'>{app.submitter_name}</span>
+                          <span className='text-xs opacity-75'>{app.hoa_properties?.name || 'Unknown HOA'}</span>
+                        </div>
+                        <div className='mt-2 inline-flex items-center gap-2 flex-wrap'>
+                          <span className='inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-semibold text-gray-600'>
+                            <Hash className='h-3 w-3 text-gray-400' />
+                            App {app.id}
+                          </span>
+                          {isMC && groups.length > 1 && !isExpanded && (
+                            <span className='text-orange-600 font-medium text-xs'>+{groups.length - 1} more</span>
+                          )}
+                        </div>
+                        </div>
                       </div>
                     </div>
                     {app.status === 'rejected' ? (
-                      <div className='group relative inline-block'>
+                      <div className='group relative inline-block flex-shrink-0'>
                         <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${workflowStep.color} cursor-help`}>
                           {workflowStep.text}
                         </span>
@@ -3670,60 +3946,22 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                             <div className='bg-gray-900 text-white text-xs rounded-lg py-2 px-3 shadow-lg max-w-xs'>
                               <div className='font-semibold mb-1'>Rejection Reason:</div>
                               <div className='whitespace-normal'>{getRejectionReason(app)}</div>
-                              <div className='absolute left-1/2 transform -translate-x-1/2 top-full w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-t-gray-900'></div>
+                              <div className='absolute left-1/2 transform -translate-x-1/2 top-full w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-t-gray-900' />
                             </div>
                           </div>
                         )}
                       </div>
                     ) : (
-                      <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${workflowStep.color}`}>
+                      <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${workflowStep.color} flex-shrink-0`}>
                         Step {workflowStep.step}
                       </span>
                     )}
                   </div>
 
                   {/* Type Badge */}
-                  <div>
-                    {(() => {
-                      const appType = app.application_type || 'single_property';
-                      const isRush = app.package_type === 'rush';
-                      
-                      let typeLabel = '';
-                      let typeColor = '';
-                      
-                      if (appType === 'settlement_va') {
-                        typeLabel = 'Settlement - VA';
-                        typeColor = 'bg-green-100 text-green-800';
-                      } else if (appType === 'settlement_nc') {
-                        typeLabel = 'Settlement - NC';
-                        typeColor = 'bg-blue-100 text-blue-800';
-                      } else if (appType === 'public_offering') {
-                        typeLabel = 'Public Offering';
-                        typeColor = 'bg-purple-100 text-purple-800';
-                      } else if (appType === 'multi_community') {
-                        typeLabel = 'Multi-Community';
-                        typeColor = 'bg-orange-100 text-orange-800';
-                      } else if (appType === 'lender_questionnaire') {
-                        typeLabel = 'Lender Questionnaire';
-                        typeColor = 'bg-indigo-100 text-indigo-800';
-                      } else {
-                        typeLabel = 'Single Property';
-                        typeColor = 'bg-gray-100 text-gray-800';
-                      }
-                      
-                      return (
-                        <div className='flex items-center gap-2'>
-                          <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${typeColor}`}>
-                            {typeLabel}
-                          </span>
-                          {isRush && (
-                            <span className='inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-orange-100 text-orange-800'>
-                              RUSH
-                            </span>
-                          )}
-                        </div>
-                      );
-                    })()}
+                  <div className='flex items-center gap-2'>
+                    <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${typeColor}`}>{typeLabel}</span>
+                    {isRush && <span className='inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-orange-100 text-orange-800'>RUSH</span>}
                   </div>
 
                   {/* Details Grid */}
@@ -3756,14 +3994,41 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                     <div>
                       <div className='text-xs text-gray-500 uppercase tracking-wider font-semibold mb-1'>Assignee</div>
                       <div className='text-sm font-medium text-gray-900'>
-                        {app.assigned_to ? (getAssigneeDisplayName(app.assigned_to, staffMembers) ?? '—') : <span className='text-gray-400'>Unassigned</span>}
+                        {renderAssigneeMobile(isMC && primaryGroup ? primaryGroup : null)}
                       </div>
                     </div>
                   </div>
 
+                  {/* Multi-Community: Secondary Properties (tree view) */}
+                  {isMC && isExpanded && groups.length > 1 && (
+                    <div className='border-t border-gray-200 pt-3 mt-3 space-y-2'>
+                      <div className='text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2'>Secondary Properties</div>
+                      {groups.slice(1).map((group) => (
+                        <div key={group.id} className='flex items-center justify-between gap-2 pl-4 py-2 rounded-lg bg-gray-50 border border-gray-100'>
+                          <div>
+                            <div className='text-sm font-medium text-gray-800'>{group.property_name || group.hoa_properties?.name || '—'}</div>
+                            {group.property_location && <div className='text-xs text-gray-500'>{group.property_location}</div>}
+                          </div>
+                          <div className='flex items-center gap-3'>
+                            <div className='text-right'>
+                              <div className='text-xs text-gray-500 uppercase font-semibold mb-0.5'>Owner</div>
+                              <div className='text-sm font-medium text-gray-900'>{renderAssigneeMobile(group)}</div>
+                            </div>
+                            <button
+                              onClick={() => handleApplicationClick(app, group.id)}
+                              className='flex-shrink-0 px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 rounded transition-colors'
+                            >
+                              View
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
                   {/* Action Button */}
                   <button
-                    onClick={() => handleApplicationClick(app)}
+                    onClick={() => handleApplicationClick(app, isMC && primaryGroup ? primaryGroup.id : null)}
                     className='w-full flex items-center justify-center gap-2 py-2.5 px-4 bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 transition-colors font-medium text-sm'
                   >
                     <Eye className='w-4 h-4' />
@@ -4236,8 +4501,8 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                   </div>
                 </div>
                 
-                {/* Assignment Section */}
-                {selectedApplication.status !== 'rejected' && (
+                {/* Assignment Section - hidden for multi-community (assignee is per property) */}
+                {selectedApplication.status !== 'rejected' && !isMultiCommunityTreeApp(selectedApplication) && (
                   <div className='bg-white rounded-xl border border-gray-200 p-5 shadow-sm'>
                     <h3 className='text-sm font-semibold text-gray-900 mb-4 flex items-center gap-2 uppercase tracking-wider'>
                         <User className='w-4 h-4 text-gray-400' />
@@ -4650,7 +4915,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                                 if (!a.is_primary && b.is_primary) return 1;
                                 return (a.property_name || '').localeCompare(b.property_name || '');
                             }).map((group) => (
-                              <div key={group.id} className='bg-white rounded-xl border border-gray-200 overflow-hidden shadow-sm'>
+                              <div key={group.id} id={`property-group-${group.id}`} className='bg-white rounded-xl border border-gray-200 overflow-hidden shadow-sm scroll-mt-4'>
                                 {/* Group Header */}
                                 <div className='px-5 py-4 bg-gray-50 border-b border-gray-200 flex flex-col sm:flex-row sm:items-center justify-between gap-4'>
                                   <div className='flex items-center gap-3'>
@@ -4664,9 +4929,35 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                                     </div>
                                   </div>
                                   <div className='flex items-center gap-3'>
-                                    {group.property_owner_email && (
-                                       <span className='text-xs text-gray-500 bg-white px-2 py-1 border border-gray-200 rounded'>Mgr: {group.property_owner_email}</span>
-                                    )}
+                                    <div className='flex items-center gap-2'>
+                                      <label className='text-xs font-medium text-gray-500'>Assigned to</label>
+                                      <div className='relative'>
+                                        <select
+                                          value={group.assigned_to || (getDefaultPropertyAssigneeEmail(group) ? '__property_owner__' : '')}
+                                          onChange={(e) => {
+                                            const v = e.target.value;
+                                            handleAssignPropertyGroup(group.id, v === '__property_owner__' ? null : (v || null));
+                                          }}
+                                          disabled={assigningPropertyGroup === group.id}
+                                          className='min-w-[12rem] pl-3 pr-8 py-1.5 text-xs bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 appearance-none'
+                                        >
+                                          {getDefaultPropertyAssigneeEmail(group) ? (
+                                            <option value="__property_owner__">{getEffectiveAssigneeDisplay(group, staffMembers) || 'Property owner'}</option>
+                                          ) : (
+                                            <option value="">Unassigned</option>
+                                          )}
+                                          {staffMembers.map((staff) => (
+                                            <option key={staff.email} value={staff.email}>
+                                              {staff.first_name} {staff.last_name} ({staff.role})
+                                            </option>
+                                          ))}
+                                        </select>
+                                        <ChevronDown className='w-4 h-4 text-gray-400 absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none' />
+                                      </div>
+                                      {assigningPropertyGroup === group.id && (
+                                        <RefreshCw className='w-4 h-4 text-blue-600 animate-spin flex-shrink-0' />
+                                      )}
+                                    </div>
                                     {/* Status Badge Logic */}
                                     {(() => {
                                       const isSettlementApp = selectedApplication.submitter_type === 'settlement' || selectedApplication.application_type?.startsWith('settlement');

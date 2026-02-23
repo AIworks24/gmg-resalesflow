@@ -120,7 +120,7 @@ export async function createNotifications(applicationId, supabaseClient) {
       };
     }
 
-    // Get full application data
+    // Get full application data and property groups for multi-community
     const { data: application, error: appError } = await supabaseClient
       .from('applications')
       .select(`
@@ -140,9 +140,20 @@ export async function createNotifications(applicationId, supabaseClient) {
       return { success: false, error: 'Application not found' };
     }
 
+    // Fetch application_property_groups for multi-community (all property owners)
+    const { data: propertyGroups } = await supabaseClient
+      .from('application_property_groups')
+      .select('id, property_name, property_location, property_owner_email, is_primary, property_id, hoa_properties(property_owner_email, property_owner_name, location)')
+      .eq('application_id', applicationId);
+
+    const isMultiCommunityApp = application.hoa_properties?.is_multi_community ||
+      application.application_type === 'multi_community' ||
+      (application.application_type?.startsWith && application.application_type.startsWith('mc_'));
+
     console.log(`[Notifications] Creating notifications for application ${applicationId}`);
     console.log(`[Notifications] Property owner email:`, application.hoa_properties?.property_owner_email);
     console.log(`[Notifications] Application status:`, application.status);
+    console.log(`[Notifications] Is multi-community: ${isMultiCommunityApp}, property groups: ${propertyGroups?.length || 0}`);
 
     // Skip if draft
     if (application.status === 'draft') {
@@ -157,104 +168,117 @@ export async function createNotifications(applicationId, supabaseClient) {
     }
 
     const notifications = [];
+    const appTypeDisplay = formatApplicationType(application.application_type);
+    const packageDisplay = application.package_type === 'rush' ? 'Rush' : 'Standard';
 
-    // 1. Notify Property Owner(s) - support multiple emails
-    // NOTE: Property owners ARE staff/admin users, so they use admin accounts
-    if (application.hoa_properties?.property_owner_email) {
-      const originalPropertyOwnerEmails = application.hoa_properties.property_owner_email;
-      
-      // Parse emails (handles both single email string and comma-separated string)
-      const propertyOwnerEmails = parseEmails(originalPropertyOwnerEmails);
-      
-      if (propertyOwnerEmails.length === 0) {
-        console.log(`[Notifications] No valid property owner emails found for application ${applicationId}`);
-      } else {
-        console.log(`[Notifications] Processing ${propertyOwnerEmails.length} property owner email(s) for application ${applicationId}`);
-        
-        // Process each email
-        for (const originalEmail of propertyOwnerEmails) {
-          let propertyOwnerEmail = originalEmail;
-          
-          // Check if email starts with 'owner.' - these are staff/admin accounts, skip email sending
-          const hasOwnerPrefix = propertyOwnerEmail.startsWith('owner.');
-          
-          // Remove "owner." prefix for processing (but remember it for email skipping)
-          propertyOwnerEmail = propertyOwnerEmail.replace(/^owner\./, '');
-          
-          // Skip fake/placeholder emails - don't create notifications for them
-          if (isFakeEmail(propertyOwnerEmail)) {
-            console.log(`[Notifications] Skipping fake/placeholder email for property owner: ${propertyOwnerEmail}`);
-            continue;
-          }
-          
-          // Find user ID by email - try exact match first
-          let { data: ownerProfile } = await supabaseClient
-            .from('profiles')
-            .select('id, email, role')
-            .eq('email', propertyOwnerEmail)
-            .single();
+    // Collect all property owner emails (for MC: from all groups; for single: primary only)
+    // Map: normalizedEmail -> { originalEmail, hasOwnerPrefix, propertyNames[], ownerName }
+    const ownerEmailMap = new Map();
 
-          // If not found, try case-insensitive search
-          if (!ownerProfile) {
-            const { data: profiles } = await supabaseClient
-              .from('profiles')
-              .select('id, email, role')
-              .ilike('email', propertyOwnerEmail);
-            
-            if (profiles && profiles.length > 0) {
-              ownerProfile = profiles[0];
-            }
-          }
-
-          // If we found a profile, use the profile's current email instead of the stored property email
-          // This ensures we use the user's current email, not an old one stored in the property
-          if (ownerProfile && ownerProfile.email) {
-            console.log(`[Notifications] Found profile for property owner. Using current email: ${ownerProfile.email} instead of stored: ${propertyOwnerEmail}`);
-            propertyOwnerEmail = ownerProfile.email;
-          }
-
-          // Normalize email to lowercase for consistent storage and delivery
-          // Email addresses are case-insensitive per RFC, but normalizing prevents delivery issues
-          const normalizedPropertyOwnerEmail = normalizeEmail(propertyOwnerEmail);
-          console.log(`[Notifications] Normalized property owner email: ${propertyOwnerEmail} -> ${normalizedPropertyOwnerEmail}`);
-
-          // Format application type for display
-          const appTypeDisplay = formatApplicationType(application.application_type);
-          const packageDisplay = application.package_type === 'rush' ? 'Rush' : 'Standard';
-          
-          // Set explicit timestamps to ensure accurate "time ago" display
-          const now = new Date().toISOString();
-          
-          const notification = {
-            application_id: applicationId,
-            recipient_email: normalizedPropertyOwnerEmail, // Normalized to lowercase for consistent delivery
-            recipient_name: application.hoa_properties.property_owner_name || 'Property Owner',
-            recipient_user_id: ownerProfile?.id || null,
-            notification_type: 'new_application',
-            subject: `${appTypeDisplay} Application - ${application.property_address} | ${application.hoa_properties?.name || 'Unknown Property'}`,
-            message: `New ${appTypeDisplay.toLowerCase()} application received for ${application.property_address} in ${application.hoa_properties?.name || 'Unknown Property'}. Package: ${packageDisplay}. Submitter: ${application.submitter_name || 'Unknown'}.`,
-            status: 'unread',
-            is_read: false,
-            sent_at: now, // Explicitly set sent_at to current time
-            created_at: now, // Explicitly set created_at to current time
-            metadata: {
-              property_address: application.property_address,
-              hoa_name: application.hoa_properties?.name,
-              submitter_name: application.submitter_name,
-              submitter_type: application.submitter_type,
-              application_type: application.application_type,
-              package_type: application.package_type,
-              skip_email: hasOwnerPrefix, // Flag to skip email if original had 'owner.' prefix
-              original_email: originalEmail, // Store original for reference
-            },
-          };
-
-          notifications.push(notification);
-          console.log(`[Notifications] Added notification for property owner: ${normalizedPropertyOwnerEmail} (original: ${originalEmail}, hasOwnerPrefix: ${hasOwnerPrefix})`);
+    const addOwnersFromSource = (emailsStr, propertyName, ownerName) => {
+      if (!emailsStr) return;
+      const emails = parseEmails(emailsStr);
+      for (const originalEmail of emails) {
+        const hasOwnerPrefix = originalEmail.startsWith('owner.');
+        const cleanEmail = originalEmail.replace(/^owner\./, '');
+        if (isFakeEmail(cleanEmail)) continue;
+        const key = normalizeEmail(cleanEmail);
+        if (!ownerEmailMap.has(key)) {
+          ownerEmailMap.set(key, { originalEmail, hasOwnerPrefix, propertyNames: [], ownerName });
+        }
+        const entry = ownerEmailMap.get(key);
+        if (propertyName && !entry.propertyNames.includes(propertyName)) {
+          entry.propertyNames.push(propertyName);
         }
       }
+    };
+
+    if (isMultiCommunityApp && propertyGroups && propertyGroups.length > 0) {
+      // Multi-community: notify ALL property owners (primary + each secondary)
+      for (const group of propertyGroups) {
+        const propName = group.property_name || group.hoa_properties?.name || application.hoa_properties?.name || 'Unknown Property';
+        const ownerEmail = group.property_owner_email || group.hoa_properties?.property_owner_email;
+        const ownerName = group.hoa_properties?.property_owner_name || application.hoa_properties?.property_owner_name;
+        addOwnersFromSource(ownerEmail, propName, ownerName);
+      }
+      // Also add primary from hoa_properties if not already in groups (legacy)
+      if (!propertyGroups.some(g => g.is_primary)) {
+        addOwnersFromSource(
+          application.hoa_properties?.property_owner_email,
+          application.hoa_properties?.name,
+          application.hoa_properties?.property_owner_name
+        );
+      }
+      console.log(`[Notifications] Multi-community: collected ${ownerEmailMap.size} unique property owner(s) across ${propertyGroups.length} property group(s)`);
     } else {
-      console.log(`[Notifications] No property owner email found for application ${applicationId}`);
+      // Single property: primary only
+      addOwnersFromSource(
+        application.hoa_properties?.property_owner_email,
+        application.hoa_properties?.name,
+        application.hoa_properties?.property_owner_name
+      );
+      console.log(`[Notifications] Single property: collected ${ownerEmailMap.size} property owner(s)`);
+    }
+
+    // Create one notification per unique property owner
+    for (const [normalizedEmail, { originalEmail, hasOwnerPrefix, propertyNames, ownerName }] of ownerEmailMap) {
+      let propertyOwnerEmail = normalizedEmail;
+
+      // Find user ID by email
+      let { data: ownerProfile } = await supabaseClient
+        .from('profiles')
+        .select('id, email, role')
+        .eq('email', propertyOwnerEmail)
+        .single();
+      if (!ownerProfile) {
+        const { data: profiles } = await supabaseClient
+          .from('profiles')
+          .select('id, email, role')
+          .ilike('email', propertyOwnerEmail);
+        if (profiles?.length > 0) ownerProfile = profiles[0];
+      }
+      if (ownerProfile?.email) {
+        propertyOwnerEmail = ownerProfile.email;
+      }
+
+      const now = new Date().toISOString();
+      const primaryPropName = application.hoa_properties?.name || 'Unknown Property';
+      const displayPropertyName = propertyNames?.length > 0 ? propertyNames[0] : primaryPropName;
+      const subject = `${appTypeDisplay} Application - ${application.property_address} | ${displayPropertyName}`;
+      const mcNote = isMultiCommunityApp ? ' Your property is part of a Multi-Community Application.' : '';
+      const message = `New ${appTypeDisplay.toLowerCase()} application received for ${application.property_address} in ${displayPropertyName}. Package: ${packageDisplay}. Submitter: ${application.submitter_name || 'Unknown'}.${mcNote}`;
+
+      const notification = {
+        application_id: applicationId,
+        recipient_email: normalizeEmail(propertyOwnerEmail),
+        recipient_name: ownerName || 'Property Owner',
+        recipient_user_id: ownerProfile?.id || null,
+        notification_type: 'new_application',
+        subject,
+        message,
+        status: 'unread',
+        is_read: false,
+        sent_at: now,
+        created_at: now,
+        metadata: {
+          property_address: application.property_address,
+          hoa_name: primaryPropName,
+          submitter_name: application.submitter_name,
+          submitter_type: application.submitter_type,
+          application_type: application.application_type,
+          package_type: application.package_type,
+          skip_email: hasOwnerPrefix,
+          original_email: originalEmail,
+          is_multi_community_recipient: isMultiCommunityApp,
+          recipient_property_names: propertyNames,
+        },
+      };
+      notifications.push(notification);
+      console.log(`[Notifications] Added notification for property owner: ${normalizedEmail} (properties: ${propertyNames?.join(', ') || 'primary'})`);
+    }
+
+    if (ownerEmailMap.size === 0) {
+      console.log(`[Notifications] No property owner emails found for application ${applicationId}`);
     }
 
     // 2. For Settlement/Closing Attorney requests, notify ALL Accounting role users
@@ -370,31 +394,25 @@ export async function createNotifications(applicationId, supabaseClient) {
 
       // Send email notifications to all recipients
       const emailPromises = [];
-      const isMultiCommunity = application.application_type === 'multi_community';
+      const isMultiCommunity = isMultiCommunityApp; // Same as notification creation: MC type or MC property
       const isRush = application.package_type === 'rush';
       
-      // Get linked properties if multi-community
-      // Note: Check for property groups regardless of applicationType because
-      // settlement agents can have settlement_va/settlement_nc type even for multi-community properties
+      // Get linked properties for email content (all groups for MC)
       let linkedProperties = [];
-      // Check if property is multi-community or if there are property groups
       const isPropertyMultiCommunity = application.hoa_properties?.is_multi_community || false;
       if (isPropertyMultiCommunity || isMultiCommunity) {
-        const { data: linkedProps } = await supabaseClient
-          .from('application_property_groups')
-          .select(`
-            property_name,
-            property_location,
-            property_id
-          `)
-          .eq('application_id', applicationId)
-          .eq('is_primary', false); // Only get non-primary properties
-        linkedProperties = (linkedProps || []).map(prop => ({
-          property_name: prop.property_name,
-          location: prop.property_location, // Map property_location to location for consistency
-          property_id: prop.property_id
-        }));
+        const groupsForEmail = propertyGroups || [];
+        linkedProperties = groupsForEmail
+          .filter(g => !g.is_primary)
+          .map(prop => ({
+            property_name: prop.property_name,
+            location: prop.property_location || prop.hoa_properties?.location || '',
+            property_id: prop.property_id
+          }));
       }
+
+      // Build set of all property owner emails (primary + MC groups) for email-send check
+      const allPropertyOwnerEmails = new Set(ownerEmailMap ? [...ownerEmailMap.keys()] : parseEmails(application.hoa_properties?.property_owner_email || '').map(e => normalizeEmail(e.replace(/^owner\./, ''))));
 
       // Send emails to all notification recipients (with error handling)
       try {
@@ -424,14 +442,9 @@ export async function createNotifications(applicationId, supabaseClient) {
             }
             
             // Determine if this is a property owner or staff/admin
-            // Compare emails (handle owner. prefix and case sensitivity)
-            // Support multiple property owner emails
-            const propertyOwnerEmails = parseEmails(application.hoa_properties?.property_owner_email || '');
+            // For MC: allPropertyOwnerEmails includes primary + all group owners
             const notificationEmail = normalizeEmail(notification.recipient_email?.replace(/^owner\./, '') || '');
-            const isPropertyOwner = propertyOwnerEmails.some(email => {
-              const cleanEmail = normalizeEmail(email.replace(/^owner\./, ''));
-              return cleanEmail === notificationEmail;
-            });
+            const isPropertyOwner = allPropertyOwnerEmails.has(notificationEmail);
             
             console.log(`[EMAIL_TRACE] App ${applicationId}: Email check - ${notificationEmail}, isPropertyOwner: ${isPropertyOwner}, hoa_properties exists: ${!!application.hoa_properties}`);
             
@@ -446,8 +459,13 @@ export async function createNotifications(applicationId, supabaseClient) {
               // Normalize email before sending to ensure consistent delivery
               const emailToSend = normalizeEmail(notification.recipient_email);
               const emailType = isAccountingNotification ? 'accounting' : 'property_owner';
+              const isMCRecipient = notification.metadata?.is_multi_community_recipient === true;
+              const recipientPropNames = notification.metadata?.recipient_property_names;
+              const recipientPropertyName = Array.isArray(recipientPropNames) && recipientPropNames.length > 0
+                ? recipientPropNames[0]
+                : (application.hoa_properties?.name || null);
               
-              console.log(`[EMAIL_ATTEMPT] App ${applicationId}: Attempting send to ${emailToSend} (type: ${emailType})`);
+              console.log(`[EMAIL_ATTEMPT] App ${applicationId}: Attempting send to ${emailToSend} (type: ${emailType}${isMCRecipient ? ', MC recipient' : ''})`);
               
               // Send notification email
               emailPromises.push(
@@ -464,6 +482,8 @@ export async function createNotifications(applicationId, supabaseClient) {
                   linkedProperties: linkedProperties,
                   applicationType: application.application_type,
                   submitterType: application.submitter_type,
+                  recipientPropertyName: isMCRecipient ? recipientPropertyName : null,
+                  isPartOfMultiCommunityApplication: isMCRecipient,
                 }).then(result => {
                   console.log(`[EMAIL_SUCCESS] App ${applicationId}: ✓ Sent to ${emailToSend}`);
                   return result;
