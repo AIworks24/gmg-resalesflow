@@ -253,13 +253,18 @@ export default async function handler(req, res) {
 
       case 'payment_intent.succeeded':
         const paymentIntent = event.data.object;
+        const isMultiCommunity = paymentIntent.metadata?.isMultiCommunity === 'true';
         
-        // Update application status and correct total amount
+        // For multi-community apps, record payment metadata but DON'T change status yet.
+        // The status update is deferred until AFTER property groups are created, so the
+        // application only appears in the admin dashboard once the tree view data is ready.
         const paymentUpdateData = {
-          status: 'payment_completed',
           payment_completed_at: new Date().toISOString(),
           stripe_payment_intent_id: paymentIntent.id
         };
+        if (!isMultiCommunity) {
+          paymentUpdateData.status = 'payment_completed';
+        }
         
         // Correct the total amount based on actual payment
         if (paymentIntent.amount_total) {
@@ -289,7 +294,7 @@ export default async function handler(req, res) {
           
           const { data: fallbackApplication } = await supabase
             .from('applications')
-            .update(updateData)
+            .update(paymentUpdateData)
             .eq('id', paymentIntent.metadata.applicationId)
             .select(`
               id,
@@ -313,7 +318,6 @@ export default async function handler(req, res) {
 
         // Handle multi-community applications
         const applicationId = paymentIntent.metadata?.applicationId || updatedApplication?.id;
-        const isMultiCommunity = paymentIntent.metadata?.isMultiCommunity === 'true';
         
         // Get receipt and send receipt email
         if (updatedApplication && updatedApplication.submitter_email) {
@@ -823,25 +827,33 @@ async function handleMultiCommunityApplication(applicationId, metadata) {
     // Create property owner forms for each group (for admin workflow)
     await createPropertyOwnerFormsForGroups(applicationId, groups);
 
-    // Signal completion: touch applications.updated_at so the real-time subscription
-    // fires again and the frontend refetches with the now-existing property groups
+    // NOW set the final status to payment_completed — this is the first time the
+    // application becomes visible in the admin dashboard. Property groups already
+    // exist, so the tree view renders immediately with no race condition.
     await supabase
       .from('applications')
-      .update({ updated_at: new Date().toISOString() })
+      .update({ status: 'payment_completed', updated_at: new Date().toISOString() })
       .eq('id', applicationId);
 
-    // Purge any Redis-cached responses that were stored before property groups existed
+    // Purge any stale Redis cache
     await deleteCachePattern('admin:applications:*');
-    console.log(`[MC] Post-processing signal sent for application ${applicationId}`);
+    console.log(`[MC] Application ${applicationId} now visible with ${groups.length} property groups`);
 
   } catch (error) {
     console.error('Error handling multi-community application:', error);
-    // Fallback to single property flow
+    // Fallback to single property flow — still need to set status so the app is visible
     try {
       await createPropertyOwnerForms(applicationId, metadata);
     } catch (fallbackError) {
       console.error('Fallback to single property flow also failed:', fallbackError);
     }
+    // Ensure status is set even on failure so the app doesn't get stuck
+    await supabase
+      .from('applications')
+      .update({ status: 'payment_completed', updated_at: new Date().toISOString() })
+      .eq('id', applicationId);
+    await deleteCachePattern('admin:applications:*');
+    console.log(`[MC] Application ${applicationId} status set after error fallback`);
   }
 }
 

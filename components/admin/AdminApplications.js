@@ -207,13 +207,37 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
   );
 
   // Force refresh with cache bypass (for real-time updates)
-  // This ensures workflow steps update correctly after task completion
-  // Defined after mutate is available from useSWR
-  const forceRefreshWithBypass = async () => {
+  // Uses a version counter to prevent stale responses from overwriting fresh data
+  // (multiple real-time events during webhook processing can cause 10+ concurrent fetches)
+  const refreshVersionRef = useRef(0);
+  const refreshTimerRef = useRef(null);
+  const forceRefreshWithBypass = async ({ immediate = false } = {}) => {
+    // Debounce: coalesce rapid-fire real-time events into a single fetch.
+    // 'immediate' skips debounce for user-initiated actions (mark complete, etc.)
+    if (!immediate) {
+      return new Promise((resolve) => {
+        if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+        refreshTimerRef.current = setTimeout(async () => {
+          refreshTimerRef.current = null;
+          try {
+            await executeRefresh();
+          } catch (e) { /* handled inside */ }
+          resolve();
+        }, 800);
+      });
+    }
+    return executeRefresh();
+  };
+
+  const executeRefresh = async () => {
+    const version = ++refreshVersionRef.current;
     const bypassUrl = `${apiUrl}${apiUrl.includes('?') ? '&' : '?'}bypassCache=true`;
     try {
       const freshData = await fetcher(bypassUrl);
-      mutate(freshData, { revalidate: false }); // Update cache with fresh data
+      // Only apply if this is still the latest request (prevents stale overtake)
+      if (version === refreshVersionRef.current) {
+        mutate(freshData, { revalidate: false });
+      }
     } catch (error) {
       console.warn('Failed to force refresh with bypass:', error);
     }
@@ -335,49 +359,76 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
     };
   }, [supabase, mutate]); // Removed swrData from dependencies to avoid recreating subscription
 
-  // Retry mechanism for MC applications that appear before their property groups are created.
+  // Retry mechanism for MC applications whose property groups haven't been created yet.
   // The Stripe webhook creates the application row first, then creates property groups async.
-  // This polls with back-off until the groups appear (max ~30s).
-  const mcRetryRef = useRef({});
+  // This self-sustaining retry loop polls with back-off until groups appear.
+  // On attempt 3, it also tries to create groups via API (fallback if webhook failed).
+  const mcRetryRef = useRef({}); // { [appId]: { attempt: number, timer: number|null, creationAttempted: boolean } }
+  const startMcRetry = (appId) => {
+    const state = mcRetryRef.current[appId];
+    if (!state || state.timer) return;
+    if (state.attempt >= 8) return;
+
+    const delays = [2000, 3000, 5000, 5000, 8000, 8000, 10000, 15000];
+    const delay = delays[state.attempt] || 15000;
+    state.timer = setTimeout(async () => {
+      state.attempt++;
+      state.timer = null;
+      console.log(`🔄 MC retry #${state.attempt} for app ${appId} (waiting for property groups)`);
+
+      // On attempt 3+, try creating groups via API as fallback (webhook may have failed)
+      if (state.attempt >= 3 && !state.creationAttempted) {
+        state.creationAttempted = true;
+        console.log(`🔧 MC app ${appId}: attempting to create property groups via API fallback`);
+        try {
+          await fetch('/api/admin/create-property-groups', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ applicationId: appId })
+          });
+        } catch (err) {
+          console.warn('MC group creation fallback failed:', err);
+        }
+      }
+
+      try {
+        await forceRefreshWithBypass({ immediate: true });
+      } catch (err) {
+        console.warn('MC retry refresh failed:', err);
+      }
+    }, delay);
+  };
+
   useEffect(() => {
     if (!swrData?.data) return;
 
-    const mcAppsWithoutGroups = swrData.data.filter(app =>
-      (app.application_type === 'multi_community' || app.application_type?.startsWith('mc_') || app.hoa_properties?.is_multi_community) &&
-      (!app.application_property_groups || app.application_property_groups.length === 0) &&
-      app.status !== 'draft' && app.status !== 'pending_payment' && app.status !== 'rejected'
-    );
+    for (const app of swrData.data) {
+      const isMC = app.application_type === 'multi_community' || app.application_type?.startsWith('mc_') || app.hoa_properties?.is_multi_community;
+      const hasGroups = app.application_property_groups && app.application_property_groups.length > 0;
+      const isActive = app.status !== 'draft' && app.status !== 'pending_payment' && app.status !== 'rejected';
 
-    // Clean up retries for apps that now have groups
-    for (const appId of Object.keys(mcRetryRef.current)) {
-      const hasGroups = swrData.data.find(a => a.id === parseInt(appId) && a.application_property_groups?.length > 0);
-      if (hasGroups || !mcAppsWithoutGroups.find(a => a.id === parseInt(appId))) {
-        clearTimeout(mcRetryRef.current[appId]?.timer);
-        delete mcRetryRef.current[appId];
+      if (isMC && !hasGroups && isActive) {
+        if (!mcRetryRef.current[app.id]) {
+          mcRetryRef.current[app.id] = { attempt: 0, timer: null, creationAttempted: false };
+        }
+        startMcRetry(app.id);
+      } else if (mcRetryRef.current[app.id]) {
+        if (mcRetryRef.current[app.id].timer) clearTimeout(mcRetryRef.current[app.id].timer);
+        delete mcRetryRef.current[app.id];
+        if (isMC && hasGroups) console.log(`✅ Property groups loaded for MC app ${app.id}`);
       }
     }
+  }, [swrData?.data]);
 
-    for (const app of mcAppsWithoutGroups) {
-      const state = mcRetryRef.current[app.id] || { attempt: 0 };
-      if (state.attempt >= 5) continue; // Max 5 retries (~3+5+7+10+15 = 40s total)
-
-      const delay = [3000, 5000, 7000, 10000, 15000][state.attempt] || 15000;
-      state.attempt++;
-      state.timer = setTimeout(() => {
-        console.log(`🔄 MC retry #${state.attempt} for app ${app.id} (waiting for property groups)`);
-        forceRefreshWithBypass().catch(err =>
-          console.warn('MC retry refresh failed:', err)
-        );
-      }, delay);
-      mcRetryRef.current[app.id] = state;
-    }
-
+  // Cleanup all retry timers on unmount only
+  useEffect(() => {
     return () => {
       for (const state of Object.values(mcRetryRef.current)) {
         if (state.timer) clearTimeout(state.timer);
       }
+      mcRetryRef.current = {};
     };
-  }, [swrData?.data]);
+  }, []);
 
   // Snackbar helper function
   const showSnackbar = (message, type = 'success') => {
@@ -446,9 +497,9 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
       // Close reject modal and reset state
       setShowRejectModal(false);
       setRejectComments('');
-      
+
       // Force refresh with cache bypass to get fresh data from database
-      await forceRefreshWithBypass();
+      await forceRefreshWithBypass({ immediate: true });
       
       // Refresh the selected application to ensure we have the latest data
       if (selectedApplication.id) {
@@ -589,9 +640,9 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
       );
       
       setIsEditingDetails(false);
-      
+
       // Force refresh with cache bypass to get fresh data from database
-      await forceRefreshWithBypass();
+      await forceRefreshWithBypass({ immediate: true });
       
       // Refresh the selected application to ensure we have the latest data
       if (selectedApplication.id) {
@@ -1192,11 +1243,8 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
       }
     };
 
-    // Run the check after a short delay to ensure the component is fully loaded
-    // Only use timeout if we need to query/create (not when data is already in API response)
-    const timeoutId = setTimeout(checkAndCreateGroups, 500);
-    
-    return () => clearTimeout(timeoutId);
+    // Run immediately — no delay needed since data dependencies are already resolved
+    checkAndCreateGroups();
   }, [
     selectedApplication?.hoa_properties?.is_multi_community, 
     selectedApplication?.id, 
@@ -1684,7 +1732,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
         }
         
         // Refresh applications list with cache bypass so secondary property check icons update
-        await forceRefreshWithBypass();
+        await forceRefreshWithBypass({ immediate: true });
       } else {
         const error = await response.json();
         showSnackbar(error.error || 'Failed to complete task', 'error');
@@ -2125,7 +2173,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
       const updatedId = e.detail?.applicationId;
       try {
         // Force refresh with cache bypass to get immediate updates
-        await forceRefreshWithBypass();
+        await forceRefreshWithBypass({ immediate: true });
         
         // Also refresh the selected application if it's the one that was updated
         if (selectedApplication && selectedApplication.id === updatedId) {
@@ -3389,7 +3437,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
       showSnackbar(result.message || `All ${result.sent} emails sent successfully`, 'success');
       await loadPropertyGroups(applicationId);
       await refreshSelectedApplication(applicationId);
-      await forceRefreshWithBypass();
+      await forceRefreshWithBypass({ immediate: true });
     } catch (error) {
       console.error('Send all MC emails error:', error);
       showSnackbar(error.message || 'Failed to send emails', 'error');
