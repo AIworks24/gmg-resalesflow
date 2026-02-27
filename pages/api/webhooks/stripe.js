@@ -762,6 +762,7 @@ async function autoAssignApplication(applicationId, supabase) {
 async function handleMultiCommunityApplication(applicationId, metadata) {
   const { createClient } = require('@supabase/supabase-js');
   const { createPropertyGroups, generateDocumentsForAllGroups } = require('../../../lib/groupingService');
+  const { deleteCachePattern } = require('../../../lib/redis');
   
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -821,6 +822,17 @@ async function handleMultiCommunityApplication(applicationId, metadata) {
 
     // Create property owner forms for each group (for admin workflow)
     await createPropertyOwnerFormsForGroups(applicationId, groups);
+
+    // Signal completion: touch applications.updated_at so the real-time subscription
+    // fires again and the frontend refetches with the now-existing property groups
+    await supabase
+      .from('applications')
+      .update({ updated_at: new Date().toISOString() })
+      .eq('id', applicationId);
+
+    // Purge any Redis-cached responses that were stored before property groups existed
+    await deleteCachePattern('admin:applications:*');
+    console.log(`[MC] Post-processing signal sent for application ${applicationId}`);
 
   } catch (error) {
     console.error('Error handling multi-community application:', error);

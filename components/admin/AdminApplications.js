@@ -296,12 +296,88 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
         }
       });
 
-    // Cleanup subscription on unmount
+    // Subscribe to application_property_groups INSERT events so the tree view
+    // appears as soon as property groups are created by the webhook (avoids race condition
+    // where the application row is updated before its groups exist).
+    // Debounce: multiple groups are inserted in a single batch, so coalesce into one refresh.
+    let groupInsertTimer = null;
+    const groupsChannel = supabase
+      .channel('property-groups-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'application_property_groups',
+        },
+        (payload) => {
+          console.log('📡 Property group created:', payload.new?.id, 'for application:', payload.new?.application_id);
+          if (groupInsertTimer) clearTimeout(groupInsertTimer);
+          groupInsertTimer = setTimeout(() => {
+            forceRefreshWithBypass().catch(err =>
+              console.warn('Failed to refresh after property group insert:', err)
+            );
+          }, 1500);
+        }
+      )
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          console.log('✅ Real-time subscription active for property groups');
+        }
+      });
+
+    // Cleanup subscriptions on unmount
     return () => {
-      console.log('🧹 Cleaning up real-time subscription for applications');
+      console.log('🧹 Cleaning up real-time subscriptions');
+      if (groupInsertTimer) clearTimeout(groupInsertTimer);
       supabase.removeChannel(channel);
+      supabase.removeChannel(groupsChannel);
     };
   }, [supabase, mutate]); // Removed swrData from dependencies to avoid recreating subscription
+
+  // Retry mechanism for MC applications that appear before their property groups are created.
+  // The Stripe webhook creates the application row first, then creates property groups async.
+  // This polls with back-off until the groups appear (max ~30s).
+  const mcRetryRef = useRef({});
+  useEffect(() => {
+    if (!swrData?.data) return;
+
+    const mcAppsWithoutGroups = swrData.data.filter(app =>
+      (app.application_type === 'multi_community' || app.application_type?.startsWith('mc_') || app.hoa_properties?.is_multi_community) &&
+      (!app.application_property_groups || app.application_property_groups.length === 0) &&
+      app.status !== 'draft' && app.status !== 'pending_payment' && app.status !== 'rejected'
+    );
+
+    // Clean up retries for apps that now have groups
+    for (const appId of Object.keys(mcRetryRef.current)) {
+      const hasGroups = swrData.data.find(a => a.id === parseInt(appId) && a.application_property_groups?.length > 0);
+      if (hasGroups || !mcAppsWithoutGroups.find(a => a.id === parseInt(appId))) {
+        clearTimeout(mcRetryRef.current[appId]?.timer);
+        delete mcRetryRef.current[appId];
+      }
+    }
+
+    for (const app of mcAppsWithoutGroups) {
+      const state = mcRetryRef.current[app.id] || { attempt: 0 };
+      if (state.attempt >= 5) continue; // Max 5 retries (~3+5+7+10+15 = 40s total)
+
+      const delay = [3000, 5000, 7000, 10000, 15000][state.attempt] || 15000;
+      state.attempt++;
+      state.timer = setTimeout(() => {
+        console.log(`🔄 MC retry #${state.attempt} for app ${app.id} (waiting for property groups)`);
+        forceRefreshWithBypass().catch(err =>
+          console.warn('MC retry refresh failed:', err)
+        );
+      }, delay);
+      mcRetryRef.current[app.id] = state;
+    }
+
+    return () => {
+      for (const state of Object.values(mcRetryRef.current)) {
+        if (state.timer) clearTimeout(state.timer);
+      }
+    };
+  }, [swrData?.data]);
 
   // Snackbar helper function
   const showSnackbar = (message, type = 'success') => {
