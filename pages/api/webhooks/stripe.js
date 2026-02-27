@@ -871,6 +871,18 @@ async function handleMultiCommunityApplication(applicationId, metadata) {
     await deleteCachePattern('admin:applications:*');
     console.log(`[MC] Application ${applicationId} now visible with ${groups.length} property groups`);
 
+    // Send notifications to ALL property owners (primary + secondary)
+    // Property groups now exist, so createNotifications can find all recipients.
+    // Any notifications already sent to the primary owner at submission time will be
+    // skipped (per-recipient dedup), and new notifications created for secondary owners.
+    try {
+      const { createNotifications } = await import('../notifications/create');
+      const notifResult = await createNotifications(applicationId, supabase);
+      console.log(`[MC] Notifications for application ${applicationId}: ${notifResult.notificationsCreated} created, ${notifResult.emailsQueued || 0} emails queued`);
+    } catch (notifError) {
+      console.warn(`[MC] Failed to create notifications for application ${applicationId}:`, notifError);
+    }
+
   } catch (error) {
     console.error('Error handling multi-community application:', error);
     // Fallback to single property flow — still need to set status so the app is visible

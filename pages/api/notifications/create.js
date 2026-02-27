@@ -76,48 +76,12 @@ export async function createNotifications(applicationId, supabaseClient) {
       .eq('application_id', applicationId)
       .eq('notification_type', 'new_application');
 
-    if (existingNotifications && existingNotifications.length > 0) {
-      console.log(`[Notifications] Notifications already exist for application ${applicationId} (${existingNotifications.length} found), updating timestamps`);
-      
-      // Update the existing notification's timestamp to now
-      // IMPORTANT: Use a single timestamp to ensure consistency
-      const now = new Date().toISOString();
-      
-      const { data: updatedNotifications, error: updateError } = await supabaseClient
-        .from('notifications')
-        .update({
-          sent_at: now,
-          created_at: now, // Update created_at to reflect new submission
-          is_read: false, // Mark as unread since it's a new submission
-          read_at: null,
-          updated_at: now // Track when it was updated
-        })
-        .eq('application_id', applicationId)
-        .eq('notification_type', 'new_application')
-        .select('id, sent_at, created_at, updated_at, recipient_email, application_id'); // Return key fields for verification
-      
-      if (updateError) {
-        console.error('[Notifications] Error updating existing notification timestamp:', updateError);
-        return {
-          success: false,
-          error: 'Failed to update notification timestamp',
-          details: updateError.message
-        };
-      }
-      
-      console.log(`[Notifications] Updated ${updatedNotifications?.length || 0} notification(s) timestamp:`, {
-        notificationIds: updatedNotifications?.map(n => n.id),
-        recipients: updatedNotifications?.map(n => n.recipient_email),
-      });
-      
-      return { 
-        success: true, 
-        notificationsCreated: 0, 
-        notificationsUpdated: updatedNotifications?.length || existingNotifications.length,
-        updatedNotifications: updatedNotifications,
-        message: 'Updated existing notification timestamp',
-        skipped: false 
-      };
+    // Track which recipients already have notifications so we can create for new ones
+    const existingRecipients = new Set(
+      (existingNotifications || []).map(n => normalizeEmail(n.recipient_email))
+    );
+    if (existingRecipients.size > 0) {
+      console.log(`[Notifications] ${existingRecipients.size} existing notification(s) for application ${applicationId}: ${[...existingRecipients].join(', ')}`);
     }
 
     // Get full application data and property groups for multi-community
@@ -363,17 +327,19 @@ export async function createNotifications(applicationId, supabaseClient) {
     // Only the property owner for the specific application receives notifications (in-app + email)
     // For settlement requests, accounting users are notified above
 
-    // Deduplicate notifications by recipient_email (in case of logic errors)
+    // Deduplicate notifications by recipient_email and skip recipients that already have notifications
     const uniqueNotifications = [];
     const seenEmails = new Set();
     
     for (const notification of notifications) {
       const normalizedEmail = normalizeEmail(notification.recipient_email);
+      if (existingRecipients.has(normalizedEmail)) {
+        console.log(`[Notifications] Skipping ${normalizedEmail} - already has notification for this application`);
+        continue;
+      }
       if (!seenEmails.has(normalizedEmail)) {
         seenEmails.add(normalizedEmail);
         uniqueNotifications.push(notification);
-      } else {
-        console.log(`[Notifications] Skipping duplicate notification for ${notification.recipient_email} in same batch`);
       }
     }
 
