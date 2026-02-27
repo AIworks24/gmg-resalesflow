@@ -1853,6 +1853,22 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
     return (inspectionStatus === 'completed') && resaleStatus && pdfStatus && emailStatus;
   };
 
+  // Tasks 1-3 done (Inspection, Resale, PDF) — used for check icon when Send Email is still pending
+  const isPropertyGroupReadyForEmail = (application, group) => {
+    if (!group) return false;
+    const isSettlementApp = application.submitter_type === 'settlement' || application.application_type?.startsWith('settlement');
+    if (isSettlementApp) {
+      const taskStatuses = getTaskStatuses(application, group);
+      const settlementCompleted = taskStatuses.settlement === 'completed';
+      const pdfCompleted = taskStatuses.pdf === 'completed' || !!group.pdf_url || (group.pdf_status === 'completed');
+      return settlementCompleted && pdfCompleted;
+    }
+    const inspectionStatus = group.inspection_status || 'not_started';
+    const resaleStatus = group.status === 'completed';
+    const pdfStatus = group.pdf_status === 'completed' || !!group.pdf_url;
+    return (inspectionStatus === 'completed') && resaleStatus && pdfStatus;
+  };
+
   const getFormButtonText = (status) => {
     switch (status) {
       case 'completed':
@@ -3863,7 +3879,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                             <span className='text-xs text-gray-400'>—</span>
                           </td>
                           <td className='px-6 py-3 text-center'>
-                            {isPropertyGroupCompleted(app, group) ? (
+                            {(isPropertyGroupCompleted(app, group) || isPropertyGroupReadyForEmail(app, group)) ? (
                               <CheckCircle className='w-4 h-4 text-green-600 flex-shrink-0 mx-auto' />
                             ) : (
                               <span className='text-xs text-gray-500'>—</span>
@@ -4060,7 +4076,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                             {group.property_location && <div className='text-xs text-gray-500'>{group.property_location}</div>}
                           </div>
                           <div className='flex items-center gap-3'>
-                            {isPropertyGroupCompleted(app, group) && (
+                            {(isPropertyGroupCompleted(app, group) || isPropertyGroupReadyForEmail(app, group)) && (
                               <CheckCircle className='w-4 h-4 text-green-600 flex-shrink-0' />
                             )}
                             <div className='text-right'>
@@ -5080,6 +5096,9 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                                       if (isCompleted) { 
                                         badgeColor = 'bg-green-100 text-green-700'; 
                                         label = 'Completed'; 
+                                      } else if (isPropertyGroupReadyForEmail(selectedApplication, group)) {
+                                        badgeColor = 'bg-green-100 text-green-700';
+                                        label = 'Ready';
                                       } else if (group.status === 'failed') {
                                          badgeColor = 'bg-red-100 text-red-700'; 
                                          label = 'Failed';
@@ -5096,7 +5115,8 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
 
                                       return (
                                         <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold rounded-full ${badgeColor}`}>
-                                          {isCompleted ? <CheckCircle className='w-5 h-5 text-green-600 flex-shrink-0' /> : label}
+                                          {(isCompleted || isPropertyGroupReadyForEmail(selectedApplication, group)) ? <CheckCircle className='w-5 h-5 text-green-600 flex-shrink-0' /> : null}
+                                          {label}
                                         </span>
                                       );
                                     })()}
