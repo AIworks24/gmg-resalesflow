@@ -107,7 +107,7 @@ export async function createNotifications(applicationId, supabaseClient) {
     // Fetch application_property_groups for multi-community (all property owners)
     const { data: propertyGroups } = await supabaseClient
       .from('application_property_groups')
-      .select('id, property_name, property_location, property_owner_email, is_primary, property_id, hoa_properties(property_owner_email, property_owner_name, location)')
+      .select('id, property_name, property_location, property_owner_email, assigned_to, is_primary, property_id, hoa_properties(property_owner_email, property_owner_name, default_assignee_email, location)')
       .eq('application_id', applicationId);
 
     const isMultiCommunityApp = application.hoa_properties?.is_multi_community ||
@@ -161,7 +161,9 @@ export async function createNotifications(applicationId, supabaseClient) {
       // Multi-community: notify ALL property owners (primary + each secondary)
       for (const group of propertyGroups) {
         const propName = group.property_name || group.hoa_properties?.name || application.hoa_properties?.name || 'Unknown Property';
-        const ownerEmail = group.property_owner_email || group.hoa_properties?.property_owner_email;
+        // Use property_owner_email first, then hoa_properties, then assigned_to, then default_assignee_email
+        const ownerEmail = group.property_owner_email || group.hoa_properties?.property_owner_email ||
+          group.assigned_to || group.hoa_properties?.default_assignee_email;
         const ownerName = group.hoa_properties?.property_owner_name || application.hoa_properties?.property_owner_name;
         addOwnersFromSource(ownerEmail, propName, ownerName);
       }

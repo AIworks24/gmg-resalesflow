@@ -543,9 +543,23 @@ export default async function handler(req, res) {
           // Check if this is a lender questionnaire application
           const { data: appData } = await supabase
             .from('applications')
-            .select('application_type')
+            .select('application_type, hoa_property_id')
             .eq('id', applicationId)
             .single();
+          
+          // Resolve isMultiCommunity: metadata first, then DB (handles missing metadata)
+          let resolvedIsMultiCommunity = isMultiCommunity;
+          if (!resolvedIsMultiCommunity && appData?.hoa_property_id) {
+            const { data: prop } = await supabase
+              .from('hoa_properties')
+              .select('is_multi_community')
+              .eq('id', appData.hoa_property_id)
+              .single();
+            if (prop?.is_multi_community) {
+              resolvedIsMultiCommunity = true;
+              console.log(`[Webhook] Application ${applicationId} resolved as MC from hoa_properties`);
+            }
+          }
           
           // Skip property owner forms for lender questionnaire (user uploads their own form)
           if (appData?.application_type === 'lender_questionnaire') {
@@ -555,7 +569,7 @@ export default async function handler(req, res) {
               .update({ status: 'under_review' })
               .eq('id', applicationId);
             console.log(`Skipping property owner forms for lender questionnaire application ${applicationId}`);
-          } else if (isMultiCommunity) {
+          } else if (resolvedIsMultiCommunity) {
             await handleMultiCommunityApplication(applicationId, paymentIntent.metadata);
           } else {
             await createPropertyOwnerForms(applicationId, paymentIntent.metadata);
