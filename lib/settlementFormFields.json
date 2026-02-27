@@ -161,7 +161,8 @@
               "key": "dayOfMonthDue",
               "label": "Day of Month Assessments Due",
               "type": "number",
-              "required": false
+              "required": false,
+              "defaultValue": 1
             },
             {
               "key": "datePrepared",
@@ -560,7 +561,8 @@
               "key": "dayOfMonthDue",
               "label": "Day of Month Assessments Due",
               "type": "number",
-              "required": false
+              "required": false,
+              "defaultValue": 1
             },
             {
               "key": "unpaidRegularAssessments",

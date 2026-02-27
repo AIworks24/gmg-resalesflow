@@ -40,6 +40,53 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Invalid task name' });
     }
 
+    // For inspection_form with propertyGroupId, update application_property_groups
+    if (taskName === 'inspection_form' && propertyGroupId) {
+      const { error: groupError } = await supabase
+        .from('application_property_groups')
+        .update({
+          inspection_status: 'completed',
+          inspection_completed_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', propertyGroupId);
+
+      if (groupError) throw groupError;
+
+      await supabase
+        .from('applications')
+        .update({ updated_at: new Date().toISOString() })
+        .eq('id', applicationId);
+
+      return res.status(200).json({
+        success: true,
+        message: 'Inspection task marked as completed for property group'
+      });
+    }
+
+    // For resale_certificate with propertyGroupId, update application_property_groups
+    if (taskName === 'resale_certificate' && propertyGroupId) {
+      const { error: groupError } = await supabase
+        .from('application_property_groups')
+        .update({
+          status: 'completed',
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', propertyGroupId);
+
+      if (groupError) throw groupError;
+
+      await supabase
+        .from('applications')
+        .update({ updated_at: new Date().toISOString() })
+        .eq('id', applicationId);
+
+      return res.status(200).json({
+        success: true,
+        message: 'Resale task marked as completed for property group'
+      });
+    }
+
     // For settlement_form with property_group_id, update the form in property_owner_forms
     if (taskName === 'settlement_form' && propertyGroupId) {
       // Update the settlement form status in property_owner_forms

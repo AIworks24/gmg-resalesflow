@@ -480,6 +480,11 @@ export default function AdminSettlementForm({ applicationId, onClose, isModal = 
                                                 'Association';
             }
             
+            // Apply default for Day of Month Assessments Due if not set (GMG typically uses 1)
+            if (existingData.dayOfMonthDue === undefined || existingData.dayOfMonthDue === '' || existingData.dayOfMonthDue === null) {
+              existingData.dayOfMonthDue = 1;
+            }
+
             // Auto-fill default "Pay To" values for specific fees (only if not already set)
             if (!existingData.ownerCurrentBalance_payableTo) {
               existingData.ownerCurrentBalance_payableTo = 'Payable to Association';

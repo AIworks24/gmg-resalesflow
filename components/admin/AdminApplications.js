@@ -85,7 +85,8 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
   const [sendingEmail, setSendingEmail] = useState(false);
   const [generatingPDF, setGeneratingPDF] = useState(false);
   const [generatingPDFForProperty, setGeneratingPDFForProperty] = useState(null); // Track which property is generating PDF
-  const [sendingEmailForProperty, setSendingEmailForProperty] = useState(null); // Track which property is sending email
+  const [sendingEmailForProperty, setSendingEmailForProperty] = useState(null);
+  const [sendingAllMcEmails, setSendingAllMcEmails] = useState(false); // Track which property is sending email
   const [dateFilter, setDateFilter] = useState('all'); // 'all', 'today', 'week', 'month', 'custom'
   const [customDateRange, setCustomDateRange] = useState({
     startDate: '',
@@ -116,6 +117,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
   const [currentFormId, setCurrentFormId] = useState(null);
   const [currentGroupId, setCurrentGroupId] = useState(null);
   const [loadingFormKey, setLoadingFormKey] = useState(null); // scope loading to a specific button
+  const [completingTaskKey, setCompletingTaskKey] = useState(null); // e.g. 'inspection:123' or 'resale:123' for Mark Complete loading
   const [propertyGroups, setPropertyGroups] = useState([]);
   const [loadingGroups, setLoadingGroups] = useState(false);
   const [sendingGroupEmail, setSendingGroupEmail] = useState(null);
@@ -1579,7 +1581,9 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
     }
   };
 
-  const handleCompleteTask = async (applicationId, taskName, group = null) => {
+  const handleCompleteTask = async (applicationId, taskName, group = null, options = {}) => {
+    const loadingKey = options.loadingKey ?? (group ? `${taskName}:${group.id}` : null);
+    if (loadingKey) setCompletingTaskKey(loadingKey);
     try {
       const response = await fetch('/api/complete-task', {
         method: 'POST',
@@ -1589,12 +1593,12 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
         body: JSON.stringify({ 
           applicationId, 
           taskName,
-          propertyGroupId: group?.id || null // Include property_group_id for settlement forms
+          propertyGroupId: group?.id || null // Include property_group_id for per-property tasks
         }),
       });
 
       if (response.ok) {
-        showSnackbar(`${taskName.replace('_', ' ')} task completed`, 'success');
+        showSnackbar(`${taskName.replace(/_/g, ' ')} task completed`, 'success');
         
         // Update the selected application if it's open in the modal
         try {
@@ -1603,14 +1607,17 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
           console.warn('Failed to refresh selected application after task completion:', refreshError);
         }
         
-         // Refresh applications list immediately
-         await mutate();
+        // Refresh applications list with cache bypass so secondary property check icons update
+        await forceRefreshWithBypass();
       } else {
         const error = await response.json();
         showSnackbar(error.error || 'Failed to complete task', 'error');
       }
     } catch (error) {
+      console.error('Complete task error:', error);
       showSnackbar('Failed to complete task', 'error');
+    } finally {
+      if (loadingKey) setCompletingTaskKey(null);
     }
   };
 
@@ -1827,6 +1834,23 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
         email: (hasNotificationSent || hasEmailCompletedAt) ? 'completed' : 'not_started'
       };
     }
+  };
+
+  const isPropertyGroupCompleted = (application, group) => {
+    if (!group) return false;
+    const isSettlementApp = application.submitter_type === 'settlement' || application.application_type?.startsWith('settlement');
+    if (isSettlementApp) {
+      const taskStatuses = getTaskStatuses(application, group);
+      const settlementCompleted = taskStatuses.settlement === 'completed';
+      const pdfCompleted = taskStatuses.pdf === 'completed' || !!group.pdf_url || (group.pdf_status === 'completed');
+      const emailCompleted = taskStatuses.email === 'completed' || !!group.email_completed_at || (group.email_status === 'completed');
+      return settlementCompleted && pdfCompleted && emailCompleted;
+    }
+    const inspectionStatus = group.inspection_status || 'not_started';
+    const resaleStatus = group.status === 'completed';
+    const pdfStatus = group.pdf_status === 'completed' || !!group.pdf_url;
+    const emailStatus = group.email_status === 'completed' || !!group.email_completed_at;
+    return (inspectionStatus === 'completed') && resaleStatus && pdfStatus && emailStatus;
   };
 
   const getFormButtonText = (status) => {
@@ -3260,6 +3284,28 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
     }
   };
 
+  const handleSendAllMcEmails = async (applicationId) => {
+    setSendingAllMcEmails(true);
+    try {
+      const response = await fetch('/api/send-all-mc-emails', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ applicationId }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Failed to send emails');
+      showSnackbar(result.message || `All ${result.sent} emails sent successfully`, 'success');
+      await loadPropertyGroups(applicationId);
+      await refreshSelectedApplication(applicationId);
+      await forceRefreshWithBypass();
+    } catch (error) {
+      console.error('Send all MC emails error:', error);
+      showSnackbar(error.message || 'Failed to send emails', 'error');
+    } finally {
+      setSendingAllMcEmails(false);
+    }
+  };
+
   // Show error state if SWR encountered an error
   if (swrError) {
     return (
@@ -3817,7 +3863,11 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                             <span className='text-xs text-gray-400'>—</span>
                           </td>
                           <td className='px-6 py-3 text-center'>
-                            <span className='text-xs text-gray-500'>—</span>
+                            {isPropertyGroupCompleted(app, group) ? (
+                              <CheckCircle className='w-4 h-4 text-green-600 flex-shrink-0 mx-auto' />
+                            ) : (
+                              <span className='text-xs text-gray-500'>—</span>
+                            )}
                           </td>
                           <td className='px-6 py-3 text-sm text-gray-500 text-center'>—</td>
                           <td className='px-6 py-3 text-sm text-gray-900'>
@@ -4010,6 +4060,9 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                             {group.property_location && <div className='text-xs text-gray-500'>{group.property_location}</div>}
                           </div>
                           <div className='flex items-center gap-3'>
+                            {isPropertyGroupCompleted(app, group) && (
+                              <CheckCircle className='w-4 h-4 text-green-600 flex-shrink-0' />
+                            )}
                             <div className='text-right'>
                               <div className='text-xs text-gray-500 uppercase font-semibold mb-0.5'>Owner</div>
                               <div className='text-sm font-medium text-gray-900'>{renderAssigneeMobile(group)}</div>
@@ -4897,12 +4950,50 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                   const isLenderQuestionnaire = selectedApplication.application_type === 'lender_questionnaire';
                   
                   if (isMultiCommunity && !isLenderQuestionnaire) {
+                    const isSettlementMc = selectedApplication.submitter_type === 'settlement' || selectedApplication.application_type?.startsWith('settlement');
+                    const allGroupsReady = propertyGroups.every((g) => {
+                      if (isSettlementMc) {
+                        const ts = getTaskStatuses(selectedApplication, g);
+                        return ts.settlement === 'completed' && (ts.pdf === 'completed' || !!g.pdf_url);
+                      }
+                      return (g.inspection_status === 'completed') && g.status === 'completed' && (g.pdf_status === 'completed' || !!g.pdf_url);
+                    });
+                    const allMcEmailsSent = propertyGroups.every((g) => g.email_status === 'completed' || !!g.email_completed_at);
+                    const latestEmailAt = propertyGroups.reduce((max, g) => {
+                      const at = g.email_completed_at ? new Date(g.email_completed_at).getTime() : 0;
+                      return at > max ? at : max;
+                    }, 0);
+
                     return (
                       <div>
                         <h3 className='text-lg font-bold text-gray-900 mb-4 flex items-center gap-2'>
                           <Building className='w-5 h-5 text-gray-500' />
                           Multi-Community Properties
                         </h3>
+                        {allGroupsReady && !allMcEmailsSent && (
+                          <div className='mb-4 p-4 bg-blue-50 border border-blue-100 rounded-xl'>
+                            <p className='text-sm text-blue-800 mb-3'>
+                              All properties are ready. Send all emails at once so the requestor receives them together.
+                            </p>
+                            <button
+                              onClick={() => handleSendAllMcEmails(selectedApplication.id)}
+                              disabled={sendingAllMcEmails}
+                              className='inline-flex items-center gap-2 px-4 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium text-sm disabled:opacity-50 disabled:cursor-not-allowed'
+                            >
+                              {sendingAllMcEmails ? (
+                                <>
+                                  <RefreshCw className='w-4 h-4 animate-spin' />
+                                  Sending all {propertyGroups.length} emails...
+                                </>
+                              ) : (
+                                <>
+                                  <Mail className='w-4 h-4' />
+                                  Send All Emails ({propertyGroups.length} properties)
+                                </>
+                              )}
+                            </button>
+                          </div>
+                        )}
                         <div className='space-y-6'>
                           {loadingGroups ? (
                             <div className='flex items-center justify-center py-12 bg-white rounded-xl border border-gray-200'>
@@ -5003,7 +5094,11 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                                         label = 'Email Sent';
                                       }
 
-                                      return <span className={`px-2.5 py-1 text-xs font-semibold rounded-full ${badgeColor}`}>{label}</span>;
+                                      return (
+                                        <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold rounded-full ${badgeColor}`}>
+                                          {isCompleted ? <CheckCircle className='w-5 h-5 text-green-600 flex-shrink-0' /> : label}
+                                        </span>
+                                      );
                                     })()}
                                   </div>
                                 </div>
@@ -5065,29 +5160,24 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                                                      )}
                                                   </div>
                                                </div>
-                                                {/* Task 3 */}
-                                                <div className={`p-3 rounded-lg border ${getTaskStatusColor(taskStatuses.email)}`}>
+                                                {/* Task 3 - MC: Pending until all sent; use Send All Emails above */}
+                                                <div className={`p-3 rounded-lg border ${allMcEmailsSent ? getTaskStatusColor('completed') : getTaskStatusColor('not_started')}`}>
                                                   <div className="flex items-center justify-between">
                                                     <div className="flex items-center gap-3 flex-1">
                                                       <span className="flex items-center justify-center w-6 h-6 rounded-full bg-white border border-gray-300 text-xs font-bold">3</span>
                                                       <div className="flex-1 min-w-0">
                                                         <span className="text-sm font-medium">Send Email</span>
-                                                        {group.email_completed_at && (
+                                                        {allMcEmailsSent && latestEmailAt && (
                                                           <div className="mt-2 text-xs text-green-600 bg-green-50 px-2 py-1 rounded inline-block">
-                                                            Completed: {formatDateTimeFull(group.email_completed_at)}
+                                                            Completed: {formatDateTimeFull(new Date(latestEmailAt).toISOString())}
                                                           </div>
                                                         )}
                                                       </div>
                                                     </div>
                                                     <div className="flex gap-2">
-                                                      <button onClick={() => handleSendApprovalEmail(selectedApplication.id, group)} disabled={!emailCanBeSent || sendingEmail} className="px-3 py-1 text-xs font-medium bg-white border border-gray-300 rounded hover:bg-gray-50 text-gray-700 disabled:opacity-50">
-                                                        {sendingEmail ? (
-                                                          <div className="flex items-center gap-1.5">
-                                                            <RefreshCw className="w-3 h-3 animate-spin" />
-                                                            <span>Sending...</span>
-                                                          </div>
-                                                        ) : 'Send'}
-                                                      </button>
+                                                      <span className="text-xs text-gray-500 py-1">
+                                                        {allMcEmailsSent ? 'Completed' : allGroupsReady ? 'Use Send All Emails above' : 'Pending'}
+                                                      </span>
                                                     </div>
                                                   </div>
                                                </div>
@@ -5119,9 +5209,15 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                                                           ) : getFormButtonText(inspectionStatusForGroup)}
                                                        </button>
                                                        {inspectionStatusForGroup !== 'completed' && (
-                                                          <button onClick={() => {
-                                                             supabase.from('application_property_groups').update({ inspection_status: 'completed', inspection_completed_at: new Date().toISOString() }).eq('id', group.id).then(() => refreshSelectedApplication(selectedApplication.id));
-                                                          }} className="w-full sm:w-auto px-3 py-2 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 active:bg-green-300 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap">Mark Complete</button>
+                                                          <button
+                                                            onClick={() => handleCompleteTask(selectedApplication.id, 'inspection_form', group)}
+                                                            disabled={completingTaskKey === `inspection_form:${group.id}`}
+                                                            className="w-full sm:w-auto px-3 py-2 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 active:bg-green-300 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
+                                                          >
+                                                            {completingTaskKey === `inspection_form:${group.id}` ? (
+                                                              <span className="inline-flex items-center gap-1.5"><RefreshCw className="w-3 h-3 animate-spin" />Saving...</span>
+                                                            ) : 'Mark Complete'}
+                                                          </button>
                                                        )}
                                                     </div>
                                                 </TaskCard>
@@ -5142,8 +5238,16 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                                                              </div>
                                                           ) : getFormButtonText(resaleStatusForGroup)}
                                                        </button>
-                                                       {isPrimary && !selectedApplication.resale_certificate_completed_at && (
-                                                          <button onClick={() => handleCompleteTask(selectedApplication.id, 'resale_certificate')} className="w-full sm:w-auto px-3 py-2 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 active:bg-green-300 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap">Mark Complete</button>
+                                                       {resaleStatusForGroup !== 'completed' && (
+                                                          <button
+                                                            onClick={() => handleCompleteTask(selectedApplication.id, 'resale_certificate', group)}
+                                                            disabled={completingTaskKey === `resale_certificate:${group.id}`}
+                                                            className="w-full sm:w-auto px-3 py-2 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 active:bg-green-300 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
+                                                          >
+                                                            {completingTaskKey === `resale_certificate:${group.id}` ? (
+                                                              <span className="inline-flex items-center gap-1.5"><RefreshCw className="w-3 h-3 animate-spin" />Saving...</span>
+                                                            ) : 'Mark Complete'}
+                                                          </button>
                                                        )}
                                                     </div>
                                                 </TaskCard>
@@ -5171,23 +5275,18 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                                                     </div>
                                                 </TaskCard>
 
-                                                {/* Email */}
+                                                {/* Email - MC: Pending until all sent; use Send All Emails above */}
                                                 <TaskCard 
                                                     step="4" 
                                                     title="Send Email" 
-                                                    description="Send email for this property"
-                                                    status={group.email_status || 'not_started'}
-                                                    completedAt={group.email_completed_at}
+                                                    description={allMcEmailsSent ? 'All property emails sent' : allGroupsReady ? 'Use Send All Emails above' : 'Pending until all properties are ready'}
+                                                    status={allMcEmailsSent ? 'completed' : 'not_started'}
+                                                    completedAt={allMcEmailsSent && latestEmailAt ? new Date(latestEmailAt).toISOString() : null}
                                                 >
                                                     <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2">
-                                                       <button onClick={() => handleSendEmailForProperty(selectedApplication.id, group)} disabled={sendingEmailForProperty === group.id || !canSendEmailForProperty(group)} className="w-full sm:w-auto px-3 sm:px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 active:bg-blue-800 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed shadow-sm">
-                                                          {sendingEmailForProperty === group.id ? (
-                                                             <div className="flex items-center gap-1.5">
-                                                               <RefreshCw className="w-3 h-3 animate-spin" />
-                                                               <span>Sending...</span>
-                                                             </div>
-                                                          ) : 'Send Email'}
-                                                       </button>
+                                                       <span className="text-xs text-gray-500 py-2">
+                                                          {allMcEmailsSent ? 'Completed' : allGroupsReady ? 'Use Send All Emails above' : 'Pending'}
+                                                       </span>
                                                     </div>
                                                 </TaskCard>
                                              </div>
