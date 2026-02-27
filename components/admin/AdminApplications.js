@@ -325,6 +325,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
     // where the application row is updated before its groups exist).
     // Debounce: multiple groups are inserted in a single batch, so coalesce into one refresh.
     let groupInsertTimer = null;
+    let groupUpdateTimer = null;
     const groupsChannel = supabase
       .channel('property-groups-changes')
       .on(
@@ -344,6 +345,23 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
           }, 1500);
         }
       )
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'application_property_groups',
+        },
+        (payload) => {
+          console.log('📡 Property group updated:', payload.new?.id, 'for application:', payload.new?.application_id);
+          if (groupUpdateTimer) clearTimeout(groupUpdateTimer);
+          groupUpdateTimer = setTimeout(() => {
+            forceRefreshWithBypass().catch(err =>
+              console.warn('Failed to refresh after property group update:', err)
+            );
+          }, 800);
+        }
+      )
       .subscribe((status) => {
         if (status === 'SUBSCRIBED') {
           console.log('✅ Real-time subscription active for property groups');
@@ -354,6 +372,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
     return () => {
       console.log('🧹 Cleaning up real-time subscriptions');
       if (groupInsertTimer) clearTimeout(groupInsertTimer);
+      if (groupUpdateTimer) clearTimeout(groupUpdateTimer);
       supabase.removeChannel(channel);
       supabase.removeChannel(groupsChannel);
     };
@@ -794,44 +813,39 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
     // Track progress for each property group
     let totalProperties = propertyGroups.length;
     let completedProperties = 0;
+    let formsCompletedCount = 0;
     let formsInProgress = 0;
     let pdfsGenerated = 0;
     let emailsSent = 0;
 
-    propertyGroups.forEach((group, index) => {
+    propertyGroups.forEach((group) => {
       let formsCompleted = false;
       
       if (isSettlementApp) {
-        // Settlement application: only needs settlement form
         const settlementForm = application.property_owner_forms?.find(
           form => form.form_type === 'settlement_form' && form.property_group_id === group.id
         );
         const settlementFormStatus = settlementForm?.status || 'not_started';
         formsCompleted = settlementFormStatus === 'completed';
         
-        // Check if form is in progress
         if (settlementFormStatus === 'in_progress') {
           formsInProgress++;
         }
       } else {
-        // Standard application: needs both inspection and resale forms
-        // Use property-group-specific inspection status only (no fallback to application-level)
         const inspectionStatus = group.inspection_status ?? 'not_started';
         const resaleStatus = group.status === 'completed';
         formsCompleted = inspectionStatus === 'completed' && resaleStatus;
         
-        // Check if forms are in progress
-        if (group.status === 'in_progress' || inspectionStatus === 'in_progress') {
-          formsInProgress++;
+        if (group.status === 'in_progress' || inspectionStatus === 'in_progress' ||
+            inspectionStatus === 'completed' || resaleStatus) {
+          if (!formsCompleted) formsInProgress++;
         }
       }
 
       if (formsCompleted) {
-        // Check PDF generation
+        formsCompletedCount++;
         if (group.pdf_status === 'completed' || group.pdf_url) {
           pdfsGenerated++;
-          
-          // Check email sending
           if (group.email_status === 'completed' || group.email_completed_at) {
             emailsSent++;
             completedProperties++;
@@ -840,20 +854,22 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
       }
     });
 
-    // Determine workflow step based on progress
     if (completedProperties === totalProperties) {
       return { step: 5, text: 'Completed', color: 'bg-green-100 text-green-800' };
     }
-    
-    if (emailsSent > 0 && emailsSent < totalProperties) {
+
+    // All PDFs done or some emails already sent → email step
+    if (pdfsGenerated === totalProperties || emailsSent > 0) {
       return { step: 4, text: 'Send Email', color: 'bg-purple-100 text-purple-800' };
     }
-    
-    if (pdfsGenerated > 0 && pdfsGenerated < totalProperties) {
+
+    // Some PDFs generated or all forms done → PDF step
+    if (pdfsGenerated > 0 || formsCompletedCount === totalProperties) {
       return { step: 3, text: 'Generate PDF', color: 'bg-orange-100 text-orange-800' };
     }
-    
-    if (formsInProgress > 0 || (formsInProgress === 0 && pdfsGenerated === 0)) {
+
+    // Some forms done or in progress
+    if (formsCompletedCount > 0 || formsInProgress > 0) {
       return { step: 2, text: 'Forms In Progress', color: 'bg-blue-100 text-blue-800' };
     }
     
@@ -959,8 +975,11 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
     
     // Check if this is a multi-community application FIRST (before settlement check)
     // This ensures settlement multi-community apps use the multi-community workflow
-    const isMultiCommunity = application.hoa_properties?.is_multi_community && 
-                            application.application_property_groups && 
+    // Must match isMultiCommunityTreeApp detection: check application_type, mc_ prefix, AND hoa flag
+    const isMultiCommunity = (application.application_type === 'multi_community' ||
+                              application.application_type?.startsWith('mc_') ||
+                              application.hoa_properties?.is_multi_community) &&
+                            application.application_property_groups &&
                             application.application_property_groups.length > 1;
 
     if (isMultiCommunity) {
@@ -1711,34 +1730,60 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
     try {
       const response = await fetch('/api/complete-task', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           applicationId, 
           taskName,
-          propertyGroupId: group?.id || null // Include property_group_id for per-property tasks
+          propertyGroupId: group?.id || null
         }),
       });
 
-      if (response.ok) {
-        showSnackbar(`${taskName.replace(/_/g, ' ')} task completed`, 'success');
-        
-        // Update the selected application if it's open in the modal
-        try {
-          await refreshSelectedApplication(applicationId);
-        } catch (refreshError) {
-          console.warn('Failed to refresh selected application after task completion:', refreshError);
-        }
-        
-        // Refresh applications list with cache bypass so secondary property check icons update
-        await forceRefreshWithBypass({ immediate: true });
-      } else {
-        const error = await response.json();
-        showSnackbar(error.error || 'Failed to complete task', 'error');
+      const result = await response.json();
+
+      if (!response.ok) {
+        console.error('[handleCompleteTask] API error:', result);
+        showSnackbar(result.error || 'Failed to complete task', 'error');
+        return;
       }
+
+      showSnackbar(`${taskName.replace(/_/g, ' ')} task completed`, 'success');
+
+      // Use the full application data returned by the API (fetched with service role key,
+      // bypassing RLS) to update the modal state. This is the single source of truth —
+      // no separate refreshSelectedApplication call that could overwrite with stale data.
+      if (selectedApplication && selectedApplication.id === applicationId && result.application) {
+        const app = result.application;
+        const inspectionForm = app.property_owner_forms?.find(f => f.form_type === 'inspection_form');
+        const resaleCertificate = app.property_owner_forms?.find(f => f.form_type === 'resale_certificate');
+        
+        const processedApp = {
+          ...app,
+          forms: {
+            inspectionForm: inspectionForm || { status: 'not_created', id: null },
+            resaleCertificate: resaleCertificate || { status: 'not_created', id: null },
+          },
+          notifications: app.notifications || [],
+          application_property_groups: app.application_property_groups || []
+        };
+        
+        setSelectedApplication(processedApp);
+        if (processedApp.application_property_groups?.length > 0) {
+          setPropertyGroups(processedApp.application_property_groups);
+        }
+      } else if (selectedApplication && selectedApplication.id === applicationId) {
+        // Fallback: API didn't return full app data — apply optimistic update
+        const completedAt = result.completedAt || new Date().toISOString();
+        setSelectedApplication(prev => ({
+          ...prev,
+          [`${taskName}_completed_at`]: completedAt,
+          updated_at: completedAt
+        }));
+      }
+        
+      // Refresh the applications list
+      await forceRefreshWithBypass({ immediate: true });
     } catch (error) {
-      console.error('Complete task error:', error);
+      console.error('[handleCompleteTask] Error:', error);
       showSnackbar('Failed to complete task', 'error');
     } finally {
       if (loadingKey) setCompletingTaskKey(null);
@@ -1930,8 +1975,12 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
       // Standard application
       const inspectionForm = application.property_owner_forms?.find(form => form.form_type === 'inspection_form');
       const resaleForm = application.property_owner_forms?.find(form => form.form_type === 'resale_certificate');
-      const inspectionFormStatus = inspectionForm?.status || 'not_started';
-      const resaleFormStatus = resaleForm?.status || 'not_started';
+      const inspectionFormStatus = inspectionForm?.status === 'completed' || application.inspection_form_completed_at
+        ? 'completed'
+        : (inspectionForm?.status || 'not_started');
+      const resaleFormStatus = resaleForm?.status === 'completed' || application.resale_certificate_completed_at
+        ? 'completed'
+        : (resaleForm?.status || 'not_started');
       
       // Derive PDF status from existing fields
       let pdfStatus = 'not_started';
@@ -2072,6 +2121,8 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
             assigned_to,
             is_primary,
             status,
+            inspection_status,
+            inspection_completed_at,
             pdf_url,
             pdf_status,
             pdf_completed_at,
@@ -2079,12 +2130,13 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
             email_completed_at,
             form_data,
             property_id,
+            updated_at,
             hoa_properties(id, name, location, property_owner_email, property_owner_name, default_assignee_email)
           )
         `)
         .eq('id', application.id)
-        .is('deleted_at', null) // Only get non-deleted applications
-        .maybeSingle(); // Use maybeSingle() instead of single() to handle 0 rows gracefully
+        .is('deleted_at', null)
+        .maybeSingle();
 
       if (appError) {
         console.error('❌ Error loading application:', appError);
@@ -2349,7 +2401,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
           property_owner_forms(id, form_type, status, completed_at, form_data, response_data, property_group_id),
           notifications(id, notification_type, status, sent_at),
           application_property_groups(id, property_id, property_name, property_location, property_owner_email, assigned_to, is_primary, status, inspection_status, inspection_completed_at,
-            pdf_url, pdf_status, pdf_completed_at, email_status, email_completed_at,
+            pdf_url, pdf_status, pdf_completed_at, email_status, email_completed_at, updated_at,
             hoa_properties(id, name, location, property_owner_email, property_owner_name, default_assignee_email)
           )
         `)
@@ -2960,7 +3012,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
     try {
       const { data, error } = await supabase
         .from('application_property_groups')
-        .select('id, property_id, property_name, property_location, is_primary, status, inspection_status, inspection_completed_at, pdf_status, pdf_url, email_status, form_data, hoa_properties(id, name, location)')
+        .select('id, property_id, property_name, property_location, property_owner_email, assigned_to, is_primary, status, inspection_status, inspection_completed_at, pdf_status, pdf_url, pdf_completed_at, email_status, email_completed_at, form_data, updated_at, hoa_properties(id, name, location, property_owner_email, property_owner_name, default_assignee_email)')
         .eq('application_id', applicationId)
         .order('is_primary', { ascending: false })
         .order('created_at', { ascending: true });
@@ -5372,6 +5424,8 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                                                     title="Virginia Resale Certificate" 
                                                     description={resaleStatusForGroup === 'not_started' ? 'Not Started' : 'Fill out Virginia resale disclosure'}
                                                     status={resaleStatusForGroup}
+                                                    completedAt={resaleStatusForGroup === 'completed' ? group.updated_at : null}
+                                                    useFormCompletionDateFormat
                                                 >
                                                     <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2">
                                                        <button onClick={() => handleCompleteForm(selectedApplication.id, 'resale', group)} className="w-full sm:w-auto px-3 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 active:bg-gray-100 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap">
@@ -5517,7 +5571,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
 
                         return (
                           <>
-                             <TaskCard step="1" status={taskStatuses.settlement} title="Settlement Form" description="Complete form with assessment details" completedAt={selectedApplication.settlement_form_completed_at} useFormCompletionDateFormat>
+                             <TaskCard step="1" status={taskStatuses.settlement} title="Settlement Form" description="Complete form with assessment details" completedAt={selectedApplication.settlement_form_completed_at || selectedApplication.property_owner_forms?.find(f => f.form_type === 'settlement_form' && !f.property_group_id)?.completed_at} useFormCompletionDateFormat>
                                 <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2">
                                    <button onClick={() => handleCompleteForm(selectedApplication.id, 'settlement')} disabled={loadingFormData} className="w-full sm:w-auto px-3 sm:px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 active:bg-gray-100 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed">
                                       {loadingFormData ? (
@@ -5527,7 +5581,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                                          </div>
                                       ) : getFormButtonText(taskStatuses.settlement)}
                                    </button>
-                                   {!selectedApplication.settlement_form_completed_at && (
+                                   {taskStatuses.settlement !== 'completed' && (
                                       <button onClick={() => handleCompleteTask(selectedApplication.id, 'settlement_form')} className="w-full sm:w-auto px-3 py-2 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 active:bg-green-300 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap">Complete</button>
                                    )}
                                 </div>
@@ -5571,7 +5625,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
 
                         return (
                            <>
-                              <TaskCard step="1" status={taskStatuses.inspection} title="Inspection Form" description="Complete property inspection checklist" completedAt={selectedApplication.inspection_form_completed_at} useFormCompletionDateFormat>
+                              <TaskCard step="1" status={taskStatuses.inspection} title="Inspection Form" description="Complete property inspection checklist" completedAt={selectedApplication.inspection_form_completed_at || selectedApplication.forms?.inspectionForm?.completed_at} useFormCompletionDateFormat>
                                  <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2">
                                     <button onClick={() => handleCompleteForm(selectedApplication.id, 'inspection')} disabled={loadingFormData} className="w-full sm:w-auto px-3 sm:px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 active:bg-gray-100 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed">
                                        {loadingFormData ? (
@@ -5581,13 +5635,13 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                                           </div>
                                        ) : getFormButtonText(taskStatuses.inspection)}
                                     </button>
-                                    {!selectedApplication.inspection_form_completed_at && (
+                                    {taskStatuses.inspection !== 'completed' && (
                                        <button onClick={() => handleCompleteTask(selectedApplication.id, 'inspection_form')} className="w-full sm:w-auto px-3 py-2 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 active:bg-green-300 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap">Mark Done</button>
                                     )}
                                  </div>
                               </TaskCard>
 
-                              <TaskCard step="2" status={taskStatuses.resale} title="Resale Certificate" description="Fill out Virginia resale disclosure" completedAt={selectedApplication.resale_certificate_completed_at} useFormCompletionDateFormat>
+                              <TaskCard step="2" status={taskStatuses.resale} title="Resale Certificate" description="Fill out Virginia resale disclosure" completedAt={selectedApplication.resale_certificate_completed_at || selectedApplication.forms?.resaleCertificate?.completed_at} useFormCompletionDateFormat>
                                  <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2">
                                     <button onClick={() => handleCompleteForm(selectedApplication.id, 'resale')} disabled={loadingFormData} className="w-full sm:w-auto px-3 sm:px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 active:bg-gray-100 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed">
                                        {loadingFormData ? (
@@ -5597,7 +5651,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                                           </div>
                                        ) : getFormButtonText(taskStatuses.resale)}
                                     </button>
-                                    {!selectedApplication.resale_certificate_completed_at && (
+                                    {taskStatuses.resale !== 'completed' && (
                                        <button onClick={() => handleCompleteTask(selectedApplication.id, 'resale_certificate')} className="w-full sm:w-auto px-3 py-2 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 active:bg-green-300 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap">Mark Done</button>
                                     )}
                                  </div>
@@ -5630,7 +5684,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                                  </div>
                               </TaskCard>
 
-                              <TaskCard step="4" status={taskStatuses.email} title="Send Completion Email" description="Send PDF and files to applicant" completedAt={selectedApplication.email_completed_at}>
+                              <TaskCard step="4" status={taskStatuses.email} title="Send Completion Email" description="Send PDF and files to applicant" completedAt={selectedApplication.email_completed_at || selectedApplication.notifications?.find(n => n.notification_type === 'application_approved')?.sent_at}>
                                  <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2">
                                     <button onClick={() => setShowAttachmentModal(true)} className="w-full sm:w-auto px-3 py-2 bg-gray-100 text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-200 active:bg-gray-300 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap">Attachments</button>
                                     <button onClick={() => handleSendApprovalEmail(selectedApplication.id)} disabled={!emailCanBeSent || sendingEmail || taskStatuses.pdf === 'update_needed'} className="w-full sm:w-auto px-3 sm:px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 active:bg-blue-800 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed shadow-sm">
@@ -5641,7 +5695,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                                           </div>
                                        ) : 'Send Email'}
                                     </button>
-                                    {!selectedApplication.email_completed_at && (
+                                    {taskStatuses.email !== 'completed' && (
                                        <button onClick={() => handleCompleteTask(selectedApplication.id, 'email')} className="w-full sm:w-auto px-3 py-2 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 active:bg-green-300 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap">Mark Done</button>
                                     )}
                                  </div>

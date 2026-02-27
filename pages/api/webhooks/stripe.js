@@ -316,6 +316,46 @@ export default async function handler(req, res) {
           }
         }
 
+        // Fallback: find the app via the Stripe checkout session that created this payment intent.
+        // This handles the race where payment_intent.succeeded fires before checkout.session.completed
+        // has set stripe_payment_intent_id on the application row.
+        if (!updatedApplication) {
+          try {
+            const sessions = await stripe.checkout.sessions.list({
+              payment_intent: paymentIntent.id,
+              limit: 1
+            });
+            if (sessions.data.length > 0) {
+              const sessionId = sessions.data[0].id;
+              console.log(`[Webhook] Trying session lookup: ${sessionId}`);
+
+              // First set the stripe_payment_intent_id so future lookups work
+              const { data: sessionApp } = await supabase
+                .from('applications')
+                .update({ ...paymentUpdateData, stripe_payment_intent_id: paymentIntent.id })
+                .eq('stripe_session_id', sessionId)
+                .select(`
+                  id,
+                  submitter_email,
+                  submitter_name,
+                  property_address,
+                  package_type,
+                  total_amount,
+                  application_type,
+                  impersonation_metadata
+                `)
+                .single();
+
+              if (sessionApp) {
+                updatedApplication = sessionApp;
+                console.log(`[Webhook] Found application ${sessionApp.id} via session ${sessionId}`);
+              }
+            }
+          } catch (sessionErr) {
+            console.warn(`[Webhook] Session fallback lookup failed:`, sessionErr.message);
+          }
+        }
+
         // Handle multi-community applications
         const applicationId = paymentIntent.metadata?.applicationId || updatedApplication?.id;
         
@@ -774,7 +814,7 @@ async function handleMultiCommunityApplication(applicationId, metadata) {
   );
 
   try {
-    console.log(`Handling multi-community application: ${applicationId}`);
+    console.log(`[MC] Handling multi-community application: ${applicationId}`);
     
     // Get application details with property information
     const { data: application, error: appError } = await supabase
@@ -813,17 +853,9 @@ async function handleMultiCommunityApplication(applicationId, metadata) {
       linkedProperties
     );
 
-    console.log(`Created ${groups.length} property groups`);
-
     // Generate documents for all groups
     const docResults = await generateDocumentsForAllGroups(applicationId, application);
     
-    console.log(`Document generation completed for application ${applicationId}:`, {
-      success: docResults.success,
-      groupsProcessed: docResults.groups.length,
-      errors: docResults.errors.length
-    });
-
     // Create property owner forms for each group (for admin workflow)
     await createPropertyOwnerFormsForGroups(applicationId, groups);
 
