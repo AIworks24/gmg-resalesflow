@@ -912,6 +912,13 @@ async function handleMultiCommunityApplication(applicationId, metadata) {
       .eq('id', applicationId);
     await deleteCachePattern('admin:applications:*');
     console.log(`[MC] Application ${applicationId} status set after error fallback`);
+    // Still attempt to notify all property owners (primary + secondary via linked_properties lookup)
+    try {
+      const { createNotifications } = await import('../notifications/create');
+      await createNotifications(applicationId, supabase);
+    } catch (notifError) {
+      console.warn(`[MC] Failed to create fallback notifications for application ${applicationId}:`, notifError);
+    }
   }
 }
 

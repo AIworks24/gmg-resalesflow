@@ -78,8 +78,20 @@ export default async function handler(req, res) {
       linkedProperties
     );
 
-    res.status(200).json({ 
-      success: true, 
+    // Notify all property owners (primary + secondary) now that groups exist.
+    // createNotifications defers MC notifications until groups are present, so calling
+    // it here ensures secondary owners are informed regardless of whether the Stripe
+    // webhook already fired.
+    try {
+      const { createNotifications } = await import('../notifications/create');
+      const notifResult = await createNotifications(applicationId, supabase);
+      console.log(`[CreateGroups] Notifications for application ${applicationId}: ${notifResult.notificationsCreated} created, ${notifResult.emailsQueued || 0} emails queued`);
+    } catch (notifError) {
+      console.warn(`[CreateGroups] Failed to create notifications for application ${applicationId}:`, notifError);
+    }
+
+    res.status(200).json({
+      success: true,
       message: `Created ${groups.length} property groups for application ${applicationId}`,
       groups: groups
     });

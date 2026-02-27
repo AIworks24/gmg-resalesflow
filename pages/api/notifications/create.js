@@ -131,6 +131,13 @@ export async function createNotifications(applicationId, supabaseClient) {
       return { success: true, notificationsCreated: 0, message: 'Unpaid application, skipping notifications' };
     }
 
+    // For MC apps: NEVER create partial notifications. Only create when property groups exist.
+    // The Stripe webhook creates groups and then calls createNotifications — that's when we notify everyone.
+    if (isMultiCommunityApp && (!propertyGroups || propertyGroups.length === 0)) {
+      console.log(`[Notifications] MC application ${applicationId} - no property groups yet, deferring until payment webhook creates them`);
+      return { success: true, notificationsCreated: 0, message: 'MC app - deferred until property groups exist' };
+    }
+
     const notifications = [];
     const appTypeDisplay = formatApplicationType(application.application_type);
     const packageDisplay = application.package_type === 'rush' ? 'Rush' : 'Standard';
@@ -158,13 +165,39 @@ export async function createNotifications(applicationId, supabaseClient) {
     };
 
     if (isMultiCommunityApp && propertyGroups && propertyGroups.length > 0) {
+      // Property groups exist — use them as the source of truth
+      // Fallback: fetch linked properties when a group has no email (e.g. join failed)
+      let linkedPropsFallback = null;
+      const getLinkedProps = async () => {
+        if (linkedPropsFallback) return linkedPropsFallback;
+        try {
+          const { getLinkedProperties } = await import('../../../lib/multiCommunityUtils');
+          linkedPropsFallback = await getLinkedProperties(application.hoa_property_id, supabaseClient);
+          return linkedPropsFallback || [];
+        } catch (e) {
+          console.warn('[Notifications] Could not fetch linked properties fallback:', e);
+          return [];
+        }
+      };
+
       // Multi-community: notify ALL property owners (primary + each secondary)
       for (const group of propertyGroups) {
         const propName = group.property_name || group.hoa_properties?.name || application.hoa_properties?.name || 'Unknown Property';
-        // Use property_owner_email first, then hoa_properties, then assigned_to, then default_assignee_email
-        const ownerEmail = group.property_owner_email || group.hoa_properties?.property_owner_email ||
+        let ownerEmail = group.property_owner_email || group.hoa_properties?.property_owner_email ||
           group.assigned_to || group.hoa_properties?.default_assignee_email;
         const ownerName = group.hoa_properties?.property_owner_name || application.hoa_properties?.property_owner_name;
+
+        if (!ownerEmail && group.property_id) {
+          const linked = await getLinkedProps();
+          const match = linked.find((lp) => lp.linked_property_id === group.property_id);
+          if (match?.property_owner_email) {
+            ownerEmail = match.property_owner_email;
+            console.log(`[Notifications] Resolved email for "${propName}" from linked properties fallback`);
+          }
+        }
+        if (!ownerEmail) {
+          console.warn(`[Notifications] MC group "${propName}" (id: ${group.id}) has no property_owner_email - skipping`);
+        }
         addOwnersFromSource(ownerEmail, propName, ownerName);
       }
       // Also add primary from hoa_properties if not already in groups (legacy)
@@ -401,8 +434,10 @@ export async function createNotifications(applicationId, supabaseClient) {
 
           try {
             // Check if this notification should skip email (has 'owner.' prefix in original)
-            // Property owners with 'owner.' prefix are staff/admin accounts - they get in-app notifications only
-            const shouldSkipEmail = notification.metadata?.skip_email === true;
+            // Property owners with 'owner.' prefix are staff/admin - normally in-app only.
+            // For MC: ALWAYS send to all property owners so each gets notified for their specific property.
+            const isMCRecipientForEmail = notification.metadata?.is_multi_community_recipient === true;
+            const shouldSkipEmail = !isMCRecipientForEmail && notification.metadata?.skip_email === true;
             
             if (shouldSkipEmail) {
               console.log(`[EMAIL_TRACE] App ${applicationId}: Skipped owner. prefix (in-app only): ${notification.recipient_email}`);
