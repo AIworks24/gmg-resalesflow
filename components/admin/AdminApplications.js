@@ -5162,15 +5162,17 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                           <Building className='w-5 h-5 text-gray-500' />
                           Multi-Community Properties
                         </h3>
-                        {allGroupsReady && !allMcEmailsSent && (
-                          <div className='mb-4 p-4 bg-blue-50 border border-blue-100 rounded-xl'>
-                            <p className='text-sm text-blue-800 mb-3'>
-                              All properties are ready. Send all emails at once so the requestor receives them together.
+                        {allGroupsReady && (
+                          <div className={`mb-4 p-4 border rounded-xl ${allMcEmailsSent ? 'bg-green-50 border-green-100' : 'bg-blue-50 border-blue-100'}`}>
+                            <p className={`text-sm mb-3 ${allMcEmailsSent ? 'text-green-800' : 'text-blue-800'}`}>
+                              {allMcEmailsSent
+                                ? 'All emails have been sent. You can resend them all at any time.'
+                                : 'All properties are ready. Send all emails at once so the requestor receives them together.'}
                             </p>
                             <button
                               onClick={() => handleSendAllMcEmails(selectedApplication.id)}
                               disabled={sendingAllMcEmails}
-                              className='inline-flex items-center gap-2 px-4 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium text-sm disabled:opacity-50 disabled:cursor-not-allowed'
+                              className={`inline-flex items-center gap-2 px-4 py-2.5 text-white rounded-lg font-medium text-sm disabled:opacity-50 disabled:cursor-not-allowed ${allMcEmailsSent ? 'bg-green-600 hover:bg-green-700' : 'bg-blue-600 hover:bg-blue-700'}`}
                             >
                               {sendingAllMcEmails ? (
                                 <>
@@ -5180,7 +5182,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                               ) : (
                                 <>
                                   <Mail className='w-4 h-4' />
-                                  Send All Emails ({propertyGroups.length} properties)
+                                  {allMcEmailsSent ? `Resend All Emails (${propertyGroups.length} properties)` : `Send All Emails (${propertyGroups.length} properties)`}
                                 </>
                               )}
                             </button>

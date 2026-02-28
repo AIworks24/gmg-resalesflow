@@ -75,12 +75,10 @@ export default async function handler(req, res) {
 
     const cookie = req.headers.cookie || '';
 
-    const readyGroups = groups.filter((g) => (g.pdf_url || g.pdf_status === 'completed') && g.email_status !== 'completed' && !g.email_completed_at);
+    // Include all PDF-ready groups regardless of email_status so admins can resend at any time.
+    const readyGroups = groups.filter((g) => g.pdf_url || g.pdf_status === 'completed');
     if (readyGroups.length === 0) {
-      const allSent = groups.every((g) => g.email_status === 'completed' || g.email_completed_at);
-      return res.status(400).json({
-        error: allSent ? 'All emails have already been sent' : 'No properties have PDFs ready to send',
-      });
+      return res.status(400).json({ error: 'No properties have PDFs ready to send' });
     }
 
     const results = [];
