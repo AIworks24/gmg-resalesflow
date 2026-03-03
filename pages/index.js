@@ -702,6 +702,13 @@ const SubmitterInfoStep = React.memo(({ formData, handleInputChange, hoaProperti
     }
   }, [isNorthCarolina, formData.submitterType, handleInputChange]);
 
+  // Clear lender_questionnaire when MC property selected (MC is resale only, not lender questionnaire)
+  React.useEffect(() => {
+    if (selectedProperty?.is_multi_community && formData.submitterType === 'lender_questionnaire') {
+      handleInputChange('submitterType', '');
+    }
+  }, [selectedProperty?.is_multi_community, formData.submitterType, handleInputChange]);
+
   return (
     <div className='space-y-4 sm:space-y-6'>
       <div className='text-center mb-4 sm:mb-6 md:mb-8'>
@@ -729,11 +736,17 @@ const SubmitterInfoStep = React.memo(({ formData, handleInputChange, hoaProperti
               { value: 'lender_questionnaire', label: 'Lender Questionnaire', icon: FileText },
             ];
 
-            // Filter types based on North Carolina selection
-            // For NC properties, only show 'settlement' and 'lender_questionnaire'
-            const availableTypes = isNorthCarolina
-              ? allTypes.filter(type => type.value === 'settlement' || type.value === 'lender_questionnaire')
-              : allTypes;
+            // Filter types based on property rules:
+            // - NC: only settlement and lender_questionnaire
+            // - MC (multi-community): hide lender_questionnaire (MC is for resale only; Public Offering is exception via builder)
+            const isMultiCommunity = selectedProperty?.is_multi_community === true;
+            let availableTypes = allTypes;
+            if (isNorthCarolina) {
+              availableTypes = allTypes.filter(type => type.value === 'settlement' || type.value === 'lender_questionnaire');
+            }
+            if (isMultiCommunity) {
+              availableTypes = availableTypes.filter(type => type.value !== 'lender_questionnaire');
+            }
 
             return availableTypes.map((type) => {
             const Icon = type.icon;

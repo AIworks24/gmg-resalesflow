@@ -3973,9 +3973,10 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                             <Building className='w-5 h-5 text-gray-400 flex-shrink-0' />
                             <div className='min-w-0'>
                               <div className='text-sm font-semibold text-gray-900 mb-0.5'>
-                                {isMC && primaryGroup
-                                  ? (primaryGroup.property_name || formatPropertyAddress(app.property_address, app.unit_number))
-                                  : formatPropertyAddress(app.property_address, app.unit_number)}
+                                {formatPropertyAddress(app.property_address, app.unit_number) ||
+                                  (isMC && primaryGroup?.property_name) ||
+                                  app.hoa_properties?.name ||
+                                  '—'}
                               </div>
                               <div className='text-xs text-gray-500 flex items-center gap-1.5 flex-wrap'>
                                 <span className='inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-semibold text-gray-600'>
@@ -4158,9 +4159,10 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                         )}
                         <div className='min-w-0 flex-1'>
                         <h3 className='text-base font-semibold text-gray-900'>
-                          {isMC && primaryGroup
-                            ? (primaryGroup.property_name || formatPropertyAddress(app.property_address, app.unit_number))
-                            : formatPropertyAddress(app.property_address, app.unit_number)}
+                          {formatPropertyAddress(app.property_address, app.unit_number) ||
+                            (isMC && primaryGroup?.property_name) ||
+                            app.hoa_properties?.name ||
+                            '—'}
                         </h3>
                         <div className='text-sm text-gray-500 mt-0.5 flex flex-col'>
                           <span className='font-medium'>{app.submitter_name}</span>
