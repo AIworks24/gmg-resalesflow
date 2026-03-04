@@ -89,6 +89,8 @@ const AdminPropertiesManagement = () => {
   const [snackbar, setSnackbar] = useState({ show: false, message: '', type: 'success' });
   // Owner name from GMG user (read-only when true)
   const [ownerNameFromGmg, setOwnerNameFromGmg] = useState(false);
+  // Accounting users for settlement assignee dropdown
+  const [accountingUsers, setAccountingUsers] = useState([]);
 
   // Snackbar helper function
   const showSnackbar = (message, type = 'success') => {
@@ -117,7 +119,8 @@ const AdminPropertiesManagement = () => {
     allow_public_offering: false,
     force_price_enabled: false,
     force_price_value: null,
-    multi_community_comment: ''
+    multi_community_comment: '',
+    settlement_assignee_email: null
   });
 
   const supabase = createClientComponentClient();
@@ -134,6 +137,20 @@ const AdminPropertiesManagement = () => {
     }
     return res.json();
   };
+
+  // Fetch accounting users for the settlement assignee dropdown
+  useEffect(() => {
+    const fetchAccountingUsers = async () => {
+      const { data } = await supabase
+        .from('profiles')
+        .select('email, first_name, last_name')
+        .eq('role', 'accounting')
+        .eq('active', true)
+        .order('first_name');
+      setAccountingUsers(data || []);
+    };
+    fetchAccountingUsers();
+  }, []);
 
   // Debounce search term to prevent too many API calls and input focus issues
   useEffect(() => {
@@ -206,7 +223,8 @@ const AdminPropertiesManagement = () => {
       allow_public_offering: false,
       force_price_enabled: false,
       force_price_value: null,
-      multi_community_comment: ''
+      multi_community_comment: '',
+      settlement_assignee_email: null
     });
     setLinkedProperties([]);
     setOwnerNameFromGmg(false);
@@ -285,7 +303,8 @@ const AdminPropertiesManagement = () => {
       allow_public_offering: property.allow_public_offering || false,
       force_price_enabled: property.force_price_enabled || false,
       force_price_value: property.force_price_value || null,
-      multi_community_comment: property.multi_community_comment || ''
+      multi_community_comment: property.multi_community_comment || '',
+      settlement_assignee_email: property.settlement_assignee_email || null
     });
     setLinkedProperties(linked);
     
@@ -335,6 +354,7 @@ const AdminPropertiesManagement = () => {
             force_price_enabled: formData.force_price_enabled || false,
             force_price_value: formData.force_price_enabled ? (formData.force_price_value || null) : null,
             multi_community_comment: formData.multi_community_comment || null,
+            settlement_assignee_email: formData.settlement_assignee_email || null,
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString()
           }])
@@ -370,6 +390,7 @@ const AdminPropertiesManagement = () => {
             force_price_enabled: formData.force_price_enabled || false,
             force_price_value: formData.force_price_enabled ? (formData.force_price_value || null) : null,
             multi_community_comment: formData.multi_community_comment || null,
+            settlement_assignee_email: formData.settlement_assignee_email || null,
             updated_at: new Date().toISOString()
           })
           .eq('id', selectedProperty.id);
@@ -1669,6 +1690,29 @@ const AdminPropertiesManagement = () => {
                       />
                     </div>
                   </div>
+                </div>
+
+                {/* Settlement Application Assignee */}
+                <div className="border-t pt-4">
+                  <h3 className="text-md font-medium text-gray-900 mb-1">Settlement Application Assignee</h3>
+                  <p className="text-xs text-gray-500 mb-3">
+                    Accounting user who will be auto-assigned to new settlement applications for this property.
+                  </p>
+                  <select
+                    value={formData.settlement_assignee_email || ''}
+                    onChange={(e) => setFormData({ ...formData, settlement_assignee_email: e.target.value || null })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                  >
+                    <option value="">— None (use default assignee) —</option>
+                    {accountingUsers.map((u) => (
+                      <option key={u.email} value={u.email}>
+                        {u.first_name} {u.last_name} ({u.email})
+                      </option>
+                    ))}
+                  </select>
+                  {accountingUsers.length === 0 && (
+                    <p className="mt-1 text-xs text-gray-400">No accounting users found in the system.</p>
+                  )}
                 </div>
 
                 {/* Public Offering Statement Settings */}

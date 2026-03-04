@@ -432,6 +432,15 @@ export async function createNotifications(applicationId, supabaseClient) {
             continue;
           }
 
+          // Don't send retroactive emails. If this application already had notifications for other
+          // recipients, a newly-added property owner email gets an in-app record but no email.
+          // This prevents a new owner email being added to hoa_properties from receiving emails
+          // for all historical applications that were submitted before they were added.
+          if (existingRecipients.size > 0) {
+            console.log(`[EMAIL_TRACE] App ${applicationId}: Skipped retroactive email to ${notification.recipient_email} (application already notified other recipients)`);
+            continue;
+          }
+
           try {
             // Check if this notification should skip email (has 'owner.' prefix in original)
             // Property owners with 'owner.' prefix are staff/admin - normally in-app only.

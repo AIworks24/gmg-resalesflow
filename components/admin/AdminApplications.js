@@ -3757,10 +3757,10 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                         setAssigneeFilter('all');
                         setAssigneeDropdownOpen(false);
                       }}
-                      className={`w-full px-3 py-2 text-left text-sm flex items-center gap-2 ${assigneeFilter === 'all' ? 'bg-blue-50 text-blue-700 font-medium' : 'text-gray-700 hover:bg-gray-50'}`}
+                      className={`w-full px-3 py-2 text-left text-sm font-normal flex items-center gap-2 ${assigneeFilter === 'all' ? 'bg-blue-50 text-blue-700' : 'text-gray-700 hover:bg-gray-50'}`}
                     >
                       {assigneeFilter === 'all' && <CheckSquare className='w-4 h-4 flex-shrink-0' />}
-                      <span className={assigneeFilter === 'all' ? 'font-medium' : ''}>All Assignees</span>
+                      <span className='truncate'>All Assignees</span>
                     </button>
                     <button
                       type='button'
@@ -3768,10 +3768,10 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                         setAssigneeFilter('unassigned');
                         setAssigneeDropdownOpen(false);
                       }}
-                      className={`w-full px-3 py-2 text-left text-sm flex items-center gap-2 ${assigneeFilter === 'unassigned' ? 'bg-blue-50 text-blue-700 font-medium' : 'text-gray-700 hover:bg-gray-50'}`}
+                      className={`w-full px-3 py-2 text-left text-sm font-normal flex items-center gap-2 ${assigneeFilter === 'unassigned' ? 'bg-blue-50 text-blue-700' : 'text-gray-700 hover:bg-gray-50'}`}
                     >
                       {assigneeFilter === 'unassigned' && <CheckSquare className='w-4 h-4 flex-shrink-0' />}
-                      <span className={assigneeFilter === 'unassigned' ? 'font-medium' : ''}>Unassigned</span>
+                      <span className='truncate'>Unassigned</span>
                     </button>
                     <div className='border-t border-gray-100 px-2 pt-2 pb-1'>
                       <div className='relative'>
@@ -3800,10 +3800,10 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                               setAssigneeDropdownOpen(false);
                               setAssigneeSearchQuery('');
                             }}
-                            className={`w-full px-3 py-2 text-left text-sm flex items-center gap-2 ${assigneeFilter === staff.email ? 'bg-blue-50 text-blue-700 font-medium' : 'text-gray-700 hover:bg-gray-50'}`}
+                            className={`w-full px-3 py-2 text-left text-sm font-normal flex items-center gap-2 min-w-0 ${assigneeFilter === staff.email ? 'bg-blue-50 text-blue-700' : 'text-gray-700 hover:bg-gray-50'}`}
                           >
                             {assigneeFilter === staff.email && <CheckSquare className='w-4 h-4 flex-shrink-0' />}
-                            <span className={assigneeFilter === staff.email ? 'font-medium' : ''}>
+                            <span className='truncate'>
                               {staff.first_name} {staff.last_name}
                             </span>
                           </button>
@@ -3924,27 +3924,20 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                   );
 
                   const renderAssigneeCell = (group) => {
+                    let name = null;
+                    let title = null;
                     if (group) {
-                      const display = getEffectiveAssigneeDisplay(group, staffMembers);
-                      if (display) {
-                        return (
-                          <div className='flex items-center justify-center gap-1'>
-                            <User className='w-3 h-3 text-gray-400' />
-                            <span className='text-xs' title={group.property_owner_email || group.hoa_properties?.property_owner_email}>{display}</span>
-                          </div>
-                        );
-                      }
-                      return (
-                        <span className='text-gray-400 block text-center text-xs'>Unassigned</span>
-                      );
+                      name = getEffectiveAssigneeDisplay(group, staffMembers);
+                      title = group.property_owner_email || group.hoa_properties?.property_owner_email;
+                    } else if (app.assigned_to) {
+                      name = getAssigneeDisplayName(app.assigned_to, staffMembers) ?? '—';
+                      title = app.assigned_to;
                     }
-                    return app.assigned_to ? (
-                      <div className='flex items-center justify-center gap-1'>
-                        <User className='w-3 h-3 text-gray-400' />
-                        <span>{getAssigneeDisplayName(app.assigned_to, staffMembers) ?? '—'}</span>
-                      </div>
-                    ) : (
-                      <span className='text-gray-400 block text-center'>Unassigned</span>
+                    if (!name) {
+                      return <span className='text-sm text-gray-400 block text-center'>Unassigned</span>;
+                    }
+                    return (
+                      <span className='text-sm text-gray-700 block text-center' title={title}>{name}</span>
                     );
                   };
 
@@ -4748,8 +4741,8 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                   </div>
                 </div>
                 
-                {/* Assignment Section - hidden for multi-community (assignee is per property) */}
-                {selectedApplication.status !== 'rejected' && !isMultiCommunityTreeApp(selectedApplication) && (
+                {/* Assignment Section - hidden for multi-community (assignee is per property), except LQ which always uses a single assignee */}
+                {selectedApplication.status !== 'rejected' && (!isMultiCommunityTreeApp(selectedApplication) || selectedApplication.application_type === 'lender_questionnaire') && (
                   <div className='bg-white rounded-xl border border-gray-200 p-5 shadow-sm'>
                     <h3 className='text-sm font-semibold text-gray-900 mb-4 flex items-center gap-2 uppercase tracking-wider'>
                         <User className='w-4 h-4 text-gray-400' />

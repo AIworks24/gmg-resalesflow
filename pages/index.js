@@ -702,13 +702,6 @@ const SubmitterInfoStep = React.memo(({ formData, handleInputChange, hoaProperti
     }
   }, [isNorthCarolina, formData.submitterType, handleInputChange]);
 
-  // Clear lender_questionnaire when MC property selected (MC is resale only, not lender questionnaire)
-  React.useEffect(() => {
-    if (selectedProperty?.is_multi_community && formData.submitterType === 'lender_questionnaire') {
-      handleInputChange('submitterType', '');
-    }
-  }, [selectedProperty?.is_multi_community, formData.submitterType, handleInputChange]);
-
   return (
     <div className='space-y-4 sm:space-y-6'>
       <div className='text-center mb-4 sm:mb-6 md:mb-8'>
@@ -738,14 +731,10 @@ const SubmitterInfoStep = React.memo(({ formData, handleInputChange, hoaProperti
 
             // Filter types based on property rules:
             // - NC: only settlement and lender_questionnaire
-            // - MC (multi-community): hide lender_questionnaire (MC is for resale only; Public Offering is exception via builder)
-            const isMultiCommunity = selectedProperty?.is_multi_community === true;
+            // - MC: lender_questionnaire is allowed; only the primary property will receive the questionnaire
             let availableTypes = allTypes;
             if (isNorthCarolina) {
               availableTypes = allTypes.filter(type => type.value === 'settlement' || type.value === 'lender_questionnaire');
-            }
-            if (isMultiCommunity) {
-              availableTypes = availableTypes.filter(type => type.value !== 'lender_questionnaire');
             }
 
             return availableTypes.map((type) => {
@@ -6105,7 +6094,7 @@ export default function GMGResaleFlow() {
 
                                   <div className='flex items-center gap-1.5 text-xs font-semibold text-gray-600 bg-gray-100 px-2 py-0.5 rounded-md'>
                                     <Hash className='h-3.5 w-3.5 text-gray-400' />
-                                    image.png                                    <span>App {app.id}</span>
+                                    <span>App {app.id}</span>
                                   </div>
                                   
                                   {isCompleted && (

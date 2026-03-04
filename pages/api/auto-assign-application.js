@@ -56,11 +56,13 @@ async function autoAssignApplication(applicationId, supabase) {
       .select(`
         id,
         hoa_property_id,
+        application_type,
         hoa_properties (
           id,
           name,
           property_owner_email,
           default_assignee_email,
+          settlement_assignee_email,
           is_multi_community
         )
       `)
@@ -90,80 +92,99 @@ async function autoAssignApplication(applicationId, supabase) {
       return { success: false, error: 'No property owner email found' };
     }
 
+    // For settlement applications, use settlement_assignee_email if set
+    const isSettlement = application.application_type === 'settlement_va' ||
+                         application.application_type === 'settlement_nc';
+    if (isSettlement && property.settlement_assignee_email) {
+      const settlementEmail = property.settlement_assignee_email.trim();
+      console.log(`Settlement application detected, using settlement_assignee_email: ${settlementEmail}`);
+
+      const { error: assignError } = await supabase
+        .from('applications')
+        .update({ assigned_to: settlementEmail, updated_at: new Date().toISOString() })
+        .eq('id', applicationId);
+
+      if (assignError) {
+        console.error('Error assigning settlement application:', assignError);
+        return { success: false, error: assignError.message };
+      }
+
+      try {
+        const { createNotifications } = await import('./notifications/create');
+        await createNotifications(applicationId, supabase);
+      } catch (notificationError) {
+        console.warn('Error creating notifications:', notificationError);
+      }
+
+      return { success: true, assignedTo: settlementEmail };
+    }
+
     // Parse emails (handles both single email string and comma-separated string)
     const ownerEmails = parseEmails(property.property_owner_email);
-    
+
     if (ownerEmails.length === 0) {
       console.log(`No valid property owner emails found for application ${applicationId}, skipping auto-assignment`);
       return { success: false, error: 'No valid property owner emails found' };
     }
 
-    // Use default_assignee_email if set and valid, otherwise first email (notifications go to all)
+    // Build ordered list: default assignee first (if set and in list), then the rest
     const defaultEmail = (property.default_assignee_email || '').trim().toLowerCase();
     const defaultInList = defaultEmail && ownerEmails.some(e => (e || '').trim().toLowerCase() === defaultEmail);
-    let ownerEmail = defaultInList 
-      ? ownerEmails.find(e => (e || '').trim().toLowerCase() === defaultEmail) || ownerEmails[0]
-      : ownerEmails[0];
-    
-    // Remove "owner." prefix if present
-    ownerEmail = ownerEmail.replace(/^owner\./, '');
+    const orderedEmails = defaultInList
+      ? [
+          ownerEmails.find(e => (e || '').trim().toLowerCase() === defaultEmail),
+          ...ownerEmails.filter(e => (e || '').trim().toLowerCase() !== defaultEmail)
+        ]
+      : ownerEmails;
 
-    // For multi-community applications, use the primary property's owner email
-    // (The primary property is the one in hoa_property_id, which is already what we have)
-    if (property.is_multi_community) {
-      console.log(`Multi-community application detected, using primary property owner: ${ownerEmail} (from ${ownerEmails.length} email(s))`);
-    } else {
-      console.log(`Single property application, using property owner: ${ownerEmail} (from ${ownerEmails.length} email(s))`);
-    }
+    console.log(`Trying ${orderedEmails.length} email(s) for application ${applicationId} (${property.is_multi_community ? 'MC' : 'single'})`);
 
-    // Check if a user exists with this email in the profiles table
-    // Property owners must have role: staff, admin, or accounting
-    // Try exact match first
-    let { data: profile, error: profileError } = await supabase
-      .from('profiles')
-      .select('id, email, role')
-      .eq('email', ownerEmail)
-      .single();
+    // Try each email in order until we find a valid staff/admin/accounting user
+    const allowedRoles = ['staff', 'admin', 'accounting'];
+    let assignedEmail = null;
 
-    // If not found, try case-insensitive search
-    if (profileError || !profile) {
-      const { data: profiles, error: searchError } = await supabase
+    for (const rawEmail of orderedEmails) {
+      if (!rawEmail) continue;
+      const emailToTry = rawEmail.replace(/^owner\./, '').trim();
+      if (!emailToTry) continue;
+
+      // Exact match first, then case-insensitive fallback
+      let { data: profile } = await supabase
         .from('profiles')
         .select('id, email, role')
-        .ilike('email', ownerEmail);
-      
-      if (!searchError && profiles && profiles.length > 0) {
-        profile = profiles[0];
-        profileError = null;
-        console.log(`Found user with case-insensitive email match: ${profile.email}`);
+        .eq('email', emailToTry)
+        .single();
+
+      if (!profile) {
+        const { data: profiles } = await supabase
+          .from('profiles')
+          .select('id, email, role')
+          .ilike('email', emailToTry);
+        if (profiles && profiles.length > 0) profile = profiles[0];
+      }
+
+      if (profile && allowedRoles.includes(profile.role)) {
+        assignedEmail = profile.email;
+        console.log(`Found valid assignee: ${assignedEmail} (role: ${profile.role})`);
+        break;
+      } else if (profile) {
+        console.log(`Skipping ${emailToTry}: role "${profile.role}" not allowed`);
+      } else {
+        console.log(`Skipping ${emailToTry}: no profile found`);
       }
     }
 
-    if (profileError || !profile) {
-      // Property owner email doesn't exist in the system - this is okay, just leave it unassigned
-      // This handles cases where fake/placeholder emails were used when creating properties
-      console.log(`No user found with email ${ownerEmail} for application ${applicationId}. Leaving application unassigned.`);
-      return { 
-        success: true, 
-        assignedTo: null,
-        message: `Property owner email "${ownerEmail}" does not correspond to a user account. Application left unassigned.`
-      };
-    }
-
-    // Verify the user has the correct role (staff, admin, or accounting)
-    const allowedRoles = ['staff', 'admin', 'accounting'];
-    if (!allowedRoles.includes(profile.role)) {
-      // User exists but doesn't have admin access - leave it unassigned
-      // This handles cases where property owner email exists but user doesn't have the right role
-      console.log(`User ${ownerEmail} has role "${profile.role}" but property owners must be staff, admin, or accounting. Leaving application unassigned.`);
+    if (!assignedEmail) {
+      console.log(`No valid staff/admin/accounting user found among ${orderedEmails.length} email(s) for application ${applicationId}. Leaving unassigned.`);
       return {
         success: true,
         assignedTo: null,
-        message: `Property owner email "${ownerEmail}" exists but user has role "${profile.role}" (not staff/admin/accounting). Application left unassigned.`
+        message: 'No valid staff user found among property owner emails. Application left unassigned.'
       };
     }
 
-    console.log(`Verified property owner user: ${ownerEmail} with role: ${profile.role}`);
+    const ownerEmail = assignedEmail;
+    console.log(`Verified property owner user: ${ownerEmail}`);
 
     // Assign the application to the property owner
     const { error: assignError } = await supabase
