@@ -4028,8 +4028,8 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                           </button>
                         </td>
                       </tr>
-                      {/* Child rows (secondary properties) - tree view */}
-                      {isMC && isExpanded && groups.length > 1 && groups.slice(1).map((group) => (
+                      {/* Child rows (secondary properties) - tree view; hidden for LQ (primary only) */}
+                      {isMC && isExpanded && groups.length > 1 && app.application_type !== 'lender_questionnaire' && groups.slice(1).map((group) => (
                         <tr key={`${app.id}-group-${group.id}`} className='hover:bg-blue-50/20 transition-colors bg-gray-50/50'>
                           <td className='px-6 py-3'>
                             <div className='flex items-center gap-3 pl-10'>
@@ -4236,8 +4236,8 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                     </div>
                   </div>
 
-                  {/* Multi-Community: Secondary Properties (tree view) */}
-                  {isMC && isExpanded && groups.length > 1 && (
+                  {/* Multi-Community: Secondary Properties (tree view); hidden for LQ (primary only) */}
+                  {isMC && isExpanded && groups.length > 1 && app.application_type !== 'lender_questionnaire' && (
                     <div className='border-t border-gray-200 pt-3 mt-3 space-y-2'>
                       <div className='text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2'>Secondary Properties</div>
                       {groups.slice(1).map((group) => (
@@ -4521,8 +4521,8 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                   </div>
                 )}
 
-                {/* Multi-Community Banner */}
-                {selectedApplication.hoa_properties?.is_multi_community && (
+                {/* Multi-Community Banner - not shown for LQ (primary property only) */}
+                {selectedApplication.hoa_properties?.is_multi_community && selectedApplication.application_type !== 'lender_questionnaire' && (
                   <div className='bg-blue-50 border border-blue-100 rounded-xl p-4 flex items-start gap-3'>
                     <Building className='w-5 h-5 text-blue-600 mt-0.5' />
                     <div>
@@ -5190,7 +5190,9 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                               <span className='ml-2 text-gray-600 font-medium'>Loading properties...</span>
                             </div>
                           ) : (
-                            propertyGroups.sort((a, b) => {
+                            propertyGroups
+                            .filter((g) => selectedApplication.application_type !== 'lender_questionnaire' || g.is_primary)
+                            .sort((a, b) => {
                                 if (a.is_primary && !b.is_primary) return -1;
                                 if (!a.is_primary && b.is_primary) return 1;
                                 return (a.property_name || '').localeCompare(b.property_name || '');
