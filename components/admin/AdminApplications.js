@@ -3869,7 +3869,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
               <tbody className='divide-y divide-gray-50'>
                 {applications.map((app) => {
                   const workflowStep = getWorkflowStep(app);
-                  const isMC = isMultiCommunityTreeApp(app);
+                  const isMC = isMultiCommunityTreeApp(app) && app.application_type !== 'lender_questionnaire';
                   const groups = (app.application_property_groups || []).sort((a, b) => (a.is_primary ? -1 : 0) - (b.is_primary ? -1 : 0));
                   const primaryGroup = groups.find((g) => g.is_primary) || groups[0];
                   const isExpanded = isMC && !collapsedMultiCommunityApps.has(app.id);
@@ -4109,7 +4109,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
           ) : (
             applications.map((app) => {
               const workflowStep = getWorkflowStep(app);
-              const isMC = isMultiCommunityTreeApp(app);
+              const isMC = isMultiCommunityTreeApp(app) && app.application_type !== 'lender_questionnaire';
               const groups = (app.application_property_groups || []).sort((a, b) => (a.is_primary ? -1 : 0) - (b.is_primary ? -1 : 0));
               const primaryGroup = groups.find((g) => g.is_primary) || groups[0];
               const isExpanded = isMC && !collapsedMultiCommunityApps.has(app.id);
