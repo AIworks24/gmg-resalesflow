@@ -15,6 +15,9 @@
     },
     "pages/api/send-daily-email.js": {
       "maxDuration": 30
+    },
+    "pages/api/webhooks/stripe.js": {
+      "maxDuration": 300
     }
   }
 }

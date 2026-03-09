@@ -858,15 +858,9 @@ async function handleMultiCommunityApplication(applicationId, metadata) {
       linkedProperties
     );
 
-    // Generate documents for all groups
-    const docResults = await generateDocumentsForAllGroups(applicationId, application);
-    
-    // Create property owner forms for each group (for admin workflow)
-    await createPropertyOwnerFormsForGroups(applicationId, groups);
-
-    // NOW set the final status to payment_completed — this is the first time the
-    // application becomes visible in the admin dashboard. Property groups already
-    // exist, so the tree view renders immediately with no race condition.
+    // Set status to payment_completed immediately after property groups exist.
+    // This makes the application visible in the admin dashboard right away and
+    // ensures createNotifications (below) does not skip due to pending_payment status.
     await supabase
       .from('applications')
       .update({ status: 'payment_completed', updated_at: new Date().toISOString() })
@@ -876,10 +870,10 @@ async function handleMultiCommunityApplication(applicationId, metadata) {
     await deleteCachePattern('admin:applications:*');
     console.log(`[MC] Application ${applicationId} now visible with ${groups.length} property groups`);
 
-    // Send notifications to ALL property owners (primary + secondary)
+    // Send notifications to ALL property owners (primary + secondary) BEFORE PDF generation.
     // Property groups now exist, so createNotifications can find all recipients.
-    // Any notifications already sent to the primary owner at submission time will be
-    // skipped (per-recipient dedup), and new notifications created for secondary owners.
+    // Sending here avoids emails being blocked/delayed by slow PDF generation, which
+    // caused the Stripe webhook to time out and retry ~10 hours later.
     try {
       const { createNotifications } = await import('../notifications/create');
       const notifResult = await createNotifications(applicationId, supabase);
@@ -887,6 +881,12 @@ async function handleMultiCommunityApplication(applicationId, metadata) {
     } catch (notifError) {
       console.warn(`[MC] Failed to create notifications for application ${applicationId}:`, notifError);
     }
+
+    // Generate documents for all groups (slow - PDFs for each property)
+    await generateDocumentsForAllGroups(applicationId, application);
+
+    // Create property owner forms for each group (for admin workflow)
+    await createPropertyOwnerFormsForGroups(applicationId, groups);
 
   } catch (error) {
     console.error('Error handling multi-community application:', error);
