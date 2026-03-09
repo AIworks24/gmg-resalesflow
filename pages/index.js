@@ -5835,7 +5835,7 @@ export default function GMGResaleFlow() {
                 </div>
               </div>
               <h1 className='text-5xl md:text-7xl font-extrabold text-gray-900 tracking-tight mb-8 leading-tight animate-slideUp'>
-                Welcome to <br/>
+                Welcome tso <br/>
                 <span className='text-transparent bg-clip-text bg-gradient-to-r from-green-600 to-teal-600 drop-shadow-sm'>GMG ResaleFlow</span>
               </h1>
               <p className='mt-6 max-w-3xl mx-auto text-xl md:text-2xl text-gray-600 leading-relaxed animate-slideUp delay-100 font-light'>
