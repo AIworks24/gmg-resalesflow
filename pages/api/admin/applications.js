@@ -228,9 +228,13 @@ export default async function handler(req, res) {
       // Standard application: needs both forms completed, PDF generated, and email sent
       const inspectionForm = app.property_owner_forms?.find(form => form.form_type === 'inspection_form');
       const resaleForm = app.property_owner_forms?.find(form => form.form_type === 'resale_certificate');
-      const inspectionStatus = inspectionForm?.status || 'not_started';
-      const resaleStatus = resaleForm?.status || 'not_started';
-      const hasPDF = !!app.pdf_url;
+      const inspectionStatus = (inspectionForm?.status === 'completed' || !!app.inspection_form_completed_at)
+        ? 'completed'
+        : (inspectionForm?.status || 'not_started');
+      const resaleStatus = (resaleForm?.status === 'completed' || !!app.resale_certificate_completed_at)
+        ? 'completed'
+        : (resaleForm?.status || 'not_started');
+      const hasPDF = !!app.pdf_url || !!app.pdf_completed_at;
       const hasNotificationSent = app.notifications?.some(n => n.notification_type === 'application_approved');
       const hasEmailCompletedAt = !!app.email_completed_at;
       const hasEmailSent = hasNotificationSent || hasEmailCompletedAt;

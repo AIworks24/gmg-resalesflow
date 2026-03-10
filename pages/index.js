@@ -242,9 +242,10 @@ const calculateTotalDatabase = async (formData, hoaProperties, applicationType) 
           formData.publicOffering
         );
         
-        // Add convenience fee if credit card and total > 0
-        const convenienceFee = (formData.paymentMethod === 'credit_card' && pricing.total > 0) ? 9.95 : 0;
-        return pricing.total + convenienceFee;
+        // For multi-community, total_amount stores refundable service fees only.
+        // CC fees are non-refundable and are charged per-association by Stripe (in create-checkout-session.js).
+        // Including only one CC fee here was a bug — the correct refundable amount excludes all CC fees.
+        return pricing.total;
       }
     }
     

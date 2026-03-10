@@ -1031,9 +1031,13 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
     // Standard single property workflow
     const inspectionForm = application.property_owner_forms?.find(form => form.form_type === 'inspection_form');
     const resaleForm = application.property_owner_forms?.find(form => form.form_type === 'resale_certificate');
-    const inspectionStatus = inspectionForm?.status || 'not_started';
-    const resaleStatus = resaleForm?.status || 'not_started';
-    const hasPDF = application.pdf_url;
+    const inspectionStatus = (inspectionForm?.status === 'completed' || !!application.inspection_form_completed_at)
+      ? 'completed'
+      : (inspectionForm?.status || 'not_started');
+    const resaleStatus = (resaleForm?.status === 'completed' || !!application.resale_certificate_completed_at)
+      ? 'completed'
+      : (resaleForm?.status || 'not_started');
+    const hasPDF = application.pdf_url || application.pdf_completed_at;
     const hasNotificationSent = application.notifications?.some(n => n.notification_type === 'application_approved');
     const hasEmailCompletedAt = !!application.email_completed_at;
     const hasEmailSent = hasNotificationSent || hasEmailCompletedAt;
