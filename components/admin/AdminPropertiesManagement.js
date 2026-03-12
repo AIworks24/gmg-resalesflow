@@ -28,7 +28,11 @@ import {
   AlertTriangle,
   CheckCircle,
   Info,
-  HelpCircle
+  HelpCircle,
+  ArrowUpDown,
+  ArrowUp,
+  ArrowDown,
+  Filter
 } from 'lucide-react';
 import { 
   getLinkedProperties, 
@@ -63,6 +67,9 @@ const AdminPropertiesManagement = () => {
   const { role: userRole } = useAdminAuthStore();
   const [searchTerm, setSearchTerm] = useState('');
   const [debouncedSearchTerm, setDebouncedSearchTerm] = useState('');
+  const [sortOrder, setSortOrder] = useState('asc');
+  const [locationFilter, setLocationFilter] = useState('');
+  const [typeFilter, setTypeFilter] = useState('');
   const [showModal, setShowModal] = useState(false);
   const [modalMode, setModalMode] = useState('add'); // 'add' or 'edit'
   const [selectedProperty, setSelectedProperty] = useState(null);
@@ -168,9 +175,14 @@ const AdminPropertiesManagement = () => {
     }
   }, [debouncedSearchTerm]);
 
+  // Reset to page 1 when filters change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [locationFilter, typeFilter, sortOrder]);
+
   // Build API URL with query parameters
   // Always bypass cache to ensure fresh data for properties
-  const apiUrl = `/api/admin/hoa-properties?page=${currentPage}&pageSize=${pageSize}&search=${encodeURIComponent(debouncedSearchTerm)}&bypassCache=true`;
+  const apiUrl = `/api/admin/hoa-properties?page=${currentPage}&pageSize=${pageSize}&search=${encodeURIComponent(debouncedSearchTerm)}&sortField=name&sortOrder=${sortOrder}&locationFilter=${encodeURIComponent(locationFilter)}&typeFilter=${encodeURIComponent(typeFilter)}&bypassCache=true`;
 
   // Fetch properties using SWR
   const { data: swrData, error: swrError, isLoading, mutate } = useSWR(
@@ -455,7 +467,7 @@ const AdminPropertiesManagement = () => {
       // Use page 1 and empty search for new properties to ensure they're visible
       const refreshPage = modalMode === 'add' ? 1 : currentPage;
       const refreshSearch = modalMode === 'add' ? '' : debouncedSearchTerm;
-      const refreshUrl = `/api/admin/hoa-properties?page=${refreshPage}&pageSize=${pageSize}&search=${encodeURIComponent(refreshSearch)}&bypassCache=true&_t=${Date.now()}`;
+      const refreshUrl = `/api/admin/hoa-properties?page=${refreshPage}&pageSize=${pageSize}&search=${encodeURIComponent(refreshSearch)}&sortField=name&sortOrder=${sortOrder}&locationFilter=${encodeURIComponent(locationFilter)}&typeFilter=${encodeURIComponent(typeFilter)}&bypassCache=true&_t=${Date.now()}`;
       
       try {
         const freshResponse = await fetch(refreshUrl);
@@ -768,7 +780,7 @@ const AdminPropertiesManagement = () => {
       
       // Force SWR to revalidate by fetching with bypassCache parameter
       // This ensures we have the latest data from the database
-      const refreshUrl = `/api/admin/hoa-properties?page=${currentPage}&pageSize=${pageSize}&search=${encodeURIComponent(debouncedSearchTerm)}&bypassCache=true&_t=${Date.now()}`;
+      const refreshUrl = `/api/admin/hoa-properties?page=${currentPage}&pageSize=${pageSize}&search=${encodeURIComponent(debouncedSearchTerm)}&sortField=name&sortOrder=${sortOrder}&locationFilter=${encodeURIComponent(locationFilter)}&typeFilter=${encodeURIComponent(typeFilter)}&bypassCache=true&_t=${Date.now()}`;
       try {
         const freshResponse = await fetch(refreshUrl);
         if (!freshResponse.ok) throw new Error('Failed to refresh');
@@ -957,7 +969,7 @@ const AdminPropertiesManagement = () => {
       
       // Force SWR to revalidate by fetching with bypassCache parameter
       // This ensures we have the latest data from the database
-      const refreshUrl = `/api/admin/hoa-properties?page=${currentPage}&pageSize=${pageSize}&search=${encodeURIComponent(debouncedSearchTerm)}&bypassCache=true&_t=${Date.now()}`;
+      const refreshUrl = `/api/admin/hoa-properties?page=${currentPage}&pageSize=${pageSize}&search=${encodeURIComponent(debouncedSearchTerm)}&sortField=name&sortOrder=${sortOrder}&locationFilter=${encodeURIComponent(locationFilter)}&typeFilter=${encodeURIComponent(typeFilter)}&bypassCache=true&_t=${Date.now()}`;
       try {
         const freshResponse = await fetch(refreshUrl);
         if (!freshResponse.ok) throw new Error('Failed to refresh');
@@ -1132,21 +1144,60 @@ const AdminPropertiesManagement = () => {
         {/* Controls & Search Card */}
         <div className='bg-white rounded-xl shadow-sm border border-gray-200 mb-6 overflow-hidden'>
           <div className='p-5'>
-            <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
-              <div className="relative flex-1 w-full sm:max-w-md">
-                <Search className="w-5 h-5 absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
-                <input
-                  type="text"
-                  placeholder="Search properties..."
-                  value={searchTerm}
-                  onChange={(e) => handleSearch(e.target.value)}
-                  className="w-full pl-10 pr-4 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
-                  autoComplete="off"
-                />
+            <div className="flex flex-col lg:flex-row items-center justify-between gap-4">
+              <div className="flex flex-col sm:flex-row items-center gap-4 flex-1 w-full">
+                <div className="relative w-full sm:max-w-md">
+                  <Search className="w-5 h-5 absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
+                  <input
+                    type="text"
+                    placeholder="Search properties..."
+                    value={searchTerm}
+                    onChange={(e) => handleSearch(e.target.value)}
+                    className="w-full pl-10 pr-4 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
+                    autoComplete="off"
+                  />
+                </div>
+                
+                {/* Filters */}
+                <div className="flex items-center gap-3 w-full sm:w-auto">
+                  <div className="relative flex-1 sm:flex-none">
+                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                      <Filter className="h-4 w-4 text-gray-400" />
+                    </div>
+                    <select
+                      value={locationFilter}
+                      onChange={(e) => setLocationFilter(e.target.value)}
+                      className="w-full pl-9 pr-8 py-2.5 bg-white border border-gray-200 rounded-lg text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 appearance-none transition-all"
+                    >
+                      <option value="">All Locations</option>
+                      <option value="Virginia">Virginia</option>
+                      <option value="North Carolina">North Carolina</option>
+                    </select>
+                    <div className="absolute inset-y-0 right-0 pr-2 flex items-center pointer-events-none">
+                      <ChevronDown className="h-4 w-4 text-gray-400" />
+                    </div>
+                  </div>
+                  
+                  <div className="relative flex-1 sm:flex-none">
+                    <select
+                      value={typeFilter}
+                      onChange={(e) => setTypeFilter(e.target.value)}
+                      className="w-full pl-3 pr-8 py-2.5 bg-white border border-gray-200 rounded-lg text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 appearance-none transition-all"
+                    >
+                      <option value="">All Types</option>
+                      <option value="single">Single Community</option>
+                      <option value="multi">Multi-Community</option>
+                    </select>
+                    <div className="absolute inset-y-0 right-0 pr-2 flex items-center pointer-events-none">
+                      <ChevronDown className="h-4 w-4 text-gray-400" />
+                    </div>
+                  </div>
+                </div>
               </div>
+              
               <button
                 onClick={openAddModal}
-                className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                className="w-full lg:w-auto flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 whitespace-nowrap"
               >
                 <Plus className="w-4 h-4" />
                 Add Property
@@ -1161,8 +1212,16 @@ const AdminPropertiesManagement = () => {
             <table className="min-w-full divide-y divide-gray-200">
               <thead className="bg-gray-50/80 border-b border-gray-100">
                 <tr>
-                  <th className="px-6 py-4 text-center text-xs font-semibold text-gray-500 uppercase tracking-wider">
-                    Property
+                  <th 
+                    className="px-6 py-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 transition-colors group"
+                    onClick={() => setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc')}
+                  >
+                    <div className="flex items-center gap-2">
+                      Property
+                      <div className="text-gray-400 group-hover:text-gray-600 transition-colors">
+                        {sortOrder === 'asc' ? <ArrowUp className="w-4 h-4" /> : <ArrowDown className="w-4 h-4" />}
+                      </div>
+                    </div>
                   </th>
                   <th className="px-6 py-4 text-center text-xs font-semibold text-gray-500 uppercase tracking-wider">
                     Location

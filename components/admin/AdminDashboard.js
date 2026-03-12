@@ -1072,9 +1072,11 @@ const AdminDashboard = ({ userRole }) => {
                   <div>
                     <strong>Closing Date:</strong>{' '}
                     {selectedApplication.closing_date
-                      ? new Date(
-                          selectedApplication.closing_date
-                        ).toLocaleDateString()
+                      ? (() => {
+                          const m = selectedApplication.closing_date.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+                          if (m) return new Date(parseInt(m[1]), parseInt(m[2], 10) - 1, parseInt(m[3], 10)).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+                          return new Date(selectedApplication.closing_date).toLocaleDateString();
+                        })()
                       : 'TBD'}
                   </div>
                 </div>

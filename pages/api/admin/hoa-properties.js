@@ -32,11 +32,15 @@ export default async function handler(req, res) {
     const page = parseInt(req.query.page) || 1;
     const pageSize = parseInt(req.query.pageSize) || 10;
     const search = req.query.search || '';
+    const sortField = req.query.sortField || 'name';
+    const sortOrder = req.query.sortOrder || 'asc';
+    const locationFilter = req.query.locationFilter || '';
+    const typeFilter = req.query.typeFilter || '';
     const bypassCache = req.query.bypassCache === 'true'; // Allow bypassing cache
 
     // Try to get from cache first (unless bypass is requested)
     // Cache key includes pagination params and user ID to prevent collisions
-    const cacheKey = `admin:hoa_properties:${user.id}:page:${page}:size:${pageSize}:search:${search}`;
+    const cacheKey = `admin:hoa_properties:${user.id}:page:${page}:size:${pageSize}:search:${search}:sort:${sortField}:${sortOrder}:loc:${locationFilter}:type:${typeFilter}`;
     
     if (!bypassCache) {
       const cachedData = await getCache(cacheKey);
@@ -62,12 +66,32 @@ export default async function handler(req, res) {
     let query = supabase
       .from('hoa_properties')
       .select('*', { count: 'exact' })
-      .is('deleted_at', null) // Only get non-deleted properties
-      .order('name', { ascending: true });
+      .is('deleted_at', null); // Only get non-deleted properties
 
     // Apply search filter if provided
     if (search && search.trim()) {
       query = query.or(`name.ilike.%${search}%,location.ilike.%${search}%,property_owner_name.ilike.%${search}%,property_owner_email.ilike.%${search}%`);
+    }
+
+    // Apply location filter
+    if (locationFilter) {
+      query = query.eq('location', locationFilter);
+    }
+
+    // Apply type filter
+    if (typeFilter) {
+      if (typeFilter === 'multi') {
+        query = query.eq('is_multi_community', true);
+      } else if (typeFilter === 'single') {
+        query = query.eq('is_multi_community', false);
+      }
+    }
+
+    // Apply sorting
+    if (sortField === 'name') {
+      query = query.order('name', { ascending: sortOrder === 'asc' });
+    } else {
+      query = query.order('name', { ascending: true });
     }
 
     // Apply pagination
