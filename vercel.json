@@ -7,6 +7,10 @@
     {
       "path": "/api/send-daily-email",
       "schedule": "0 0 * * *"
+    },
+    {
+      "path": "/api/check-deadline-reminders",
+      "schedule": "0 0 * * *"
     }
   ],
   "functions": {
@@ -14,6 +18,9 @@
       "maxDuration": 30
     },
     "pages/api/send-daily-email.js": {
+      "maxDuration": 30
+    },
+    "pages/api/check-deadline-reminders.js": {
       "maxDuration": 30
     },
     "pages/api/webhooks/stripe.js": {
