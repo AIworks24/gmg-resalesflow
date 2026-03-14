@@ -327,6 +327,32 @@ export default async function handler(req, res) {
       console.log('No HOA property ID found in application');
     }
 
+    // Add application-specific attachments
+    try {
+      const { data: appAttachmentsList } = await supabase.storage
+        .from('bucket0')
+        .list(`application_attachments/${applicationId}`, { limit: 100, offset: 0 });
+      if (appAttachmentsList && appAttachmentsList.length > 0) {
+        for (const file of appAttachmentsList) {
+          const { data: urlData } = await supabase.storage
+            .from('bucket0')
+            .createSignedUrl(`application_attachments/${applicationId}/${file.name}`, EXPIRY_30_DAYS);
+          if (urlData?.signedUrl) {
+            const cleanFilename = file.name.replace(/^\d+_/, '');
+            downloadLinks.push({
+              filename: cleanFilename,
+              downloadUrl: urlData.signedUrl,
+              type: 'document',
+              description: 'Additional Document',
+              size: file.metadata?.size || 'Unknown'
+            });
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Error adding application attachments to email:', error);
+    }
+
     // Send the actual email
     console.log('Sending email with', downloadLinks.length, 'download links');
     downloadLinks.forEach((link, index) => {

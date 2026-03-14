@@ -95,7 +95,8 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(10);
   const [showAttachmentModal, setShowAttachmentModal] = useState(false);
-  const [temporaryAttachments, setTemporaryAttachments] = useState([]);
+  const [applicationAttachments, setApplicationAttachments] = useState([]);
+  const [loadingApplicationAttachments, setLoadingApplicationAttachments] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [propertyFiles, setPropertyFiles] = useState([]);
   const [loadingPropertyFiles, setLoadingPropertyFiles] = useState(false);
@@ -1169,7 +1170,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
   }, []);
 
 
-  // Load property files when attachment modal opens
+  // Load property files and application attachments when attachment modal opens
   useEffect(() => {
     if (showAttachmentModal && selectedApplication?.hoa_property_id) {
       loadPropertyFiles(selectedApplication.hoa_property_id);
@@ -1177,7 +1178,12 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
       setLoadingPropertyFiles(false);
       setPropertyFiles([]);
     }
-  }, [showAttachmentModal, selectedApplication?.hoa_property_id]);
+    if (showAttachmentModal && selectedApplication?.id) {
+      loadApplicationAttachments(selectedApplication.id);
+    } else if (showAttachmentModal && !selectedApplication?.id) {
+      setApplicationAttachments([]);
+    }
+  }, [showAttachmentModal, selectedApplication?.hoa_property_id, selectedApplication?.id]);
 
   // Load property groups when application is selected
   useEffect(() => {
@@ -2790,9 +2796,6 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
     // If email was sent successfully, do the post-processing
     if (emailSentSuccessfully) {
       try {
-        // Clear temporary attachments after successful send
-        setTemporaryAttachments([]);
-        
         // PRIMARY: Immediately update the selected application's email status
         // This ensures the UI updates instantly and consistently
         if (selectedApplication && selectedApplication.id === applicationId) {
@@ -2832,29 +2835,71 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
   };
 
   // Helper functions for attachment management
-  const handleFileSelect = (event) => {
-    const files = Array.from(event.target.files);
-    setUploading(true);
-    
-    // Convert files to temporary attachment objects
-    const newAttachments = files.map(file => ({
-      id: Date.now() + Math.random(),
-      name: file.name,
-      size: file.size,
-      type: file.type,
-      file: file,
-      isTemporary: true
-    }));
-    
-    setTemporaryAttachments(prev => [...prev, ...newAttachments]);
-    setUploading(false);
-    
-    // Clear the input
-    event.target.value = '';
+  const loadApplicationAttachments = async (applicationId) => {
+    if (!applicationId) {
+      setApplicationAttachments([]);
+      return;
+    }
+    setLoadingApplicationAttachments(true);
+    try {
+      const { data, error } = await supabase.storage
+        .from('bucket0')
+        .list(`application_attachments/${applicationId}`, { limit: 100, offset: 0 });
+      if (error) throw error;
+      const filesWithUrls = await Promise.all((data || []).map(async (file) => {
+        const { data: urlData } = await supabase.storage
+          .from('bucket0')
+          .createSignedUrl(`application_attachments/${applicationId}/${file.name}`, 3600);
+        return {
+          id: `app-attachment-${file.name}`,
+          name: file.name.replace(/^\d+_/, ''), // Remove timestamp prefix
+          originalName: file.name,
+          size: file.metadata?.size || 0,
+          type: file.metadata?.mimetype || 'application/octet-stream',
+          url: urlData?.signedUrl,
+          isApplicationAttachment: true
+        };
+      }));
+      setApplicationAttachments(filesWithUrls);
+    } catch (error) {
+      console.error('Error loading application attachments:', error);
+      setApplicationAttachments([]);
+    } finally {
+      setLoadingApplicationAttachments(false);
+    }
   };
 
-  const removeTemporaryAttachment = (attachmentId) => {
-    setTemporaryAttachments(prev => prev.filter(att => att.id !== attachmentId));
+  const handleFileSelect = async (event) => {
+    const files = Array.from(event.target.files);
+    if (!selectedApplication?.id) return;
+    setUploading(true);
+    try {
+      const uploadPromises = files.map(async (file) => {
+        const fileName = `${Date.now()}_${file.name}`;
+        const filePath = `application_attachments/${selectedApplication.id}/${fileName}`;
+        const { error } = await supabase.storage.from('bucket0').upload(filePath, file);
+        if (error) throw error;
+      });
+      await Promise.all(uploadPromises);
+      await loadApplicationAttachments(selectedApplication.id);
+    } catch (error) {
+      showSnackbar('Error uploading file: ' + error.message, 'error');
+    } finally {
+      setUploading(false);
+      event.target.value = '';
+    }
+  };
+
+  const deleteApplicationAttachment = async (originalName) => {
+    if (!selectedApplication?.id) return;
+    try {
+      const filePath = `application_attachments/${selectedApplication.id}/${originalName}`;
+      const { error } = await supabase.storage.from('bucket0').remove([filePath]);
+      if (error) throw error;
+      await loadApplicationAttachments(selectedApplication.id);
+    } catch (error) {
+      showSnackbar('Error deleting file: ' + error.message, 'error');
+    }
   };
 
   const formatFileSize = (bytes) => {
@@ -3105,7 +3150,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
     const allAttachments = [
       ...(pdfFile ? [pdfFile] : []),
       ...propertyFiles,
-      ...temporaryAttachments
+      ...applicationAttachments
     ];
 
     return (
@@ -3201,13 +3246,22 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                         </div>
                       </div>
                     </div>
-                    <button
-                      onClick={() => window.open(file.url, '_blank')}
-                      className='p-2 text-gray-400 hover:text-blue-600'
-                      title="View file"
-                    >
-                      <Eye className='w-4 h-4' />
-                    </button>
+                    <div className='flex items-center gap-1'>
+                      <button
+                        onClick={() => window.open(file.url, '_blank')}
+                        className='p-2 text-gray-400 hover:text-blue-600'
+                        title="View file"
+                      >
+                        <Eye className='w-4 h-4' />
+                      </button>
+                      <button
+                        onClick={() => deletePropertyFile(file.originalName)}
+                        className='p-2 text-gray-400 hover:text-red-600'
+                        title="Delete file"
+                      >
+                        <Trash2 className='w-4 h-4' />
+                      </button>
+                    </div>
                   </div>
                 ))}
                 <div className='pt-2'>
@@ -3223,46 +3277,57 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
             )}
           </div>
 
-          {/* Temporary Attachments */}
-          {temporaryAttachments.length > 0 && (
-            <div>
-              <h3 className='text-lg font-medium text-gray-900 mb-4'>Additional Files ({temporaryAttachments.length})</h3>
-              <div className='space-y-3'>
-                {temporaryAttachments.map((attachment) => (
+          {/* Application-Specific Attachments */}
+          <div>
+            <h3 className='text-lg font-medium text-gray-900 mb-4'>Additional Files {applicationAttachments.length > 0 && `(${applicationAttachments.length})`}</h3>
+            {loadingApplicationAttachments ? (
+              <div className='text-center py-4 text-gray-500 border border-gray-200 rounded-lg bg-gray-50'>
+                <RefreshCw className='w-6 h-6 mx-auto mb-2 text-gray-300 animate-spin' />
+                <p className='text-sm'>Loading...</p>
+              </div>
+            ) : applicationAttachments.length > 0 && (
+              <div className='space-y-3 mb-4'>
+                {applicationAttachments.map((attachment) => (
                   <div
                     key={attachment.id}
                     className='flex items-center justify-between p-3 border border-gray-200 rounded-lg hover:bg-gray-50'
                   >
                     <div className='flex items-center gap-3'>
-                      <FileText className='w-5 h-5 text-blue-500' />
+                      <FileText className='w-5 h-5 text-purple-500' />
                       <div>
                         <p className='font-medium text-gray-900'>{attachment.name}</p>
                         <div className='flex items-center gap-2 text-sm text-gray-500'>
-                          {attachment.size && <span>{formatFileSize(attachment.size)}</span>}
-                          <span className='px-2 py-1 bg-blue-100 text-blue-700 rounded text-xs'>New Upload</span>
+                          {attachment.size > 0 && <span>{formatFileSize(attachment.size)}</span>}
+                          <span className='px-2 py-1 bg-purple-100 text-purple-700 rounded text-xs'>Application File</span>
                         </div>
                       </div>
                     </div>
-                    <button
-                      onClick={() => removeTemporaryAttachment(attachment.id)}
-                      className='p-2 text-gray-400 hover:text-red-600'
-                      title="Remove file"
-                    >
-                      <Trash2 className='w-4 h-4' />
-                    </button>
+                    <div className='flex items-center gap-1'>
+                      {attachment.url && (
+                        <button
+                          onClick={() => window.open(attachment.url, '_blank')}
+                          className='p-2 text-gray-400 hover:text-blue-600'
+                          title="View file"
+                        >
+                          <Eye className='w-4 h-4' />
+                        </button>
+                      )}
+                      <button
+                        onClick={() => deleteApplicationAttachment(attachment.originalName)}
+                        className='p-2 text-gray-400 hover:text-red-600'
+                        title="Delete file"
+                      >
+                        <Trash2 className='w-4 h-4' />
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
-            </div>
-          )}
-
-          {/* Upload New Files */}
-          <div>
-            <h3 className='text-lg font-medium text-gray-900 mb-4'>Add Additional Files</h3>
+            )}
             <div className='border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-gray-400 transition-colors'>
               <Upload className='w-8 h-8 text-gray-400 mx-auto mb-3' />
               <p className='text-gray-600 mb-2'>Upload additional documents</p>
-              <p className='text-sm text-gray-500 mb-4'>These files will be attached to the completion email</p>
+              <p className='text-sm text-gray-500 mb-4'>These files will be attached to the completion email for this application only</p>
               <input
                 type="file"
                 multiple
