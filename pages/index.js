@@ -3737,14 +3737,8 @@ const ReviewSubmitStep = ({ formData, handleInputChange, stripePrices, applicati
       ? formData.buyerEmails.filter(e => e && e.trim())
       : (formData.buyerEmail && formData.buyerEmail.trim() ? [formData.buyerEmail] : []);
     
-    // Format closing_date from date string to YYYY-MM-DD format for input
-    let closingDateFormatted = '';
-    if (formData.closingDate) {
-      const date = new Date(formData.closingDate);
-      if (!isNaN(date.getTime())) {
-        closingDateFormatted = date.toISOString().split('T')[0];
-      }
-    }
+    // closing_date is a Postgres `date` column / HTML date input — always YYYY-MM-DD, use directly
+    const closingDateFormatted = formData.closingDate || '';
     
     setEditedDetails({
       submitter_name: formData.submitterName || '',

@@ -544,14 +544,8 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
     
     const buyerEmails = parseEmails(selectedApplication.buyer_email || '');
     
-    // Format closing_date from date string to YYYY-MM-DD format for input
-    let closingDateFormatted = '';
-    if (selectedApplication.closing_date) {
-      const date = new Date(selectedApplication.closing_date);
-      if (!isNaN(date.getTime())) {
-        closingDateFormatted = date.toISOString().split('T')[0];
-      }
-    }
+    // closing_date is a Postgres `date` column — Supabase always returns YYYY-MM-DD, use directly
+    const closingDateFormatted = selectedApplication.closing_date || '';
     
     setEditedDetails({
       submitter_name: selectedApplication.submitter_name || '',

@@ -62,7 +62,10 @@ export default async function handler(req, res) {
         notes,
         stripe_payment_intent_id,
         payment_status,
-        hoa_properties(name, property_owner_email, property_owner_name)
+        payment_method,
+        package_type,
+        hoa_properties(name, property_owner_email, property_owner_name),
+        application_property_groups(id)
       `)
       .eq('id', applicationId)
       .single();
@@ -107,6 +110,13 @@ export default async function handler(req, res) {
       console.error('Error updating application:', updateError);
       throw updateError;
     }
+
+    // Calculate refund amount: total paid minus all CC convenience fees (non-refundable)
+    const CONVENIENCE_FEE_CENTS = 995; // $9.95 per property
+    const isCreditCard = application.payment_method === 'credit_card';
+    const numProperties = (application.application_property_groups || []).length || 1;
+    const totalCCFees = isCreditCard ? (CONVENIENCE_FEE_CENTS * numProperties) / 100 : 0;
+    const refundAmount = application.total_amount > 0 ? application.total_amount - totalCCFees : 0;
 
     // Send email to requestor and resales@gmgva.com
     const submitterEmail = application.submitter_email;
@@ -335,11 +345,25 @@ export default async function handler(req, res) {
                         <td style="padding: 12px 0; border-bottom: 1px solid #e5e7eb; font-size: 14px; color: #111827; text-align: right; font-weight: 500;">#${application.id}</td>
                       </tr>
                       <tr>
-                        <td style="padding: 12px 0; border-bottom: 1px solid #e5e7eb; font-size: 14px; color: #6b7280; text-align: left;"><strong style="color: #374151;">Application Amount:</strong></td>
+                        <td style="padding: 12px 0; border-bottom: 1px solid #e5e7eb; font-size: 14px; color: #6b7280; text-align: left;"><strong style="color: #374151;">Total Paid:</strong></td>
                         <td style="padding: 12px 0; border-bottom: 1px solid #e5e7eb; font-size: 20px; color: #0f4734; text-align: right; font-weight: 700;">
                           ${application.total_amount > 0 ? `$${application.total_amount.toFixed(2)}` : 'Free (Standard Processing)'}
                         </td>
                       </tr>
+                      ${isCreditCard && application.total_amount > 0 ? `
+                      <tr>
+                        <td style="padding: 12px 0; border-bottom: 1px solid #e5e7eb; font-size: 14px; color: #6b7280; text-align: left;"><strong style="color: #374151;">CC Fees (non-refundable):</strong></td>
+                        <td style="padding: 12px 0; border-bottom: 1px solid #e5e7eb; font-size: 14px; color: #6b7280; text-align: right;">
+                          -$${totalCCFees.toFixed(2)} (${numProperties} × $9.95)
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style="padding: 12px 0; border-bottom: 1px solid #e5e7eb; font-size: 14px; color: #6b7280; text-align: left;"><strong style="color: #374151;">Refund Amount:</strong></td>
+                        <td style="padding: 12px 0; border-bottom: 1px solid #e5e7eb; font-size: 20px; color: #b91c1c; text-align: right; font-weight: 700;">
+                          $${refundAmount.toFixed(2)}
+                        </td>
+                      </tr>
+                      ` : ''}
                       <tr>
                         <td style="padding: 12px 0; font-size: 14px; color: #6b7280; text-align: left;"><strong style="color: #374151;">Payment Reference:</strong></td>
                         <td style="padding: 12px 0; font-size: 14px; color: #111827; text-align: right; font-weight: 500; font-family: monospace;">
