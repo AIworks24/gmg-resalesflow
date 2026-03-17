@@ -155,13 +155,17 @@ export default async function handler(req, res) {
       // Standard application: needs both forms completed, PDF generated, and email sent
       const inspectionForm = app.property_owner_forms?.find(form => form.form_type === 'inspection_form');
       const resaleForm = app.property_owner_forms?.find(form => form.form_type === 'resale_certificate');
-      const inspectionStatus = inspectionForm?.status || 'not_started';
-      const resaleStatus = resaleForm?.status || 'not_started';
-      const hasPDF = !!app.pdf_url;
+      const inspectionStatus = (inspectionForm?.status === 'completed' || !!app.inspection_form_completed_at)
+        ? 'completed'
+        : (inspectionForm?.status || 'not_started');
+      const resaleStatus = (resaleForm?.status === 'completed' || !!app.resale_certificate_completed_at)
+        ? 'completed'
+        : (resaleForm?.status || 'not_started');
+      const hasPDF = !!app.pdf_url || !!app.pdf_completed_at;
       const hasNotificationSent = app.notifications?.some(n => n.notification_type === 'application_approved');
       const hasEmailCompletedAt = !!app.email_completed_at;
       const hasEmailSent = hasNotificationSent || hasEmailCompletedAt;
-      
+
       return inspectionStatus === 'completed' && resaleStatus === 'completed' && hasPDF && hasEmailSent;
     };
 
@@ -239,7 +243,7 @@ export default async function handler(req, res) {
     const todayStartUTC = getTodayStartUTC(userTimezone);
     
     const todaySubmissions = applications.filter(app => {
-      const appDate = new Date(app.created_at);
+      const appDate = new Date(app.submitted_at || app.created_at);
       return appDate >= todayStartUTC;
     }).length;
 
@@ -349,7 +353,7 @@ export default async function handler(req, res) {
     // Helper function to determine workflow step
     const getWorkflowStep = (application) => {
       const forms = application.property_owner_forms || [];
-      const hasPDF = application.pdf_url;
+      const hasPDF = !!application.pdf_url || !!application.pdf_completed_at;
       const hasNotificationSent = application.notifications?.some(n => n.notification_type === 'application_approved');
       const hasEmailCompletedAt = !!application.email_completed_at;
       const hasEmail = hasNotificationSent || hasEmailCompletedAt;
@@ -421,15 +425,16 @@ export default async function handler(req, res) {
       }
     ];
 
-    // Recent activity (last 5 applications)
+    // Recent activity (last 5 applications, sorted by submitted_at then created_at)
     const recentActivity = applications
-      .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+      .slice() // avoid mutating the sorted-by-submitted_at array
+      .sort((a, b) => new Date(b.submitted_at || b.created_at) - new Date(a.submitted_at || a.created_at))
       .slice(0, 5)
       .map(app => ({
         id: app.id,
         property: app.property_address,
         submitter: app.submitter_name,
-        date: app.created_at,
+        date: app.submitted_at || app.created_at,
         status: getWorkflowStep(app).text
       }));
 
