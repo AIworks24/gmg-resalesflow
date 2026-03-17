@@ -6,13 +6,23 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
-// Business days deadline (Rush: 5 business days)
+// Returns the calendar date string (YYYY-MM-DD) for a Date in Eastern time
+function getEasternDateStr(date) {
+  const eastern = new Date(date.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+  const y = eastern.getFullYear();
+  const m = String(eastern.getMonth() + 1).padStart(2, '0');
+  const d = String(eastern.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+// Business days deadline (Rush: 5 business days) — day-of-week evaluated in Eastern time
 function calculateBusinessDaysDeadline(startDate, businessDays) {
   const date = new Date(startDate);
   let daysAdded = 0;
   while (daysAdded < businessDays) {
     date.setDate(date.getDate() + 1);
-    if (date.getDay() !== 0 && date.getDay() !== 6) {
+    const dayInEastern = new Date(date.toLocaleString('en-US', { timeZone: 'America/New_York' })).getDay();
+    if (dayInEastern !== 0 && dayInEastern !== 6) {
       daysAdded++;
     }
   }
@@ -156,10 +166,14 @@ export default async function handler(req, res) {
 
     const now = new Date();
 
-    // "Tomorrow" window: deadline date (calendar date) equals tomorrow's date
-    const tomorrow = new Date(now);
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    const tomorrowDateStr = tomorrow.toISOString().split('T')[0];
+    // "Tomorrow" window: deadline date (calendar date) equals tomorrow's date in Eastern time
+    const nowEastern = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+    const tomorrowEastern = new Date(nowEastern);
+    tomorrowEastern.setDate(tomorrowEastern.getDate() + 1);
+    const tomorrowYear = tomorrowEastern.getFullYear();
+    const tomorrowMonth = String(tomorrowEastern.getMonth() + 1).padStart(2, '0');
+    const tomorrowDay = String(tomorrowEastern.getDate()).padStart(2, '0');
+    const tomorrowDateStr = `${tomorrowYear}-${tomorrowMonth}-${tomorrowDay}`;
 
     // Collect application IDs approaching deadline tomorrow
     const approachingApps = pendingApplications.filter(app => {
@@ -168,7 +182,7 @@ export default async function handler(req, res) {
         ? calculateBusinessDaysDeadline(submittedDate, 5)
         : calculateCalendarDaysDeadline(submittedDate, 15);
 
-      const deadlineDateStr = deadline.toISOString().split('T')[0];
+      const deadlineDateStr = getEasternDateStr(deadline);
       return deadlineDateStr === tomorrowDateStr;
     });
 
@@ -206,6 +220,7 @@ export default async function handler(req, res) {
         : calculateCalendarDaysDeadline(submittedDate, 15);
 
       const deadlineFormatted = deadline.toLocaleDateString('en-US', {
+        timeZone: 'America/New_York',
         weekday: 'long',
         year: 'numeric',
         month: 'long',
