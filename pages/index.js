@@ -1941,7 +1941,7 @@ const PackagePaymentStep = ({
               </>
             ) : (
               <>
-                <li>Complete Virginia Resale Certificate</li>
+                {formData.submitterType !== 'lender_questionnaire' && <li>Complete Virginia Resale Certificate</li>}
                 <li>HOA Documents Package</li>
                 <li>Compliance Inspection Report</li>
                 <li>Digital & Print Delivery</li>
@@ -6394,7 +6394,7 @@ export default function GMGResaleFlow() {
                   <div className='flex-1 border-t border-gray-100 pt-8 mb-8'>
                     <ul className='space-y-5'>
                       {[
-                        'Complete Virginia Resale Certificate',
+                        ...(formData.submitterType !== 'lender_questionnaire' ? ['Complete Virginia Resale Certificate'] : []),
                         'HOA Documents Package',
                         'Compliance Inspection Report',
                         'Digital Delivery'
