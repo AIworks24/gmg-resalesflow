@@ -62,6 +62,7 @@ import {
   Eye,
   EyeOff,
   Hash,
+  Home,
 } from 'lucide-react';
 
 // Initialize Stripe with error handling
@@ -88,9 +89,9 @@ const getForcedPriceSync = (property) => {
 };
 
 // Helper function to check if forced price should apply
-// Force price ONLY applies when submitterType is 'builder' AND public offering is NOT requested
-const shouldApplyForcedPrice = (submitterType, publicOffering = false) => {
-  return submitterType === 'builder' && !publicOffering;
+// Force price ONLY applies when submitterType is 'builder' AND no special request (POS or info packet)
+const shouldApplyForcedPrice = (submitterType, publicOffering = false, infoPacket = false) => {
+  return submitterType === 'builder' && !publicOffering && !infoPacket;
 };
 
 // Helper function to clean property name (remove "Property" suffix)
@@ -133,7 +134,18 @@ const calculateTotal = (formData, stripePrices, hoaProperties) => {
     let total = 200.0;
     if (formData.packageType === 'rush') total += 70.66;
     if (formData.paymentMethod === 'credit_card' && total > 0) total += 9.95;
-    return Math.round(total * 100) / 100; // Round to 2 decimal places
+    return Math.round(total * 100) / 100;
+  }
+
+  // Info Packet pricing (per association, supports MC)
+  if (formData.submitterType === 'builder' && formData.infoPacket) {
+    const selectedProperty = hoaProperties?.find(prop => prop.name === formData.hoaProperty);
+    const basePerAssoc = selectedProperty?.info_packet_price ?? 200.0;
+    const rushPerAssoc = formData.packageType === 'rush' ? 70.66 : 0;
+    const ccFeePerAssoc = formData.paymentMethod === 'credit_card' ? 9.95 : 0;
+    // MC pricing uses community count; display approximate for single (MC handled server-side)
+    const perAssoc = basePerAssoc + rushPerAssoc + ccFeePerAssoc;
+    return Math.round(perAssoc * 100) / 100;
   }
   if (formData.submitterType === 'settlement') {
     // Settlement agents - approximate pricing for display
@@ -170,7 +182,7 @@ const calculateTotal = (formData, stripePrices, hoaProperties) => {
   }
   
   // Check for forced price override (single property) - ONLY for builder/developer WITHOUT public offering
-  if (shouldApplyForcedPrice(formData.submitterType, formData.publicOffering) && formData.hoaProperty && hoaProperties) {
+  if (shouldApplyForcedPrice(formData.submitterType, formData.publicOffering, formData.infoPacket) && formData.hoaProperty && hoaProperties) {
     const selectedProperty = hoaProperties.find(prop => prop.name === formData.hoaProperty);
     if (selectedProperty) {
       const forcedPrice = getForcedPriceSync(selectedProperty);
@@ -250,7 +262,7 @@ const calculateTotalDatabase = async (formData, hoaProperties, applicationType) 
     }
     
     // Single property pricing - check for forced price first (ONLY for builder/developer WITHOUT public offering)
-    if (shouldApplyForcedPrice(formData.submitterType, formData.publicOffering) && formData.hoaProperty && hoaProperties) {
+    if (shouldApplyForcedPrice(formData.submitterType, formData.publicOffering, formData.infoPacket) && formData.hoaProperty && hoaProperties) {
       const selectedProperty = hoaProperties.find(prop => prop.name === formData.hoaProperty);
       if (selectedProperty) {
         const forcedPrice = getForcedPriceSync(selectedProperty);
@@ -301,6 +313,7 @@ const HOASelectionStep = React.memo(
 
     // Filter HOA options based on query
     const filteredHOAs = (hoaProperties || []).filter((hoa) => {
+      // Search query filter
       const search = query.toLowerCase();
       return (
         hoa.name.toLowerCase().includes(search) ||
@@ -671,6 +684,7 @@ const SubmitterInfoStep = React.memo(({ formData, handleInputChange, hoaProperti
     : null;
   
   const canShowPublicOffering = selectedProperty?.allow_public_offering === true;
+  const canShowInfoPacket = selectedProperty?.allow_info_packet === true;
 
   // Check if the selected property is in North Carolina
   const isNorthCarolina = React.useMemo(() => {
@@ -692,6 +706,20 @@ const SubmitterInfoStep = React.memo(({ formData, handleInputChange, hoaProperti
       handleInputChange('publicOffering', false);
     }
   }, [canShowPublicOffering, formData.publicOffering, handleInputChange]);
+
+  // Clear infoPacket flag if property doesn't allow it
+  React.useEffect(() => {
+    if (formData.infoPacket && !canShowInfoPacket) {
+      handleInputChange('infoPacket', false);
+    }
+  }, [canShowInfoPacket, formData.infoPacket, handleInputChange]);
+
+  // Mutual exclusivity: if one special request is selected, clear the other
+  React.useEffect(() => {
+    if (formData.infoPacket && formData.publicOffering) {
+      handleInputChange('publicOffering', false);
+    }
+  }, [formData.infoPacket, formData.publicOffering, handleInputChange]);
 
   // Clear submitterType if it's not allowed for North Carolina properties
   React.useEffect(() => {
@@ -776,6 +804,26 @@ const SubmitterInfoStep = React.memo(({ formData, handleInputChange, hoaProperti
         {formData.submitterType === 'builder' && formData.publicOffering && canShowPublicOffering && (
           <div className='mt-2 text-xs sm:text-sm text-green-800 bg-green-50 border border-green-200 rounded p-3'>
             Public Offering Statement selected — transaction details will be skipped. You will proceed directly to payment.
+          </div>
+        )}
+        {formData.submitterType === 'builder' && canShowInfoPacket && (
+          <div className='mt-4 sm:mt-6 p-3 sm:p-4 border border-blue-300 rounded-md bg-blue-50'>
+            <label className='flex items-start gap-2 sm:gap-3 cursor-pointer'>
+              <input
+                type='checkbox'
+                checked={!!formData.infoPacket}
+                onChange={(e) => handleInputChange('infoPacket', e.target.checked)}
+                className='mt-1 h-4 w-4 sm:h-5 sm:w-5 text-blue-600 border-gray-300 rounded flex-shrink-0'
+              />
+              <div className='min-w-0'>
+                <div className='text-sm sm:text-base font-medium text-blue-900'>Request Info Packet (Welcome Package)</div>
+                <div className='text-xs sm:text-sm text-blue-800 mt-1'>
+                  {selectedProperty?.info_packet_price
+                    ? `$${Number(selectedProperty.info_packet_price).toFixed(2)} per association.`
+                    : '$200.00 per association.'}
+                </div>
+              </div>
+            </label>
           </div>
         )}
         {formData.submitterType === 'lender_questionnaire' && (
@@ -875,21 +923,26 @@ const SubmitterInfoStep = React.memo(({ formData, handleInputChange, hoaProperti
   );
 });
 
-const TransactionDetailsStep = ({ formData, handleInputChange }) => (
-  <div className='space-y-6'>
+const TransactionDetailsStep = ({ formData, handleInputChange }) => {
+  const isInfoPacketFlow = formData.submitterType === 'builder' && formData.infoPacket;
+
+  return (
+    <div className='space-y-6'>
     <div className='text-center mb-8'>
       <h3 className='text-2xl font-bold text-green-900 mb-2'>
         Transaction Details
       </h3>
       <p className='text-gray-600'>
-        Information about the buyer, seller, and sale details
+        {isInfoPacketFlow
+          ? 'Buyer information for Info Packet delivery'
+          : 'Information about the buyer, seller, and sale details'}
       </p>
     </div>
 
     <div className='bg-blue-50 p-6 rounded-lg border border-blue-200'>
       <h4 className='font-semibold text-blue-900 mb-4 flex items-center'>
         <User className='h-5 w-5 mr-2' />
-        Buyer Information (Optional)
+        Buyer Information {isInfoPacketFlow ? '*' : '(Optional)'}
       </h4>
       <div className='grid grid-cols-1 md:grid-cols-2 gap-4 mb-4'>
         <input
@@ -909,7 +962,7 @@ const TransactionDetailsStep = ({ formData, handleInputChange }) => (
       </div>
       <div className='mt-4'>
         <label className='block text-sm font-medium text-gray-700 mb-2'>
-          Buyer Email (Optional)
+          Buyer Email {isInfoPacketFlow ? '*' : '(Optional)'}
         </label>
         <MultiEmailInput
           value={Array.isArray(formData.buyerEmails) ? formData.buyerEmails : (formData.buyerEmail ? [formData.buyerEmail] : [])}
@@ -929,6 +982,7 @@ const TransactionDetailsStep = ({ formData, handleInputChange }) => (
       </div>
     </div>
 
+    {!isInfoPacketFlow && (
     <div className='bg-green-50 p-6 rounded-lg border border-green-200'>
       <h4 className='font-semibold text-green-900 mb-4 flex items-center'>
         <User className='h-5 w-5 mr-2' />
@@ -958,7 +1012,9 @@ const TransactionDetailsStep = ({ formData, handleInputChange }) => (
         />
       </div>
     </div>
+    )}
 
+    {!isInfoPacketFlow && (
     <div className='bg-gray-50 p-6 rounded-lg border border-gray-200'>
       <h4 className='font-semibold text-gray-900 mb-4 flex items-center'>
         <DollarSign className='h-5 w-5 mr-2' />
@@ -993,8 +1049,10 @@ const TransactionDetailsStep = ({ formData, handleInputChange }) => (
         </div>
       </div>
     </div>
+    )}
   </div>
-);
+  );
+};
 
 const PackagePaymentStep = ({
   formData,
@@ -1986,7 +2044,7 @@ const PackagePaymentStep = ({
                   
                   if (selectedProperty) {
                     // Only show forced price if submitterType is 'builder' AND public offering is NOT requested
-                    if (shouldApplyForcedPrice(formData.submitterType, formData.publicOffering)) {
+                    if (shouldApplyForcedPrice(formData.submitterType, formData.publicOffering, formData.infoPacket)) {
                       const forcedPrice = getForcedPriceSync(selectedProperty);
                       if (forcedPrice !== null) {
                         // Show forced price as base (for rush, the +$70.66 will be shown below)
@@ -2001,6 +2059,9 @@ const PackagePaymentStep = ({
                     basePrice = (pricing.base / 100).toFixed(2);
                   } else if (formData.submitterType === 'builder' && formData.publicOffering) {
                     basePrice = '200.00';
+                  } else if (formData.submitterType === 'builder' && formData.infoPacket) {
+                    const prop = hoaProperties?.find(p => p.name === formData.hoaProperty);
+                    basePrice = prop?.info_packet_price ? Number(prop.info_packet_price).toFixed(2) : '200.00';
                   } else if (formData.submitterType === 'settlement') {
                     if (selectedProperty?.location) {
                       const location = selectedProperty.location.toUpperCase();
@@ -2245,7 +2306,7 @@ const PackagePaymentStep = ({
                     const selectedProperty = hoaProperties?.find(prop => prop.name === formData.hoaProperty);
                     if (selectedProperty) {
                       // Only show forced price if submitterType is 'builder' AND public offering is NOT requested
-                      if (shouldApplyForcedPrice(formData.submitterType, formData.publicOffering)) {
+                      if (shouldApplyForcedPrice(formData.submitterType, formData.publicOffering, formData.infoPacket)) {
                         const forcedPrice = getForcedPriceSync(selectedProperty);
                         if (forcedPrice !== null) {
                           return forcedPrice.toFixed(2);
@@ -2260,6 +2321,10 @@ const PackagePaymentStep = ({
                     }
                     if (formData.submitterType === 'builder' && formData.publicOffering) {
                       return '200.00';
+                    }
+                    if (formData.submitterType === 'builder' && formData.infoPacket) {
+                      const prop = hoaProperties?.find(p => p.name === formData.hoaProperty);
+                      return prop?.info_packet_price ? Number(prop.info_packet_price).toFixed(2) : '200.00';
                     }
                     if (formData.submitterType === 'settlement') {
                       if (selectedProperty?.location) {
@@ -3682,7 +3747,8 @@ const ReviewSubmitStep = ({ formData, handleInputChange, stripePrices, applicati
             const appType = determineApplicationType(
               formData.submitterType,
               selectedProperty,
-              formData.publicOffering
+              formData.publicOffering,
+              formData.infoPacket
             );
             setApplicationType(appType);
           } catch (error) {
@@ -3692,7 +3758,7 @@ const ReviewSubmitStep = ({ formData, handleInputChange, stripePrices, applicati
       }
     };
     determineAppType();
-  }, [formData.hoaProperty, formData.submitterType, formData.publicOffering, hoaProperties]);
+  }, [formData.hoaProperty, formData.submitterType, formData.publicOffering, formData.infoPacket, hoaProperties]);
 
   // Load multi-community information and pricing
   React.useEffect(() => {
@@ -3728,7 +3794,7 @@ const ReviewSubmitStep = ({ formData, handleInputChange, stripePrices, applicati
     };
     
     loadMultiCommunityInfo();
-  }, [formData.hoaProperty, formData.packageType, formData.submitterType, formData.publicOffering, hoaProperties, applicationType]);
+  }, [formData.hoaProperty, formData.packageType, formData.submitterType, formData.publicOffering, formData.infoPacket, hoaProperties, applicationType]);
 
   // Initialize edit details when entering edit mode
   const handleStartEditDetails = () => {
@@ -3747,7 +3813,7 @@ const ReviewSubmitStep = ({ formData, handleInputChange, stripePrices, applicati
       submitter_phone: formData.submitterPhone || '',
       buyer_name: formData.buyerName || '',
       buyer_email: buyerEmails.length > 0 ? buyerEmails : [], // Empty array for optional field
-      seller_email: formData.sellerEmail || '',
+      seller_email: (() => { const e = (formData.sellerEmail || '').trim(); return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e) ? e : ''; })(),
       sale_price: formData.salePrice || '',
       closing_date: closingDateFormatted,
     });
@@ -3937,35 +4003,50 @@ const ReviewSubmitStep = ({ formData, handleInputChange, stripePrices, applicati
         </div>
       )}
 
-      {/* Submit Button - Show at top when payment has been completed */}
-      {applicationId && handleSubmit && (
-        <div className='flex justify-center mb-6'>
-          <button
-            onClick={handleSubmit}
-            disabled={isSubmitting}
-            className={`w-full md:w-auto px-4 sm:px-8 py-3 bg-green-700 text-white rounded-lg transition-colors flex items-center justify-center gap-2 text-sm sm:text-base font-medium ${
-              isSubmitting 
-                ? 'opacity-50 cursor-not-allowed' 
-                : 'hover:bg-green-800'
-            }`}
-          >
-            {isSubmitting ? (
-              <>
-                <svg className='animate-spin h-5 w-5 text-white' xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24'>
-                  <circle className='opacity-25' cx='12' cy='12' r='10' stroke='currentColor' strokeWidth='4'></circle>
-                  <path className='opacity-75' fill='currentColor' d='M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z'></path>
-                </svg>
-                <span className='hidden sm:inline'>Submitting...</span>
-                <span className='sm:hidden'>Submitting...</span>
-              </>
-            ) : (
-              <>
-                <CheckCircle className='h-5 w-5' />
-                <span>Submit Application</span>
-              </>
-            )}
-          </button>
+      {/* Info Packet: already completed — show confirmation banner, no submit needed */}
+      {applicationType === 'info_packet' && applicationId ? (
+        <div className='mb-6 p-5 bg-green-50 border border-green-200 rounded-xl flex flex-col sm:flex-row items-start sm:items-center gap-4'>
+          <div className='flex-shrink-0 w-12 h-12 bg-green-100 rounded-full flex items-center justify-center'>
+            <CheckCircle className='h-7 w-7 text-green-600' />
+          </div>
+          <div className='flex-1'>
+            <h4 className='font-bold text-green-900 text-base'>Documents Sent!</h4>
+            <p className='text-sm text-green-700 mt-0.5'>
+              Your Info Packet (Welcome Package) documents have been sent to your email. Check your inbox — no further action is needed.
+            </p>
+          </div>
         </div>
+      ) : (
+        /* Submit Button - Show at top when payment has been completed */
+        applicationId && handleSubmit && (
+          <div className='flex justify-center mb-6'>
+            <button
+              onClick={handleSubmit}
+              disabled={isSubmitting}
+              className={`w-full md:w-auto px-4 sm:px-8 py-3 bg-green-700 text-white rounded-lg transition-colors flex items-center justify-center gap-2 text-sm sm:text-base font-medium ${
+                isSubmitting 
+                  ? 'opacity-50 cursor-not-allowed' 
+                  : 'hover:bg-green-800'
+              }`}
+            >
+              {isSubmitting ? (
+                <>
+                  <svg className='animate-spin h-5 w-5 text-white' xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24'>
+                    <circle className='opacity-25' cx='12' cy='12' r='10' stroke='currentColor' strokeWidth='4'></circle>
+                    <path className='opacity-75' fill='currentColor' d='M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z'></path>
+                  </svg>
+                  <span className='hidden sm:inline'>Submitting...</span>
+                  <span className='sm:hidden'>Submitting...</span>
+                </>
+              ) : (
+                <>
+                  <CheckCircle className='h-5 w-5' />
+                  <span>Submit Application</span>
+                </>
+              )}
+            </button>
+          </div>
+        )
       )}
 
       {/* Important Information - Moved to top, below Submit button */}
@@ -4483,6 +4564,7 @@ export default function GMGResaleFlow() {
     unitNumber: '',
     submitterType: '',
     publicOffering: false,
+    infoPacket: false,
     submitterName: '',
     submitterEmail: '',
     submitterPhone: '',
@@ -4714,6 +4796,7 @@ export default function GMGResaleFlow() {
         unitNumber: data.unit_number || '',
         submitterType: data.submitter_type || '',
         publicOffering: data.application_type === 'public_offering',
+        infoPacket: data.application_type === 'info_packet',
         submitterName: data.submitter_name || '',
         submitterEmail: data.submitter_email || '',
         submitterPhone: data.submitter_phone || '',
@@ -4843,7 +4926,7 @@ export default function GMGResaleFlow() {
       // Determine application type if not already set
       let appType = applicationType;
       if (!appType && formData.submitterType && hoaProperty) {
-        appType = determineApplicationType(formData.submitterType, hoaProperty, formData.publicOffering);
+        appType = determineApplicationType(formData.submitterType, hoaProperty, formData.publicOffering, formData.infoPacket);
       }
 
       // Use impersonated user's ID when impersonating, otherwise use current user's ID
@@ -4910,7 +4993,7 @@ export default function GMGResaleFlow() {
     if (formData.submitterType && formData.hoaProperty && hoaProperties) {
       const selectedProperty = hoaProperties.find(prop => prop.name === formData.hoaProperty);
       if (selectedProperty) {
-        let newApplicationType = determineApplicationType(formData.submitterType, selectedProperty, formData.publicOffering);
+        let newApplicationType = determineApplicationType(formData.submitterType, selectedProperty, formData.publicOffering, formData.infoPacket);
         if (newApplicationType !== applicationType) {
           setApplicationType(newApplicationType);
           setFieldRequirements(getFieldRequirements(newApplicationType));
@@ -4922,7 +5005,7 @@ export default function GMGResaleFlow() {
         }
       }
     }
-  }, [formData.submitterType, formData.hoaProperty, formData.publicOffering, hoaProperties, applicationType]);
+  }, [formData.submitterType, formData.hoaProperty, formData.publicOffering, formData.infoPacket, hoaProperties, applicationType]);
 
   // Update pricing based on application type
   const updatePricingForApplicationType = React.useCallback(async (appType) => {
@@ -4943,26 +5026,27 @@ export default function GMGResaleFlow() {
       // Save draft before moving to next step
       await saveDraftApplication();
       
-      // Skip Transaction Details only for Public Offering Statement flow
-      if (currentStep === 2 && formData.submitterType === 'builder' && formData.publicOffering) {
-        // Skip Transaction Details for Public Offering Statement flow
+      // Skip Transaction Details only for Public Offering Statement
+      const isSpecialBuilderFlow = formData.submitterType === 'builder' && formData.publicOffering;
+      if (currentStep === 2 && isSpecialBuilderFlow) {
         setCurrentStep(4);
       } else {
         setCurrentStep(currentStep + 1);
       }
     }
-  }, [currentStep, saveDraftApplication, formData.submitterType, formData.publicOffering]);
+  }, [currentStep, saveDraftApplication, formData.submitterType, formData.publicOffering, formData.infoPacket]);
 
   const prevStep = React.useCallback(() => {
     if (currentStep > 1) {
-      // Skip Transaction Details only when going back for Public Offering Statement flow
-      if (currentStep === 4 && formData.submitterType === 'builder' && formData.publicOffering) {
+      // Skip Transaction Details only when going back for Public Offering Statement flows
+      const isSpecialBuilderFlow = formData.submitterType === 'builder' && formData.publicOffering;
+      if (currentStep === 4 && isSpecialBuilderFlow) {
         setCurrentStep(2);
       } else {
         setCurrentStep(currentStep - 1);
       }
     }
-  }, [currentStep, formData.submitterType, formData.publicOffering, applicationType]);
+  }, [currentStep, formData.submitterType, formData.publicOffering, formData.infoPacket, applicationType]);
 
   // Delete draft application
   const deleteDraftApplication = React.useCallback(async (appId) => {
@@ -5112,6 +5196,7 @@ export default function GMGResaleFlow() {
       unitNumber: '',
       submitterType: '',
       publicOffering: false,
+      infoPacket: false,
       submitterName: autoFillData.submitterName,
       submitterEmail: autoFillData.submitterEmail,
       submitterPhone: '',
@@ -5315,6 +5400,18 @@ export default function GMGResaleFlow() {
       }
 
       if (existingApplicationId) {
+        // Info Packet: already completed by Stripe webhook (status = 'completed', email sent).
+        // Skip the standard submit flow entirely — just show confirmation.
+        if (applicationType === 'info_packet') {
+          setSnackbarData({
+            message: 'Your Info Packet documents have been sent to your email!',
+            type: 'success',
+          });
+          setShowSnackbar(true);
+          await loadApplications();
+          return;
+        }
+
         // Update existing application to under_review status
         // This works for both pending_payment and payment_completed statuses
         const { data, error } = await supabase
@@ -5548,6 +5645,7 @@ export default function GMGResaleFlow() {
         unitNumber: '',
         submitterType: '',
         publicOffering: false,
+        infoPacket: false,
         submitterName: '',
         submitterEmail: '',
         submitterPhone: '',
@@ -5651,7 +5749,34 @@ export default function GMGResaleFlow() {
     if (userRole !== 'admin') {
       const [filterStatus, setFilterStatus] = useState('all');
       const [filterType, setFilterType] = useState('all');
+      const [searchQuery, setSearchQuery] = useState('');
       const [expandedAppId, setExpandedAppId] = useState(null);
+      const [resendingApps, setResendingApps] = useState(new Set());
+
+      const handleResendEmail = React.useCallback(async (appId) => {
+        setResendingApps((prev) => new Set(prev).add(appId));
+        try {
+          const res = await fetchWithImpersonation('/api/requester-resend-email', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ applicationId: appId }),
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || 'Failed to resend email');
+          setSnackbarData({ message: 'Documents resent to your email successfully!', type: 'success' });
+          setShowSnackbar(true);
+        } catch (err) {
+          console.error('[resend]', err);
+          setSnackbarData({ message: err.message || 'Failed to resend documents', type: 'error' });
+          setShowSnackbar(true);
+        } finally {
+          setResendingApps((prev) => {
+            const next = new Set(prev);
+            next.delete(appId);
+            return next;
+          });
+        }
+      }, []);
       const [openTypeDropdown, setOpenTypeDropdown] = useState(false);
       const [openStatusDropdown, setOpenStatusDropdown] = useState(false);
       
@@ -5717,6 +5842,15 @@ export default function GMGResaleFlow() {
 
       // Filter applications: Show all active apps, but hide completed ones older than 10 days
       const visibleApplications = applications.filter(app => {
+        // 0. Search query
+        if (searchQuery.trim()) {
+          const q = searchQuery.trim().toLowerCase();
+          const hoaName = (app.hoa_properties?.name || '').toLowerCase();
+          const address = (app.property_address || '').toLowerCase();
+          const appId = String(app.id || '').toLowerCase();
+          if (!hoaName.includes(q) && !address.includes(q) && !appId.includes(q)) return false;
+        }
+
         // 1. Filter by Status
         if (filterStatus !== 'all') {
           // Handle special "active" status or map UI status to DB status if needed
@@ -5915,8 +6049,20 @@ export default function GMGResaleFlow() {
                         </div>
                       </div>
                       
-                      {/* Filters */}
+                      {/* Search + Filters */}
                       <div className='flex flex-col sm:flex-row gap-3 w-full md:w-auto items-center'>
+                        <div className='relative w-full sm:w-56'>
+                          <div className='absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none'>
+                            <Search className='h-4 w-4 text-gray-400' />
+                          </div>
+                          <input
+                            type='text'
+                            value={searchQuery}
+                            onChange={e => setSearchQuery(e.target.value)}
+                            placeholder='Search applications...'
+                            className='w-full pl-9 pr-3 py-2.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 shadow-sm bg-white hover:border-gray-400 transition-all min-h-[40px]'
+                          />
+                        </div>
                         <CustomDropdown
                           value={filterType}
                           onChange={setFilterType}
@@ -6018,12 +6164,15 @@ export default function GMGResaleFlow() {
                           }
                         }
                       } else if (app.status === 'completed' || app.status === 'approved' || app.status === 'compliance_completed') {
-                        // For single property applications, check if PDF exists
-                        const isSettlement = app.submitter_type === 'settlement' || app.application_type?.startsWith('settlement');
-                        const hasPdf = isSettlement ? (app.settlement_pdf_url || app.pdf_url) : app.pdf_url;
-                        
-                        if (!hasPdf) {
-                          displayStatus = 'under_review';
+                        // Info Packet: no PDF generated — completed means email was sent, keep as completed
+                        const isInfoPacketApp = app.application_type === 'info_packet';
+                        if (!isInfoPacketApp) {
+                          // For single property applications, check if PDF exists
+                          const isSettlement = app.submitter_type === 'settlement' || app.application_type?.startsWith('settlement');
+                          const hasPdf = isSettlement ? (app.settlement_pdf_url || app.pdf_url) : app.pdf_url;
+                          if (!hasPdf) {
+                            displayStatus = 'under_review';
+                          }
                         }
                       }
 
@@ -6184,6 +6333,24 @@ export default function GMGResaleFlow() {
                                     >
                                       <Trash2 className='h-4 w-4' />
                                       Delete
+                                    </button>
+                                  )}
+
+                                  {/* Resend Documents — visible for completed apps that were already emailed */}
+                                  {isCompleted && (isMultiCommunity
+                                    ? propertyGroups.some(g => g.email_completed_at || g.email_status === 'completed')
+                                    : !!app.email_completed_at
+                                  ) && (
+                                    <button
+                                      onClick={() => handleResendEmail(app.id)}
+                                      disabled={resendingApps.has(app.id)}
+                                      className='flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 border border-blue-100 rounded-lg transition-colors disabled:opacity-60 disabled:cursor-not-allowed'
+                                      title='Resend documents to your email'
+                                    >
+                                      {resendingApps.has(app.id)
+                                        ? <><Loader2 className='h-4 w-4 animate-spin' />Sending...</>
+                                        : <><Mail className='h-4 w-4' />Resend Documents</>
+                                      }
                                     </button>
                                   )}
                                   
@@ -7295,9 +7462,9 @@ export default function GMGResaleFlow() {
                         !formData.submitterEmail ||
                         (formData.submitterType === 'settlement' && !formData.closingDate))) ||
                     (currentStep === 3 &&
-                      (!formData.sellerName ||
-                        !formData.sellerEmail ||
-                        !formData.sellerPhone))
+                      ((formData.submitterType === 'builder' && formData.infoPacket)
+                        ? !(formData.buyerEmail || (Array.isArray(formData.buyerEmails) && formData.buyerEmails.length > 0))
+                        : (!formData.sellerName || !formData.sellerEmail || !formData.sellerPhone)))
                   }
                   className='flex-1 md:flex-initial px-4 sm:px-6 py-3 bg-green-700 text-white rounded-lg hover:bg-green-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2 text-sm sm:text-base font-medium'
                 >

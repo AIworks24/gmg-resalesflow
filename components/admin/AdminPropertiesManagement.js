@@ -124,6 +124,8 @@ const AdminPropertiesManagement = () => {
     special_requirements: '',
     is_multi_community: false,
     allow_public_offering: false,
+    allow_info_packet: false,
+    info_packet_price: null,
     force_price_enabled: false,
     force_price_value: null,
     multi_community_comment: '',
@@ -233,6 +235,8 @@ const AdminPropertiesManagement = () => {
       special_requirements: '',
       is_multi_community: false,
       allow_public_offering: false,
+      allow_info_packet: false,
+      info_packet_price: null,
       force_price_enabled: false,
       force_price_value: null,
       multi_community_comment: '',
@@ -313,6 +317,8 @@ const AdminPropertiesManagement = () => {
       special_requirements: property.special_requirements || '',
       is_multi_community: actuallyMultiCommunity,
       allow_public_offering: property.allow_public_offering || false,
+      allow_info_packet: property.allow_info_packet || false,
+      info_packet_price: property.info_packet_price ?? null,
       force_price_enabled: property.force_price_enabled || false,
       force_price_value: property.force_price_value || null,
       multi_community_comment: property.multi_community_comment || '',
@@ -363,6 +369,8 @@ const AdminPropertiesManagement = () => {
             // For new properties, default to false (will be set to true when properties are linked)
             is_multi_community: linkedProperties.length > 0,
             allow_public_offering: formData.allow_public_offering || false,
+            allow_info_packet: formData.allow_info_packet || false,
+            info_packet_price: formData.allow_info_packet ? (formData.info_packet_price || null) : null,
             force_price_enabled: formData.force_price_enabled || false,
             force_price_value: formData.force_price_enabled ? (formData.force_price_value || null) : null,
             multi_community_comment: formData.multi_community_comment || null,
@@ -399,6 +407,8 @@ const AdminPropertiesManagement = () => {
             // For new properties, default to false (will be set to true when properties are linked)
             is_multi_community: linkedProperties.length > 0,
             allow_public_offering: formData.allow_public_offering || false,
+            allow_info_packet: formData.allow_info_packet || false,
+            info_packet_price: formData.allow_info_packet ? (formData.info_packet_price || null) : null,
             force_price_enabled: formData.force_price_enabled || false,
             force_price_value: formData.force_price_enabled ? (formData.force_price_value || null) : null,
             multi_community_comment: formData.multi_community_comment || null,
@@ -1800,6 +1810,50 @@ const AdminPropertiesManagement = () => {
                             the option to request a Public Offering Statement ($200 fixed fee). Only enable this 
                             for condo-type properties that have Public Offering Statement documents available.
                           </p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Info Packet (Welcome Package) Settings */}
+                <div className="border-t pt-4">
+                  <h3 className="text-md font-medium text-gray-900 mb-3">Info Packet (Welcome Package)</h3>
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="checkbox"
+                      id="allow_info_packet"
+                      checked={formData.allow_info_packet || false}
+                      onChange={(e) => setFormData({...formData, allow_info_packet: e.target.checked})}
+                      className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                    />
+                    <label htmlFor="allow_info_packet" className="text-sm font-medium text-gray-700">
+                      Allow Info Packet Requests
+                    </label>
+                  </div>
+                  {formData.allow_info_packet && (
+                    <div className="mt-3 space-y-3">
+                      <div className="p-3 bg-blue-50 rounded-md">
+                        <p className="text-sm text-blue-800">
+                          When enabled, Builder/Developer submitters will see the option to purchase an Info Packet (Welcome Package) for this property. The Welcome Package document must be uploaded in the documents section.
+                        </p>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          Custom Price per Association (optional)
+                        </label>
+                        <div className="flex items-center gap-2">
+                          <span className="text-gray-500 text-sm">$</span>
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={formData.info_packet_price ?? ''}
+                            onChange={(e) => setFormData({...formData, info_packet_price: e.target.value ? parseFloat(e.target.value) : null})}
+                            placeholder="200.00"
+                            className="w-32 px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          />
+                          <span className="text-xs text-gray-500">Leave blank for system default ($200.00)</span>
                         </div>
                       </div>
                     </div>

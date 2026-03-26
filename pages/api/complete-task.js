@@ -27,7 +27,7 @@ export default async function handler(req, res) {
 
     const { data: profile, error: profileError } = await supabaseAuth
       .from('profiles')
-      .select('role')
+      .select('role, first_name, last_name')
       .eq('id', session.user.id)
       .single();
 
@@ -65,6 +65,30 @@ export default async function handler(req, res) {
 
     const now = new Date().toISOString();
 
+    // --- Audit trail setup ---
+    const adminName = `${profile.first_name || ''} ${profile.last_name || ''}`.trim() || 'Admin';
+    const taskLabels = {
+      inspection_form: 'Property Inspection Form',
+      resale_certificate: 'Resale Certificate',
+      pdf: 'PDF',
+      email: 'Email',
+      settlement_form: 'Settlement Form',
+    };
+    const taskLabel = taskLabels[taskName] || taskName;
+
+    const [appNotesResult, groupResult] = await Promise.all([
+      supabase.from('applications').select('notes').eq('id', applicationId).single(),
+      propertyGroupId
+        ? supabase.from('application_property_groups').select('property_name').eq('id', propertyGroupId).single()
+        : Promise.resolve({ data: null }),
+    ]);
+
+    const currentNotes   = appNotesResult.data?.notes || '';
+    const propertyName   = groupResult.data?.property_name || null;
+    const propertySuffix = propertyName ? ` for ${propertyName}` : '';
+    const auditNote      = `[${now}] ${taskLabel}${propertySuffix} completed by ${adminName}.`;
+    const notesWithAudit = currentNotes ? `${currentNotes}\n\n${auditNote}` : auditNote;
+
     // --- Per-property-group updates (MC applications) ---
 
     if (taskName === 'inspection_form' && propertyGroupId) {
@@ -76,7 +100,7 @@ export default async function handler(req, res) {
 
       if (groupError) throw groupError;
 
-      await supabase.from('applications').update({ updated_at: now }).eq('id', applicationId);
+      await supabase.from('applications').update({ updated_at: now, notes: notesWithAudit }).eq('id', applicationId);
       const application = await fetchFullApplication(supabase, applicationId);
       console.log(`[complete-task] Done (group inspection). inspection_form_completed_at=${application?.inspection_form_completed_at}`);
       return res.status(200).json({ success: true, completedAt: now, application });
@@ -91,7 +115,7 @@ export default async function handler(req, res) {
 
       if (groupError) throw groupError;
 
-      await supabase.from('applications').update({ updated_at: now }).eq('id', applicationId);
+      await supabase.from('applications').update({ updated_at: now, notes: notesWithAudit }).eq('id', applicationId);
       const application = await fetchFullApplication(supabase, applicationId);
       console.log(`[complete-task] Done (group resale). resale_certificate_completed_at=${application?.resale_certificate_completed_at}`);
       return res.status(200).json({ success: true, completedAt: now, application });
@@ -108,7 +132,7 @@ export default async function handler(req, res) {
 
       if (formError) throw formError;
 
-      await supabase.from('applications').update({ updated_at: now }).eq('id', applicationId);
+      await supabase.from('applications').update({ updated_at: now, notes: notesWithAudit }).eq('id', applicationId);
       const application = await fetchFullApplication(supabase, applicationId);
       console.log(`[complete-task] Done (group settlement).`);
       return res.status(200).json({ success: true, completedAt: now, application });
@@ -122,7 +146,7 @@ export default async function handler(req, res) {
     // 1. Update the application
     const { data: updatedApp, error: updateError } = await supabase
       .from('applications')
-      .update({ [completionField]: now, updated_at: now })
+      .update({ [completionField]: now, updated_at: now, notes: notesWithAudit })
       .eq('id', applicationId)
       .select(`id, ${completionField}, updated_at`)
       .single();

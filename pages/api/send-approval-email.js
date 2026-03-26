@@ -21,7 +21,7 @@ export default async function handler(req, res) {
 
     const { data: profile } = await supabase
       .from('profiles')
-      .select('role')
+      .select('role, first_name, last_name')
       .eq('id', session.user.id)
       .single();
 
@@ -414,34 +414,41 @@ export default async function handler(req, res) {
       // The notification record shows intent to send, even if delivery failed
     }
 
+    // Build audit note
+    const adminName   = `${profile.first_name || ''} ${profile.last_name || ''}`.trim() || 'Admin';
+    const propSuffix  = propertyName ? ` for ${propertyName}` : '';
+    const now         = new Date().toISOString();
+    const auditNote   = `[${now}] Email sent${propSuffix} to ${application.submitter_email} by ${adminName}.`;
+    const updatedNotes = application.notes ? `${application.notes}\n\n${auditNote}` : auditNote;
+
     // Update appropriate status based on whether this is property-specific or application-wide
     if (isPropertySpecific) {
       // Update property group status
       const { error: updateError } = await supabase
         .from('application_property_groups')
-        .update({ 
+        .update({
           email_status: 'completed',
-          email_completed_at: new Date().toISOString(),
-          updated_at: new Date().toISOString()
+          email_completed_at: now,
+          updated_at: now,
         })
         .eq('id', propertyGroupId);
 
-      if (updateError) {
-        throw updateError;
-      }
+      if (updateError) throw updateError;
+
+      // Append audit note to application
+      await supabase.from('applications').update({ notes: updatedNotes, updated_at: now }).eq('id', applicationId);
     } else {
-      // Update application status
+      // Update application status + audit note
       const { error: updateError } = await supabase
         .from('applications')
-        .update({ 
+        .update({
           status: 'approved',
-          email_completed_at: new Date().toISOString()
+          email_completed_at: now,
+          notes: updatedNotes,
         })
         .eq('id', applicationId);
 
-      if (updateError) {
-        throw updateError;
-      }
+      if (updateError) throw updateError;
     }
 
     return res.status(200).json({ 

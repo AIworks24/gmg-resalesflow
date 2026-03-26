@@ -30,7 +30,7 @@ export default async function handler(req, res) {
     // Check if user has admin, staff, or accounting role
     const { data: profile } = await supabaseAuth
       .from('profiles')
-      .select('role')
+      .select('role, first_name, last_name')
       .eq('id', user.id)
       .single();
 
@@ -210,6 +210,13 @@ export default async function handler(req, res) {
     const generatedAt = new Date();
     const generationTime = Date.now() - startTime;
     
+    // Audit note
+    const adminName   = `${profile.first_name || ''} ${profile.last_name || ''}`.trim() || 'Admin';
+    const propSuffix  = propertyName ? ` for ${propertyName}` : '';
+    const auditNote   = `[${generatedAt.toISOString()}] PDF generated${propSuffix} by ${adminName}.`;
+    const { data: appForNotes } = await supabase.from('applications').select('notes').eq('id', applicationId).single();
+    const updatedNotes = appForNotes?.notes ? `${appForNotes.notes}\n\n${auditNote}` : auditNote;
+
     if (isPropertySpecific) {
       // Update property group with PDF information
       const { error: updateError } = await supabase
@@ -221,21 +228,25 @@ export default async function handler(req, res) {
           updated_at: generatedAt.toISOString()
         })
         .eq('id', propertyGroupId);
-      
+
       if (updateError) {
         console.error('Failed to update property group pdf_url:', updateError);
       }
+
+      // Append audit note to application
+      await supabase.from('applications').update({ notes: updatedNotes, updated_at: generatedAt.toISOString() }).eq('id', applicationId);
     } else {
-      // Update applications table with PDF information
+      // Update applications table with PDF information + audit note
       const { error: updateError } = await supabase
         .from('applications')
         .update({
           pdf_url: publicURLWithCacheBuster,
           pdf_generated_at: generatedAt.toISOString(),
-          pdf_completed_at: generatedAt.toISOString()
+          pdf_completed_at: generatedAt.toISOString(),
+          notes: updatedNotes,
         })
         .eq('id', applicationId);
-      
+
       if (updateError) {
         console.error('Failed to update application pdf_url:', updateError);
       }

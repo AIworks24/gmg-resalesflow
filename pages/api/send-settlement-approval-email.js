@@ -26,7 +26,7 @@ export default async function handler(req, res) {
 
     const { data: profile } = await supabase
       .from('profiles')
-      .select('role')
+      .select('role, first_name, last_name')
       .eq('id', session.user.id)
       .single();
 
@@ -291,39 +291,40 @@ export default async function handler(req, res) {
 
     // Notification creation removed - no longer needed
 
-    // Mark email task as completed
-    const timestamp = new Date().toISOString();
-    
-    // For multi-community, update the property group instead of application-level
+    // Mark email task as completed + append audit note
+    const timestamp    = new Date().toISOString();
+    const adminName    = `${profile.first_name || ''} ${profile.last_name || ''}`.trim() || 'Admin';
+    const auditNote    = `[${timestamp}] Email sent to ${application.submitter_email} by ${adminName}.`;
+    const updatedNotes = application.notes ? `${application.notes}\n\n${auditNote}` : auditNote;
+
     if (propertyGroupId) {
-      // Update the specific property group with email status
       const { error: groupUpdateError } = await supabase
         .from('application_property_groups')
         .update({
           email_status: 'completed',
           email_completed_at: timestamp,
-          updated_at: timestamp
+          updated_at: timestamp,
         })
         .eq('id', propertyGroupId)
         .eq('application_id', applicationId);
 
       if (groupUpdateError) {
         console.error('Failed to mark email task as completed for property group:', groupUpdateError);
-        // Don't throw - email was sent successfully
       }
+
+      await supabase.from('applications').update({ notes: updatedNotes, updated_at: timestamp }).eq('id', applicationId);
     } else {
-      // Single property: update application with email completion
       const { error: emailTaskError } = await supabase
         .from('applications')
         .update({
           email_completed_at: timestamp,
-          updated_at: timestamp
+          updated_at: timestamp,
+          notes: updatedNotes,
         })
         .eq('id', applicationId);
 
       if (emailTaskError) {
         console.error('Failed to mark email task as completed:', emailTaskError);
-        // Don't throw - email was sent successfully
       }
     }
 

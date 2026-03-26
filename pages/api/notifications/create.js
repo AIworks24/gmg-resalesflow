@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
-import { sendPropertyManagerNotificationEmail } from '../../../lib/emailService';
+import { sendPropertyManagerNotificationEmail, sendInfoPacketPropertyNotificationEmail } from '../../../lib/emailService';
 import { parseEmails, normalizeEmail } from '../../../lib/emailUtils';
 
 /**
@@ -13,9 +13,16 @@ function formatApplicationType(applicationType) {
     'settlement_nc': 'Settlement (NC)',
     'lender_questionnaire': 'Lender Questionnaire',
     'public_offering': 'Public Offering',
+    'info_packet': 'Info Packet (Welcome Package)',
   };
   
-  return typeMap[applicationType] || applicationType || 'Application';
+  if (typeMap[applicationType]) return typeMap[applicationType];
+  if (!applicationType) return 'Application';
+  return applicationType
+    .split('_')
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
 }
 
 /**
@@ -129,6 +136,37 @@ export async function createNotifications(applicationId, supabaseClient) {
     if (application.status === 'pending_payment') {
       console.log(`[Notifications] Skipping unpaid application ${applicationId}`);
       return { success: true, notificationsCreated: 0, message: 'Unpaid application, skipping notifications' };
+    }
+
+    // Info Packet: skip the standard "new application" notification.
+    // Documents are auto-sent on payment, so property owners only need a simple FYI email.
+    if (application.application_type === 'info_packet') {
+      console.log(`[Notifications] Info Packet application ${applicationId} — sending simple order notification to property owner(s)`);
+      const ownerEmails = parseEmails(application.hoa_properties?.property_owner_email || '');
+      const emailsSent = [];
+      for (const rawEmail of ownerEmails) {
+        const email = normalizeEmail(rawEmail.replace(/^owner\./, ''));
+        if (isFakeEmail(email)) continue;
+        if (existingRecipients.has(email)) {
+          console.log(`[Notifications] Info Packet: skipping already-notified ${email}`);
+          continue;
+        }
+        try {
+          await sendInfoPacketPropertyNotificationEmail({
+            to: email,
+            applicationId,
+            propertyName: application.hoa_properties?.name || 'Unknown Property',
+            propertyAddress: application.property_address,
+            submitterName: application.submitter_name || 'Unknown',
+            submitterEmail: application.submitter_email || '',
+          });
+          emailsSent.push(email);
+          console.log(`[Notifications] Info Packet FYI email sent to ${email}`);
+        } catch (emailErr) {
+          console.error(`[Notifications] Info Packet: failed to send FYI email to ${email}:`, emailErr.message);
+        }
+      }
+      return { success: true, notificationsCreated: 0, emailsSent, message: 'Info packet order notification sent' };
     }
 
     // For MC apps: NEVER create partial notifications. Only create when property groups exist.

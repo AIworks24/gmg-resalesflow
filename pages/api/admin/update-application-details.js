@@ -21,7 +21,7 @@ export default async function handler(req, res) {
 
     const { data: profile } = await supabase
       .from('profiles')
-      .select('role')
+      .select('role, first_name, last_name')
       .eq('id', session.user.id)
       .single();
 
@@ -181,6 +181,19 @@ export default async function handler(req, res) {
       // Only updated_at was set
       return res.status(400).json({ error: 'No fields to update' });
     }
+
+    // Append audit note to notes field
+    const { data: currentApp } = await supabase
+      .from('applications')
+      .select('notes')
+      .eq('id', applicationId)
+      .single();
+
+    const adminName = `${profile.first_name || ''} ${profile.last_name || ''}`.trim() || 'Admin';
+    const auditNote = `[${new Date().toISOString()}] Application details updated by ${adminName}.`;
+    updateData.notes = currentApp?.notes
+      ? `${currentApp.notes}\n\n${auditNote}`
+      : auditNote;
 
     // Update the application (explicitly prevent hoa_property_id from being updated)
     const { data: updatedApplication, error: updateError } = await supabase

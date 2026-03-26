@@ -37,6 +37,12 @@ import {
   CheckSquare,
   ChevronDown,
   Hash,
+  Zap,
+  Wrench,
+  ArrowRightLeft,
+  Send,
+  CreditCard,
+  PenLine,
 } from 'lucide-react';
 import { useRouter } from 'next/router';
 import { mapFormDataToPDFFields } from '../../lib/pdfFieldMapper';
@@ -82,6 +88,9 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
   const assigneeDropdownRef = useRef(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedApplication, setSelectedApplication] = useState(null);
+  // Ref so realtime handlers (which have a stable closure) can access the current selected application
+  const selectedApplicationRef = useRef(null);
+  const refreshSelectedApplicationRef = useRef(null);
   const [sendingEmail, setSendingEmail] = useState(false);
   const [generatingPDF, setGeneratingPDF] = useState(false);
   const [generatingPDFForProperty, setGeneratingPDFForProperty] = useState(null); // Track which property is generating PDF
@@ -105,6 +114,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
   const [staffMembers, setStaffMembers] = useState([]);
   const [assigningApplication, setAssigningApplication] = useState(null);
   const [assigningPropertyGroup, setAssigningPropertyGroup] = useState(null);
+  const [showEditHistory, setShowEditHistory] = useState(false);
   const [showInspectionFormModal, setShowInspectionFormModal] = useState(false);
   const [showResaleFormModal, setShowResaleFormModal] = useState(false);
   const [showSettlementFormModal, setShowSettlementFormModal] = useState(false);
@@ -145,6 +155,17 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
   const [collapsedMultiCommunityApps, setCollapsedMultiCommunityApps] = useState(() => new Set());
   // When opening modal from a specific property row, scroll to that property in the modal
   const [scrollToPropertyGroupId, setScrollToPropertyGroupId] = useState(null);
+
+  // Restructure Application modal state
+  const [showCorrectPrimaryModal, setShowCorrectPrimaryModal] = useState(false);
+  const [restructureMode, setRestructureMode] = useState(null); // null | 'correct_property' | 'rush_upgrade'
+  const [fetchingMcNetwork, setFetchingMcNetwork] = useState(false);
+  const [mcNetworkProperties, setMcNetworkProperties] = useState([]);
+  const [selectedNewPrimary, setSelectedNewPrimary] = useState(null);
+  const [dryRunResult, setDryRunResult] = useState(null); // delta preview from API
+  const [submittingCorrection, setSubmittingCorrection] = useState(false);
+  const [submittingRushUpgrade, setSubmittingRushUpgrade] = useState(false);
+  const [selectedCorrectionPackage, setSelectedCorrectionPackage] = useState(null); // 'standard' | 'rush'
 
   const toggleMultiCommunityExpand = (appId) => {
     setCollapsedMultiCommunityApps((prev) => {
@@ -244,6 +265,9 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
     }
   };
 
+  // Keep refs in sync so realtime handlers always see current values without stale closures
+  useEffect(() => { selectedApplicationRef.current = selectedApplication; }, [selectedApplication]);
+
   // Set up real-time subscription for applications table
   useEffect(() => {
     if (!supabase) {
@@ -283,19 +307,29 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
           else if (payload.eventType === 'UPDATE') {
             const newStatus = payload.new?.status;
             const oldStatus = payload.old?.status;
-            
+
             // Skip draft-only updates
             if (newStatus === 'draft' && oldStatus === 'draft') {
               return;
             }
-            
+
             // For any meaningful update (not draft), immediately refresh with cache bypass
             // This ensures we get the complete data with all relations (forms, notifications, etc.)
             // which is necessary to correctly display workflow steps and statuses
             if (newStatus !== 'draft') {
-              forceRefreshWithBypass().catch(err => 
+              forceRefreshWithBypass().catch(err =>
                 console.warn('Failed to refresh applications list after realtime update:', err)
               );
+
+              // If this update affects the currently open application, refresh its detail panel too.
+              // Uses refs (not closure vars) to avoid stale state inside the stable subscription effect.
+              // This handles cases like processing_locked being cleared by the Stripe webhook —
+              // the list refresh alone won't update the open detail view.
+              if (payload.new?.id && selectedApplicationRef.current?.id === payload.new.id) {
+                refreshSelectedApplicationRef.current?.(payload.new.id)?.catch(err =>
+                  console.warn('Failed to refresh selected application after realtime update:', err)
+                );
+              }
             }
           }
           // For DELETE events, refresh immediately
@@ -490,7 +524,8 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
       showSnackbar('Application rejected successfully. Email sent to requestor.', 'success');
       
       // Update selectedApplication state immediately
-      const updatedNotes = (selectedApplication.notes || '') + `\n\n--- Rejected on ${new Date().toLocaleString()} ---\n${rejectComments}`;
+      const rejectNote = `[${new Date().toISOString()}] Application rejected by Admin. Reason: "${rejectComments}"`;
+      const updatedNotes = (selectedApplication.notes || '') ? `${selectedApplication.notes}\n\n${rejectNote}` : rejectNote;
       setSelectedApplication({
         ...selectedApplication,
         status: 'rejected',
@@ -505,7 +540,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
           return {
             ...currentData,
             data: currentData.data.map(app => 
-              app.id === selectedApplication.id 
+              app.id === selectedApplication.id
                 ? { ...app, status: 'rejected', notes: updatedNotes, rejected_at: new Date().toISOString() }
                 : app
             ),
@@ -554,7 +589,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
       submitter_phone: selectedApplication.submitter_phone || '',
       buyer_name: selectedApplication.buyer_name || '',
       buyer_email: buyerEmails.length > 0 ? buyerEmails : [''],
-      seller_email: selectedApplication.seller_email || '',
+      seller_email: (() => { const e = (selectedApplication.seller_email || '').trim(); return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e) ? e : ''; })(),
       sale_price: selectedApplication.sale_price ? selectedApplication.sale_price.toString() : '',
       closing_date: closingDateFormatted,
     });
@@ -609,10 +644,14 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
       }
 
       showSnackbar('Application details updated successfully', 'success');
-      
+
       // Update selectedApplication state immediately
       const buyerEmailStr = editedDetails.buyer_email.filter(e => e.trim()).join(',');
       const salePriceNum = editedDetails.sale_price ? parseFloat(editedDetails.sale_price) : null;
+      const detailsAuditNote = `[${new Date().toISOString()}] Application details updated by Admin.`;
+      const updatedDetailsNotes = selectedApplication.notes
+        ? `${selectedApplication.notes}\n\n${detailsAuditNote}`
+        : detailsAuditNote;
       setSelectedApplication({
         ...selectedApplication,
         submitter_name: editedDetails.submitter_name,
@@ -624,6 +663,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
         seller_email: editedDetails.seller_email,
         sale_price: salePriceNum,
         closing_date: editedDetails.closing_date || null,
+        notes: updatedDetailsNotes,
       });
       
       // Optimistically update the application in the list
@@ -943,6 +983,14 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
       };
     }
     
+    // Info Packet: auto-completes on payment — no admin tasks needed
+    if (application.application_type === 'info_packet') {
+      if (application.status === 'completed' || !!application.email_completed_at) {
+        return { step: 2, text: 'Completed', color: 'bg-green-100 text-green-800' };
+      }
+      return { step: 1, text: 'Sending Documents', color: 'bg-blue-100 text-blue-800' };
+    }
+
     // Check if this is a lender questionnaire application
     const isLenderQuestionnaire = application.application_type === 'lender_questionnaire';
     
@@ -2081,6 +2129,12 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
              </div>
           </div>
           <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2 w-full lg:w-auto lg:flex-shrink-0">
+             {selectedApplication?.processing_locked ? (
+               <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-700 text-xs font-medium whitespace-nowrap">
+                 <svg className="w-3.5 h-3.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>
+                 Awaiting payment
+               </span>
+             ) : null}
              {children}
           </div>
        </div>
@@ -2445,6 +2499,8 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
       }
     }
   };
+  // Always expose the latest version of refreshSelectedApplication to the stable realtime handler
+  refreshSelectedApplicationRef.current = refreshSelectedApplication;
 
   const handleFormComplete = async () => {
     // Only refresh the selected application if open (not all applications)
@@ -2476,13 +2532,12 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                 updated_at: new Date().toISOString()
               })
               .eq('id', currentGroupId);
-            
+
             if (groupUpdateError) {
               console.error('Error updating property group inspection status:', groupUpdateError);
-            } else {
             }
           }
-          
+
           // Also update the form record
           if (currentFormId) {
             await supabase
@@ -2490,15 +2545,13 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
               .update({ status: 'completed', completed_at: new Date().toISOString() })
               .eq('id', currentFormId);
           }
-          
-          // For backwards compatibility, also update application-level if it's a single property app
-          if (!currentGroupId) {
-            await fetch('/api/complete-task', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ applicationId: selectedApplication.id, taskName: 'inspection_form' })
-            });
-          }
+
+          // Log to process history via complete-task (handles both group and single-property)
+          await fetch('/api/complete-task', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ applicationId: selectedApplication.id, taskName: 'inspection_form', propertyGroupId: currentGroupId || null })
+          });
           
           try {
             // Refresh both the application and property groups to ensure UI updates
@@ -2517,13 +2570,17 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
               .update({ status: 'completed', updated_at: new Date().toISOString() })
               .eq('id', currentGroupId);
             await loadPropertyGroups(selectedApplication.id);
-          } else {
-            // Single-property application: mark the application-level resale task as complete
-            await fetch('/api/complete-task', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ applicationId: selectedApplication.id, taskName: 'resale_certificate' })
-            });
+          }
+
+          // Log to process history via complete-task (handles both group and single-property)
+          await fetch('/api/complete-task', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ applicationId: selectedApplication.id, taskName: 'resale_certificate', propertyGroupId: currentGroupId || null })
+          });
+
+          if (!currentGroupId) {
+            // Single-property: refresh application state after complete-task updates it
             try {
             await refreshSelectedApplication(selectedApplication.id);
           } catch (refreshError) {
@@ -3539,6 +3596,178 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
     }
   };
 
+  // Open modal and load MC network properties for the current application's primary property
+  const handleOpenCorrectPrimary = () => {
+    setShowCorrectPrimaryModal(true);
+    setRestructureMode(null);
+    setSelectedNewPrimary(null);
+    setDryRunResult(null);
+    setMcNetworkProperties([]);
+  };
+
+  const handleCloseRestructureModal = () => {
+    setShowCorrectPrimaryModal(false);
+    setRestructureMode(null);
+    setSelectedNewPrimary(null);
+    setDryRunResult(null);
+    setMcNetworkProperties([]);
+    setSelectedCorrectionPackage(null);
+  };
+
+  const handleSelectRestructureMode = async (mode) => {
+    setRestructureMode(mode);
+    setSelectedNewPrimary(null);
+    setDryRunResult(null);
+
+    if (mode === 'correct_property') {
+      setFetchingMcNetwork(true);
+      const hoaPropertyId = selectedApplication.hoa_property_id;
+      try {
+        const [{ data: forward }, { data: reverse }] = await Promise.all([
+          supabase.from('linked_properties').select('linked_property_id').eq('primary_property_id', hoaPropertyId),
+          supabase.from('linked_properties').select('primary_property_id').eq('linked_property_id', hoaPropertyId),
+        ]);
+
+        const allIds = [...new Set([
+          ...(forward || []).map(r => r.linked_property_id),
+          ...(reverse || []).map(r => r.primary_property_id),
+        ])];
+
+        if (allIds.length === 0) {
+          setMcNetworkProperties([]);
+          return;
+        }
+
+        const { data: networkProperties } = await supabase
+          .from('hoa_properties')
+          .select('id, name, location, is_multi_community')
+          .in('id', allIds)
+          .is('deleted_at', null);
+
+        setMcNetworkProperties(
+          (networkProperties || []).filter(p => p.is_multi_community && p.id !== hoaPropertyId)
+        );
+      } catch (err) {
+        console.error('Failed to fetch MC network:', err);
+        setMcNetworkProperties([]);
+      } finally {
+        setFetchingMcNetwork(false);
+      }
+    }
+  };
+
+  // When admin selects a new primary candidate — dry-run to get delta info
+  const handleSelectNewPrimary = async (property) => {
+    setSelectedNewPrimary(property);
+    setDryRunResult(null);
+    // Default package type to current on new property selection
+    const pkg = selectedCorrectionPackage || selectedApplication.package_type;
+    setSelectedCorrectionPackage(pkg);
+    await runCorrectionDryRun(property.id, pkg);
+  };
+
+  const runCorrectionDryRun = async (propertyId, packageType) => {
+    setDryRunResult(null);
+    try {
+      const res = await fetch('/api/admin/correct-primary-property', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          applicationId:      selectedApplication.id,
+          newPrimaryPropertyId: propertyId,
+          dryRun:             true,
+          desiredPackageType: packageType,
+        }),
+      });
+      const data = await res.json();
+      setDryRunResult(data);
+    } catch (err) {
+      console.error('Dry-run failed:', err);
+    }
+  };
+
+  const handleChangeCorrectionPackage = async (pkg) => {
+    setSelectedCorrectionPackage(pkg);
+    if (selectedNewPrimary) {
+      await runCorrectionDryRun(selectedNewPrimary.id, pkg);
+    }
+  };
+
+  // Apply the correction (waiveDelta and createInvoice are mutually exclusive)
+  const handleApplyCorrection = async ({ waiveDelta = false, createInvoice = false }) => {
+    if (!selectedNewPrimary) return;
+    setSubmittingCorrection(true);
+    try {
+      const res = await fetch('/api/admin/correct-primary-property', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          applicationId:        selectedApplication.id,
+          newPrimaryPropertyId: selectedNewPrimary.id,
+          dryRun:               false,
+          waiveDelta,
+          createInvoice,
+          desiredPackageType:   selectedCorrectionPackage || selectedApplication.package_type,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        handleCloseRestructureModal();
+        await refreshSelectedApplication(selectedApplication.id);
+        let msg = `Primary corrected to "${data.newPrimaryName}".`;
+        if (createInvoice) {
+          msg += data.invoiceError
+            ? ` Warning: ${data.invoiceError}.`
+            : data.invoiceUrl
+            ? ' Invoice emailed to customer.'
+            : '';
+        }
+        showSnackbar(msg, data.invoiceError ? 'warning' : 'success');
+      } else {
+        showSnackbar(data.error || 'Correction failed', 'error');
+      }
+    } catch (err) {
+      console.error('Correction failed:', err);
+      showSnackbar('Correction failed — please try again', 'error');
+    } finally {
+      setSubmittingCorrection(false);
+    }
+  };
+
+  const handleApplyRushUpgrade = async ({ waiveFee = false }) => {
+    if (!selectedApplication) return;
+    setSubmittingRushUpgrade(true);
+    try {
+      const res = await fetch('/api/admin/upgrade-to-rush', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          applicationId: selectedApplication.id,
+          waiveFee,
+          createInvoice: !waiveFee,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        handleCloseRestructureModal();
+        await refreshSelectedApplication(selectedApplication.id);
+        let msg = waiveFee
+          ? 'Application upgraded to rush processing.'
+          : data.invoiceError
+          ? `Upgraded to rush. Warning: ${data.invoiceError}`
+          : 'Rush upgrade invoice emailed to customer.';
+        showSnackbar(msg, data.invoiceError ? 'warning' : 'success');
+      } else {
+        showSnackbar(data.error || 'Rush upgrade failed', 'error');
+      }
+    } catch (err) {
+      console.error('Rush upgrade failed:', err);
+      showSnackbar('Rush upgrade failed — please try again', 'error');
+    } finally {
+      setSubmittingRushUpgrade(false);
+    }
+  };
+
   const handleSendAllMcEmails = async (applicationId) => {
     setSendingAllMcEmails(true);
     try {
@@ -3747,6 +3976,9 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                 <optgroup label='Public Offering'>
                   <option value='public_offering'>Public Offering</option>
                 </optgroup>
+                <optgroup label='Info Packet'>
+                  <option value='info_packet'>Info Packet (Welcome Package)</option>
+                </optgroup>
               </select>
             </div>
 
@@ -3936,6 +4168,8 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                   const groups = (app.application_property_groups || []).sort((a, b) => (a.is_primary ? -1 : 0) - (b.is_primary ? -1 : 0));
                   const primaryGroup = groups.find((g) => g.is_primary) || groups[0];
                   const isExpanded = isMC && !collapsedMultiCommunityApps.has(app.id);
+                  const isMCType = (app.application_type === 'multi_community' || app.application_type?.startsWith('mc_') || app.hoa_properties?.is_multi_community) && app.application_type !== 'lender_questionnaire';
+                  const isPropagating = isMCType && !isMC && app.status !== 'draft' && app.status !== 'pending_payment' && app.status !== 'rejected';
 
                   const renderTypeBadge = (appTypeOverride) => {
                     const appType = appTypeOverride ?? app.application_type ?? 'single_property';
@@ -3947,6 +4181,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                     else if (appType === 'mc_settlement_va') { typeLabel = 'MC Settlement - VA'; typeColor = 'bg-teal-100 text-teal-800'; }
                     else if (appType === 'mc_settlement_nc') { typeLabel = 'MC Settlement - NC'; typeColor = 'bg-cyan-100 text-cyan-800'; }
                     else if (appType === 'public_offering') { typeLabel = 'Public Offering'; typeColor = 'bg-purple-100 text-purple-800'; }
+                    else if (appType === 'info_packet') { typeLabel = 'Info Packet'; typeColor = 'bg-blue-100 text-blue-800'; }
                     else if (appType === 'multi_community') { typeLabel = 'Multi-Community'; typeColor = 'bg-orange-100 text-orange-800'; }
                     else if (appType === 'lender_questionnaire') { typeLabel = 'Lender Questionnaire'; typeColor = 'bg-indigo-100 text-indigo-800'; }
                     else { typeLabel = 'Single Property'; typeColor = 'bg-gray-100 text-gray-800'; }
@@ -4053,7 +4288,15 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                             </div>
                           </div>
                         </td>
-                        <td className='px-6 py-4 text-center'>{renderTypeBadge()}</td>
+                        <td className='px-6 py-4 text-center'>
+                          {renderTypeBadge()}
+                          {isPropagating && (
+                            <div className='mt-1.5 flex items-center justify-center gap-1 text-xs text-amber-600'>
+                              <RefreshCw className='w-3 h-3 animate-spin' />
+                              <span>Setting up properties...</span>
+                            </div>
+                          )}
+                        </td>
                         <td className='px-6 py-4 text-center'>
                           {app.status === 'rejected' ? (
                             <div className='group relative inline-block'>
@@ -4194,6 +4437,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
               else if (appType === 'mc_settlement_va') { typeLabel = 'MC Settlement - VA'; typeColor = 'bg-teal-100 text-teal-800'; }
               else if (appType === 'mc_settlement_nc') { typeLabel = 'MC Settlement - NC'; typeColor = 'bg-cyan-100 text-cyan-800'; }
               else if (appType === 'public_offering') { typeLabel = 'Public Offering'; typeColor = 'bg-purple-100 text-purple-800'; }
+              else if (appType === 'info_packet') { typeLabel = 'Info Packet'; typeColor = 'bg-blue-100 text-blue-800'; }
               else if (appType === 'multi_community') { typeLabel = 'Multi-Community'; typeColor = 'bg-orange-100 text-orange-800'; }
               else if (appType === 'lender_questionnaire') { typeLabel = 'Lender Questionnaire'; typeColor = 'bg-indigo-100 text-indigo-800'; }
 
@@ -4502,6 +4746,17 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                       </button>
                     </>
                   )}
+                  {/* Restructure Application Button - admin only, excludes lender questionnaire */}
+                  {userRole === 'admin' && !isEditingDetails && selectedApplication?.application_type !== 'lender_questionnaire' && (
+                    <button
+                      onClick={handleOpenCorrectPrimary}
+                      className='px-4 py-2 bg-amber-50 border border-amber-300 rounded-lg text-amber-700 hover:bg-amber-100 font-semibold transition-all flex items-center gap-2 text-sm'
+                      title='Restructure the application setup'
+                    >
+                      <Edit className='w-4 h-4' />
+                      Restructure Application
+                    </button>
+                  )}
                   {/* Reject Button - Only show if user is admin and application is not already rejected */}
                   {userRole === 'admin' && selectedApplication && selectedApplication.status !== 'rejected' && !isEditingDetails && (
                     <button
@@ -4540,6 +4795,31 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
 
               {/* Modal Content */}
               <div className='flex-1 overflow-y-auto custom-scrollbar p-6 space-y-8 bg-gray-50/30'>
+                {/* Processing Locked Banner */}
+                {selectedApplication.processing_locked && (
+                  <div className='bg-amber-500 rounded-2xl p-5 text-white shadow-lg shadow-amber-200 flex flex-col md:flex-row md:items-center justify-between gap-4 border border-amber-600 animate-in fade-in zoom-in-95 duration-300'>
+                    <div className='flex items-center gap-4'>
+                      <div className='h-12 w-12 rounded-full bg-white/20 flex items-center justify-center backdrop-blur-sm border border-white/30 flex-shrink-0'>
+                        <AlertTriangle className='w-7 h-7 text-white' />
+                      </div>
+                      <div>
+                        <h3 className='text-base font-bold'>Tasks Locked — Awaiting Payment</h3>
+                        <p className='text-amber-50/90 text-sm font-medium mt-0.5'>
+                          {selectedApplication.processing_locked_reason === 'pending_rush_upgrade_payment'
+                            ? 'A rush upgrade invoice was sent to the customer. The deadline will update automatically once payment is confirmed.'
+                            : 'A property correction invoice was sent to the customer. Tasks will unlock automatically once payment is confirmed.'
+                          }
+                        </p>
+                        {selectedApplication.processing_locked_at && (
+                          <p className='text-amber-100/70 text-xs mt-1'>
+                            Locked {formatDateTime(selectedApplication.processing_locked_at)}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 {/* Rejected Status Banner */}
                 {selectedApplication.status === 'rejected' && (
                   <div className='bg-red-600 rounded-2xl p-6 text-white shadow-lg shadow-red-200 flex flex-col md:flex-row md:items-center justify-between gap-4 border border-red-700 animate-in fade-in zoom-in-95 duration-300'>
@@ -4803,7 +5083,121 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                     </div>
                   </div>
                 </div>
-                
+
+                {/* Process History - collapsible, collapsed by default */}
+                {(() => {
+                  const auditPattern = /^\[\d{4}-\d{2}-\d{2}T[\d:.]+Z\]/;
+                  const auditEntries = (selectedApplication.notes || '').split('\n\n').filter(c => auditPattern.test(c.trim()));
+
+                  // Classify a message into an event type for icon + color
+                  const classify = (msg) => {
+                    const m = msg.toLowerCase();
+                    if (m.includes('property corrected') || m.includes('correct property') || m.includes('correct primary')) return 'correction';
+                    if (m.includes('rush upgrade invoice') || m.includes('upgrade invoice')) return 'rush_invoice';
+                    if (m.includes('package upgraded') || m.includes('upgraded to rush') || m.includes('upgrade to rush')) return 'rush_upgrade';
+                    if (m.includes('application rejected') || m.includes('application cancelled')) return 'rejected';
+                    if (m.includes('task completed') || m.includes('was completed')) return 'task';
+                    if (m.includes('assigned to') || m.includes('re-assigned') || m.includes('reassigned')) return 'assigned';
+                    if (m.includes('invoice paid') || m.includes('payment received') || m.includes('payment confirmed')) return 'paid';
+                    if (m.includes('details updated') || m.includes('details was updated')) return 'details';
+                    if (m.includes('email sent') || m.includes('emailed to') || m.includes('resend') || m.includes('send to email')) return 'email';
+                    return 'default';
+                  };
+
+                  const eventConfig = {
+                    submitted:    { Icon: CheckCircle,    dot: 'bg-green-500',  iconColor: 'text-green-600',  label: null },
+                    correction:   { Icon: Wrench,         dot: 'bg-purple-500', iconColor: 'text-purple-600', label: 'Application Restructured' },
+                    rush_invoice: { Icon: Zap,            dot: 'bg-orange-500', iconColor: 'text-orange-500', label: 'Application Restructured' },
+                    rush_upgrade: { Icon: Zap,            dot: 'bg-orange-500', iconColor: 'text-orange-500', label: 'Rush Upgrade' },
+                    rejected:     { Icon: XCircle,        dot: 'bg-red-500',    iconColor: 'text-red-500',    label: null },
+                    task:         { Icon: CheckSquare,    dot: 'bg-blue-500',   iconColor: 'text-blue-600',   label: null },
+                    assigned:     { Icon: ArrowRightLeft, dot: 'bg-indigo-500', iconColor: 'text-indigo-600', label: null },
+                    paid:         { Icon: CreditCard,     dot: 'bg-green-500',  iconColor: 'text-green-600',  label: null },
+                    details:      { Icon: PenLine,        dot: 'bg-gray-500',   iconColor: 'text-gray-500',   label: null },
+                    email:        { Icon: Send,           dot: 'bg-sky-500',    iconColor: 'text-sky-600',    label: null },
+                    default:      { Icon: Clock,          dot: 'bg-gray-400',   iconColor: 'text-gray-400',   label: null },
+                  };
+
+                  // Build timeline: synthetic "submitted" entry + audit entries, sorted oldest→newest
+                  const timelineEntries = [];
+
+                  if (selectedApplication.submitted_at) {
+                    // Normalize to ISO string so it sorts consistently with audit note timestamps
+                    const submittedTs = new Date(selectedApplication.submitted_at).toISOString();
+                    timelineEntries.push({
+                      timestamp: submittedTs,
+                      message: `Application submitted by ${selectedApplication.submitter_name || selectedApplication.submitter_email || 'requester'}`,
+                      type: 'submitted',
+                    });
+                  }
+
+                  auditEntries.forEach(entry => {
+                    const match = entry.match(/^\[(\d{4}-\d{2}-\d{2}T[\d:.]+Z)\]\s*([\s\S]*)/);
+                    if (!match) return;
+                    const [, timestamp, message] = match;
+                    timelineEntries.push({ timestamp, message, type: classify(message) });
+                  });
+
+                  timelineEntries.sort((a, b) => {
+                    const ta = new Date(a.timestamp).getTime();
+                    const tb = new Date(b.timestamp).getTime();
+                    if (isNaN(ta) && isNaN(tb)) return 0;
+                    if (isNaN(ta)) return -1; // invalid dates go first (submitted fallback)
+                    if (isNaN(tb)) return 1;
+                    return ta - tb;
+                  });
+
+                  if (!timelineEntries.length) return null;
+
+                  return (
+                    <div className='bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden'>
+                      <button
+                        onClick={() => setShowEditHistory(v => !v)}
+                        className='w-full px-5 py-3 flex items-center justify-between hover:bg-gray-50 transition-colors'
+                      >
+                        <span className='flex items-center gap-2 text-sm font-semibold text-gray-900 uppercase tracking-wider'>
+                          <Clock className='w-4 h-4 text-gray-400' />
+                          Process History
+                          <span className='ml-1 px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500 text-xs font-medium normal-case tracking-normal'>{timelineEntries.length}</span>
+                        </span>
+                        <ChevronDown className={`w-4 h-4 text-gray-400 transition-transform ${showEditHistory ? 'rotate-180' : ''}`} />
+                      </button>
+                      {showEditHistory && (
+                        <div className='border-t border-gray-100 px-5 py-4'>
+                          <div className='relative'>
+                            {/* Vertical line */}
+                            <div className='absolute left-[7px] top-2 bottom-2 w-px bg-gray-200' />
+                            <div className='space-y-5'>
+                              {timelineEntries.map((entry, i) => {
+                                const cfg = eventConfig[entry.type] || eventConfig.default;
+                                const { Icon, dot, iconColor, label } = cfg;
+                                return (
+                                  <div key={i} className='flex gap-3 relative'>
+                                    {/* Dot */}
+                                    <div className={`w-3.5 h-3.5 rounded-full ${dot} shrink-0 mt-0.5 ring-2 ring-white z-10`} />
+                                    <div className='flex-1 min-w-0'>
+                                      <div className='flex items-start gap-2'>
+                                        <Icon className={`w-3.5 h-3.5 shrink-0 mt-0.5 ${iconColor}`} />
+                                        <div className='flex-1 min-w-0'>
+                                          {label && (
+                                            <span className='block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-0.5'>{label}</span>
+                                          )}
+                                          <p className='text-sm text-gray-700 leading-snug'>{entry.message}</p>
+                                        </div>
+                                      </div>
+                                      <p className='text-xs text-gray-400 mt-1 ml-5'>{formatDateTime(entry.timestamp)}</p>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+
                 {/* Assignment Section - hidden for multi-community (assignee is per property), except LQ which always uses a single assignee */}
                 {selectedApplication.status !== 'rejected' && (!isMultiCommunityTreeApp(selectedApplication) || selectedApplication.application_type === 'lender_questionnaire') && (
                   <div className='bg-white rounded-xl border border-gray-200 p-5 shadow-sm'>
@@ -5190,6 +5584,78 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                   </div>
                 )}
 
+                {/* Info Packet Tasks (auto-completed on payment) */}
+                {selectedApplication.application_type === 'info_packet' && selectedApplication.status !== 'rejected' && (
+                  <div>
+                    <h3 className='text-lg font-bold text-gray-900 mb-4 flex items-center gap-2'>
+                      <CheckSquare className='w-5 h-5 text-gray-500' />
+                      Info Packet Tasks
+                    </h3>
+                    <div className='space-y-4'>
+                      {/* Auto-completed banner */}
+                      <div className='flex items-start gap-4 p-5 bg-green-50 border border-green-200 rounded-xl'>
+                        <div className='flex-shrink-0 flex items-center justify-center w-10 h-10 rounded-full bg-green-100 border-2 border-green-400 text-green-600'>
+                          <CheckCircle className='w-5 h-5' />
+                        </div>
+                        <div className='flex-1'>
+                          <h4 className='font-semibold text-green-900'>Documents Sent Automatically</h4>
+                          <p className='text-sm text-green-700 mt-1'>
+                            Welcome Package and property documents were delivered to the requester upon payment. No manual admin tasks required.
+                          </p>
+                          {selectedApplication.email_completed_at && (
+                            <p className='text-xs text-green-600 bg-green-100 px-2 py-1 rounded w-fit mt-2'>
+                              Sent: {new Date(selectedApplication.email_completed_at).toLocaleString()}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                      {/* Resend Documents task */}
+                      <div className='flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-5 bg-white border border-gray-200 rounded-xl shadow-sm'>
+                        <div className='flex items-start gap-4'>
+                          <div className='flex-shrink-0 flex items-center justify-center w-10 h-10 rounded-full border-2 border-blue-300 bg-blue-50 text-blue-600'>
+                            <Mail className='w-5 h-5' />
+                          </div>
+                          <div>
+                            <h4 className='font-semibold text-gray-900'>Resend Documents</h4>
+                            <p className='text-sm text-gray-500 mt-1'>Re-send the Info Packet documents to the requester and buyer(s)</p>
+                          </div>
+                        </div>
+                        <button
+                          onClick={async () => {
+                            try {
+                              setSendingEmail(true);
+                              const response = await fetch('/api/send-info-packet-email', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ applicationId: selectedApplication.id }),
+                              });
+                              if (!response.ok) {
+                                const err = await response.json();
+                                throw new Error(err.error || 'Failed to resend documents');
+                              }
+                              showSnackbar('Documents resent successfully', 'success');
+                              await refreshSelectedApplication(selectedApplication.id);
+                            } catch (error) {
+                              console.error('Error resending info packet:', error);
+                              showSnackbar(error.message || 'Failed to resend documents', 'error');
+                            } finally {
+                              setSendingEmail(false);
+                            }
+                          }}
+                          disabled={sendingEmail}
+                          className='flex items-center gap-2 px-4 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium shadow-sm disabled:opacity-50'
+                        >
+                          {sendingEmail ? (
+                            <><RefreshCw className='w-4 h-4 animate-spin' />Sending...</>
+                          ) : (
+                            <><Mail className='w-4 h-4' />Resend Documents</>
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 {/* Multi-Community Properties Section */}
                 {(() => {
                   // Don't show tasks if application is rejected
@@ -5198,7 +5664,17 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                   }
                   const isMultiCommunity = selectedApplication.hoa_properties?.is_multi_community && propertyGroups.length > 1;
                   const isLenderQuestionnaire = selectedApplication.application_type === 'lender_questionnaire';
-                  
+                  const isMCTypePropagating = selectedApplication.hoa_properties?.is_multi_community && !isLenderQuestionnaire && propertyGroups.length <= 1;
+
+                  if (isMCTypePropagating) {
+                    return (
+                      <div className='flex items-center gap-2.5 p-4 bg-amber-50 border border-amber-200 rounded-xl text-sm text-amber-700'>
+                        <RefreshCw className='w-4 h-4 animate-spin flex-shrink-0' />
+                        <span>Setting up properties...</span>
+                      </div>
+                    );
+                  }
+
                   if (isMultiCommunity && !isLenderQuestionnaire) {
                     const isSettlementMc = selectedApplication.submitter_type === 'settlement' || selectedApplication.application_type?.startsWith('settlement');
                     const allGroupsReady = propertyGroups.every((g) => {
@@ -5216,10 +5692,12 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
 
                     return (
                       <div>
-                        <h3 className='text-lg font-bold text-gray-900 mb-4 flex items-center gap-2'>
-                          <Building className='w-5 h-5 text-gray-500' />
-                          Multi-Community Properties
-                        </h3>
+                        <div className='flex items-center justify-between mb-4'>
+                          <h3 className='text-lg font-bold text-gray-900 flex items-center gap-2'>
+                            <Building className='w-5 h-5 text-gray-500' />
+                            Multi-Community Properties
+                          </h3>
+                        </div>
                         {allGroupsReady && (
                           <div className={`mb-4 p-4 border rounded-xl ${allMcEmailsSent ? 'bg-green-50 border-green-100' : 'bg-blue-50 border-blue-100'}`}>
                             <p className={`text-sm mb-3 ${allMcEmailsSent ? 'text-green-800' : 'text-blue-800'}`}>
@@ -5385,7 +5863,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                                                     <span className="text-sm font-medium">Settlement Form</span>
                                                   </div>
                                                   <div className="flex gap-2">
-                                                     <button onClick={() => handleCompleteForm(selectedApplication.id, 'settlement', group)} className="px-3 py-1 text-xs font-medium bg-white border border-gray-300 rounded hover:bg-gray-50 text-gray-700">
+                                                     <button onClick={() => handleCompleteForm(selectedApplication.id, 'settlement', group)} disabled={!!selectedApplication?.processing_locked || loadingFormData} className="px-3 py-1 text-xs font-medium bg-white border border-gray-300 rounded hover:bg-gray-50 text-gray-700 disabled:opacity-50 disabled:cursor-not-allowed">
                                                         {loadingFormData ? (
                                                           <div className="flex items-center gap-1.5">
                                                             <RefreshCw className="w-3 h-3 animate-spin" />
@@ -5394,7 +5872,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                                                         ) : getFormButtonText(taskStatuses.settlement)}
                                                      </button>
                                                      {taskStatuses.settlement !== 'completed' && (
-                                                        <button onClick={() => handleCompleteTask(selectedApplication.id, 'settlement_form', group)} className="px-2 py-1 text-xs font-medium text-green-700 bg-green-50 border border-green-200 rounded hover:bg-green-100">Complete</button>
+                                                        <button onClick={() => handleCompleteTask(selectedApplication.id, 'settlement_form', group)} disabled={!!selectedApplication?.processing_locked} className="px-2 py-1 text-xs font-medium text-green-700 bg-green-50 border border-green-200 rounded hover:bg-green-100 disabled:opacity-50 disabled:cursor-not-allowed">Complete</button>
                                                      )}
                                                   </div>
                                                </div>
@@ -5405,7 +5883,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                                                     <span className="text-sm font-medium">Generate PDF</span>
                                                   </div>
                                                    <div className="flex gap-2">
-                                                     <button onClick={() => handleGenerateSettlementPDF(selectedApplication.id, group)} disabled={!pdfCanBeGenerated || generatingPDF} className="px-3 py-1 text-xs font-medium bg-white border border-gray-300 rounded hover:bg-gray-50 text-gray-700 disabled:opacity-50">
+                                                     <button onClick={() => handleGenerateSettlementPDF(selectedApplication.id, group)} disabled={!pdfCanBeGenerated || generatingPDF || !!selectedApplication?.processing_locked} className="px-3 py-1 text-xs font-medium bg-white border border-gray-300 rounded hover:bg-gray-50 text-gray-700 disabled:opacity-50 disabled:cursor-not-allowed">
                                                         {generatingPDF ? (
                                                           <div className="flex items-center gap-1.5">
                                                             <RefreshCw className="w-3 h-3 animate-spin" />
@@ -5458,7 +5936,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                                                     useFormCompletionDateFormat
                                                 >
                                                     <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2">
-                                                       <button onClick={() => handleCompleteForm(selectedApplication.id, 'inspection', group)} className="w-full sm:w-auto px-3 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 active:bg-gray-100 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap">
+                                                       <button onClick={() => handleCompleteForm(selectedApplication.id, 'inspection', group)} disabled={!!selectedApplication?.processing_locked || loadingFormKey === `inspection:${group.id}`} className="w-full sm:w-auto px-3 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 active:bg-gray-100 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed">
                                                           {loadingFormKey === `inspection:${group.id}` ? (
                                                              <div className="flex items-center gap-1.5">
                                                                <RefreshCw className="w-3 h-3 animate-spin" />
@@ -5469,7 +5947,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                                                        {inspectionStatusForGroup !== 'completed' && (
                                                           <button
                                                             onClick={() => handleCompleteTask(selectedApplication.id, 'inspection_form', group)}
-                                                            disabled={completingTaskKey === `inspection_form:${group.id}`}
+                                                            disabled={completingTaskKey === `inspection_form:${group.id}` || !!selectedApplication?.processing_locked}
                                                             className="w-full sm:w-auto px-3 py-2 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 active:bg-green-300 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
                                                           >
                                                             {completingTaskKey === `inspection_form:${group.id}` ? (
@@ -5490,7 +5968,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                                                     useFormCompletionDateFormat
                                                 >
                                                     <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2">
-                                                       <button onClick={() => handleCompleteForm(selectedApplication.id, 'resale', group)} className="w-full sm:w-auto px-3 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 active:bg-gray-100 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap">
+                                                       <button onClick={() => handleCompleteForm(selectedApplication.id, 'resale', group)} disabled={!!selectedApplication?.processing_locked || loadingFormKey === `resale:${group.id}`} className="w-full sm:w-auto px-3 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 active:bg-gray-100 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed">
                                                           {loadingFormKey === `resale:${group.id}` ? (
                                                              <div className="flex items-center gap-1.5">
                                                                <RefreshCw className="w-3 h-3 animate-spin" />
@@ -5501,7 +5979,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                                                        {resaleStatusForGroup !== 'completed' && (
                                                           <button
                                                             onClick={() => handleCompleteTask(selectedApplication.id, 'resale_certificate', group)}
-                                                            disabled={completingTaskKey === `resale_certificate:${group.id}`}
+                                                            disabled={completingTaskKey === `resale_certificate:${group.id}` || !!selectedApplication?.processing_locked}
                                                             className="w-full sm:w-auto px-3 py-2 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 active:bg-green-300 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
                                                           >
                                                             {completingTaskKey === `resale_certificate:${group.id}` ? (
@@ -5521,7 +5999,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                                                     completedAt={group.pdf_completed_at}
                                                 >
                                                     <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2">
-                                                       <button type="button" onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleGeneratePDFForProperty(selectedApplication.id, group); }} disabled={generatingPDFForProperty === group.id || !canGeneratePDFForProperty(group)} className="w-full sm:w-auto px-3 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 active:bg-gray-100 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed">
+                                                       <button type="button" onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleGeneratePDFForProperty(selectedApplication.id, group); }} disabled={generatingPDFForProperty === group.id || !canGeneratePDFForProperty(group) || !!selectedApplication?.processing_locked} className="w-full sm:w-auto px-3 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 active:bg-gray-100 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed">
                                                           {generatingPDFForProperty === group.id ? (
                                                              <div className="flex items-center gap-1.5">
                                                                <RefreshCw className="w-3 h-3 animate-spin" />
@@ -5584,16 +6062,27 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                         Comments & Notes
                       </h3>
                     <div className='flex flex-col gap-3'>
-                      <textarea
-                        value={selectedApplication.notes || ''}
-                        onChange={(e) => setSelectedApplication({
-                          ...selectedApplication,
-                          notes: e.target.value
-                        })}
-                        className='w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 resize-none transition-all text-sm'
-                        rows='4'
-                        placeholder='Add notes about this application, task progress, issues, or important information...'
-                      />
+                      {(() => {
+                        const auditPattern = /^\[\d{4}-\d{2}-\d{2}T[\d:.]+Z\]/;
+                        const chunks = (selectedApplication.notes || '').split('\n\n');
+                        const auditEntries = chunks.filter(c => auditPattern.test(c.trim()));
+                        const regularNotes = chunks.filter(c => !auditPattern.test(c.trim())).join('\n\n');
+                        return (
+                          <textarea
+                            value={regularNotes}
+                            onChange={(e) => {
+                              const newRegular = e.target.value;
+                              const combined = auditEntries.length > 0
+                                ? `${auditEntries.join('\n\n')}${newRegular ? '\n\n' + newRegular : ''}`
+                                : newRegular;
+                              setSelectedApplication({ ...selectedApplication, notes: combined });
+                            }}
+                            className='w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 resize-none transition-all text-sm'
+                            rows='4'
+                            placeholder='Add notes about this application, task progress, issues, or important information...'
+                          />
+                        );
+                      })()}
                       <div className='flex justify-end'>
                         <button
                           onClick={() => handleSaveComments(selectedApplication.id, selectedApplication.notes)}
@@ -5614,7 +6103,8 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                   }
                   const isMultiCommunity = selectedApplication.hoa_properties?.is_multi_community && propertyGroups.length > 1;
                   const isLenderQuestionnaire = selectedApplication.application_type === 'lender_questionnaire';
-                  return !isMultiCommunity && !isLenderQuestionnaire;
+                  const isInfoPacket = selectedApplication.application_type === 'info_packet';
+                  return !isMultiCommunity && !isLenderQuestionnaire && !isInfoPacket;
                 })() && (
                   <div>
                     <h3 className='text-lg font-bold text-gray-900 mb-4 flex items-center gap-2'>
@@ -5635,7 +6125,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                           <>
                              <TaskCard step="1" status={taskStatuses.settlement} title="Settlement Form" description="Complete form with assessment details" completedAt={selectedApplication.settlement_form_completed_at || selectedApplication.property_owner_forms?.find(f => f.form_type === 'settlement_form' && !f.property_group_id)?.completed_at} useFormCompletionDateFormat>
                                 <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2">
-                                   <button onClick={() => handleCompleteForm(selectedApplication.id, 'settlement')} disabled={loadingFormData} className="w-full sm:w-auto px-3 sm:px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 active:bg-gray-100 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed">
+                                   <button onClick={() => handleCompleteForm(selectedApplication.id, 'settlement')} disabled={loadingFormData || !!selectedApplication?.processing_locked} className="w-full sm:w-auto px-3 sm:px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 active:bg-gray-100 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed">
                                       {loadingFormData ? (
                                          <div className="flex items-center gap-1.5">
                                            <RefreshCw className="w-3 h-3 sm:w-4 sm:h-4 animate-spin" />
@@ -5644,14 +6134,14 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                                       ) : getFormButtonText(taskStatuses.settlement)}
                                    </button>
                                    {taskStatuses.settlement !== 'completed' && (
-                                      <button onClick={() => handleCompleteTask(selectedApplication.id, 'settlement_form')} className="w-full sm:w-auto px-3 py-2 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 active:bg-green-300 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap">Complete</button>
+                                      <button onClick={() => handleCompleteTask(selectedApplication.id, 'settlement_form')} disabled={!!selectedApplication?.processing_locked} className="w-full sm:w-auto px-3 py-2 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 active:bg-green-300 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed">Complete</button>
                                    )}
                                 </div>
                              </TaskCard>
                              
                              <TaskCard step="2" status={taskStatuses.pdf} title="Generate PDF" description="Generate settlement PDF document" completedAt={selectedApplication.pdf_completed_at}>
                                 <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2">
-                                   <button onClick={() => handleGenerateSettlementPDF(selectedApplication.id)} disabled={!pdfCanBeGenerated || generatingPDF} className="w-full sm:w-auto px-3 sm:px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 active:bg-gray-100 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed">
+                                   <button onClick={() => handleGenerateSettlementPDF(selectedApplication.id)} disabled={!pdfCanBeGenerated || generatingPDF || !!selectedApplication?.processing_locked} className="w-full sm:w-auto px-3 sm:px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 active:bg-gray-100 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed">
                                       {generatingPDF ? (
                                          <div className="flex items-center gap-1.5">
                                            <RefreshCw className="w-3 h-3 sm:w-4 sm:h-4 animate-spin" />
@@ -5667,7 +6157,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                              
                              <TaskCard step="3" status={taskStatuses.email} title="Send Email" description="Send details to settlement agent" completedAt={selectedApplication.email_completed_at || selectedApplication.notifications?.find(n => n.notification_type === 'application_approved')?.sent_at}>
                                 <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2">
-                                   <button onClick={() => handleSendApprovalEmail(selectedApplication.id)} disabled={!emailCanBeSent || sendingEmail} className="w-full sm:w-auto px-3 sm:px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 active:bg-blue-800 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed shadow-sm">
+                                   <button onClick={() => handleSendApprovalEmail(selectedApplication.id)} disabled={!emailCanBeSent || sendingEmail || !!selectedApplication?.processing_locked} className="w-full sm:w-auto px-3 sm:px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 active:bg-blue-800 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed shadow-sm">
                                       {sendingEmail ? (
                                          <div className="flex items-center gap-1.5">
                                            <RefreshCw className="w-3 h-3 sm:w-4 sm:h-4 animate-spin" />
@@ -5689,7 +6179,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                            <>
                               <TaskCard step="1" status={taskStatuses.inspection} title="Inspection Form" description="Complete property inspection checklist" completedAt={selectedApplication.inspection_form_completed_at || selectedApplication.forms?.inspectionForm?.completed_at} useFormCompletionDateFormat>
                                  <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2">
-                                    <button onClick={() => handleCompleteForm(selectedApplication.id, 'inspection')} disabled={loadingFormData} className="w-full sm:w-auto px-3 sm:px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 active:bg-gray-100 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed">
+                                    <button onClick={() => handleCompleteForm(selectedApplication.id, 'inspection')} disabled={loadingFormData || !!selectedApplication?.processing_locked} className="w-full sm:w-auto px-3 sm:px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 active:bg-gray-100 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed">
                                        {loadingFormData ? (
                                           <div className="flex items-center gap-1.5">
                                             <RefreshCw className="w-3 h-3 sm:w-4 sm:h-4 animate-spin" />
@@ -5698,14 +6188,14 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                                        ) : getFormButtonText(taskStatuses.inspection)}
                                     </button>
                                     {taskStatuses.inspection !== 'completed' && (
-                                       <button onClick={() => handleCompleteTask(selectedApplication.id, 'inspection_form')} className="w-full sm:w-auto px-3 py-2 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 active:bg-green-300 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap">Mark Done</button>
+                                       <button onClick={() => handleCompleteTask(selectedApplication.id, 'inspection_form')} disabled={!!selectedApplication?.processing_locked} className="w-full sm:w-auto px-3 py-2 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 active:bg-green-300 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed">Mark Done</button>
                                     )}
                                  </div>
                               </TaskCard>
 
                               <TaskCard step="2" status={taskStatuses.resale} title="Resale Certificate" description="Fill out Virginia resale disclosure" completedAt={selectedApplication.resale_certificate_completed_at || selectedApplication.forms?.resaleCertificate?.completed_at} useFormCompletionDateFormat>
                                  <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2">
-                                    <button onClick={() => handleCompleteForm(selectedApplication.id, 'resale')} disabled={loadingFormData} className="w-full sm:w-auto px-3 sm:px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 active:bg-gray-100 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed">
+                                    <button onClick={() => handleCompleteForm(selectedApplication.id, 'resale')} disabled={loadingFormData || !!selectedApplication?.processing_locked} className="w-full sm:w-auto px-3 sm:px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 active:bg-gray-100 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed">
                                        {loadingFormData ? (
                                           <div className="flex items-center gap-1.5">
                                             <RefreshCw className="w-3 h-3 sm:w-4 sm:h-4 animate-spin" />
@@ -5714,7 +6204,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                                        ) : getFormButtonText(taskStatuses.resale)}
                                     </button>
                                     {taskStatuses.resale !== 'completed' && (
-                                       <button onClick={() => handleCompleteTask(selectedApplication.id, 'resale_certificate')} className="w-full sm:w-auto px-3 py-2 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 active:bg-green-300 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap">Mark Done</button>
+                                       <button onClick={() => handleCompleteTask(selectedApplication.id, 'resale_certificate')} disabled={!!selectedApplication?.processing_locked} className="w-full sm:w-auto px-3 py-2 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 active:bg-green-300 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed">Mark Done</button>
                                     )}
                                  </div>
                               </TaskCard>
@@ -5730,7 +6220,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                                          const resaleForm = selectedApplication.property_owner_forms?.find(form => form.form_type === 'resale_certificate');
                                          handleGeneratePDF({ inspectionForm: inspectionForm?.form_data, resaleCertificate: resaleForm?.form_data }, selectedApplication.id);
                                        }} 
-                                       disabled={generatingPDF} 
+                                       disabled={generatingPDF || !!selectedApplication?.processing_locked}
                                        className="w-full sm:w-auto px-3 sm:px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 active:bg-gray-100 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
                                      >
                                        {generatingPDF ? (
@@ -5749,7 +6239,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                               <TaskCard step="4" status={taskStatuses.email} title="Send Completion Email" description="Send PDF and files to applicant" completedAt={selectedApplication.email_completed_at || selectedApplication.notifications?.find(n => n.notification_type === 'application_approved')?.sent_at}>
                                  <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2">
                                     <button onClick={() => setShowAttachmentModal(true)} className="w-full sm:w-auto px-3 py-2 bg-gray-100 text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-200 active:bg-gray-300 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap">Attachments</button>
-                                    <button onClick={() => handleSendApprovalEmail(selectedApplication.id)} disabled={!emailCanBeSent || sendingEmail || taskStatuses.pdf === 'update_needed'} className="w-full sm:w-auto px-3 sm:px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 active:bg-blue-800 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed shadow-sm">
+                                    <button onClick={() => handleSendApprovalEmail(selectedApplication.id)} disabled={!emailCanBeSent || sendingEmail || taskStatuses.pdf === 'update_needed' || !!selectedApplication?.processing_locked} className="w-full sm:w-auto px-3 sm:px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 active:bg-blue-800 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed shadow-sm">
                                        {sendingEmail ? (
                                           <div className="flex items-center gap-1.5">
                                             <RefreshCw className="w-3 h-3 sm:w-4 sm:h-4 animate-spin" />
@@ -5758,7 +6248,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                                        ) : 'Send Email'}
                                     </button>
                                     {taskStatuses.email !== 'completed' && (
-                                       <button onClick={() => handleCompleteTask(selectedApplication.id, 'email')} className="w-full sm:w-auto px-3 py-2 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 active:bg-green-300 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap">Mark Done</button>
+                                       <button onClick={() => handleCompleteTask(selectedApplication.id, 'email')} disabled={!!selectedApplication?.processing_locked} className="w-full sm:w-auto px-3 py-2 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 active:bg-green-300 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed">Mark Done</button>
                                     )}
                                  </div>
                               </TaskCard>
@@ -5910,6 +6400,368 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
             </div>
           </div>
         )}
+
+        {/* Restructure Application Modal */}
+        {showCorrectPrimaryModal && (() => {
+          const isStandard = selectedApplication?.package_type === 'standard';
+
+          // Rush upgrade fee calculation (client-side dry-run)
+          const rushFeePerProp = selectedApplication?.rush_fee || 0;
+          const isCreditCard = selectedApplication?.payment_method === 'credit_card';
+          const convFeePerProp = isCreditCard ? 9.95 : 0;
+          const propCount = propertyGroups?.length || 1;
+          const totalRushFeeDollars = ((rushFeePerProp + convFeePerProp) * propCount).toFixed(2);
+          const rushDeadline = selectedApplication?.submitted_at
+            ? calculateBusinessDaysDeadline(selectedApplication.submitted_at, 5)
+            : null;
+          const rushDeadlineStr = rushDeadline ? formatDate(rushDeadline.toISOString()) : '—';
+          const currentDeadline = selectedApplication?.expected_completion_date
+            ? new Date(selectedApplication.expected_completion_date) : null;
+          const isDeadlinePast = currentDeadline && new Date() > currentDeadline;
+
+          return (
+            <div className='fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-[80]'>
+              <div className='bg-white rounded-xl shadow-xl w-full max-w-lg'>
+
+                {/* Header */}
+                <div className='p-6 border-b border-gray-200 flex items-center justify-between'>
+                  <div>
+                    <h3 className='text-lg font-bold text-gray-900'>Restructure Application</h3>
+                    <p className='text-sm text-gray-500 mt-0.5'>
+                      {restructureMode === null
+                        ? 'Select what you want to change'
+                        : restructureMode === 'correct_property'
+                        ? <>Correct primary: <span className='font-medium text-gray-700'>{selectedApplication?.hoa_properties?.name}</span></>
+                        : <>Upgrade from <span className='font-medium text-gray-700'>Standard</span> → <span className='font-medium text-amber-700'>Rush</span></>
+                      }
+                    </p>
+                  </div>
+                  <button onClick={handleCloseRestructureModal} className='p-2 text-gray-400 hover:text-gray-600 rounded-lg'>
+                    <X className='w-5 h-5' />
+                  </button>
+                </div>
+
+                {/* Body */}
+                <div className='p-6'>
+
+                  {/* ── Mode picker ── */}
+                  {restructureMode === null && (
+                    <div className='space-y-3'>
+                      <p className='text-sm text-gray-500 mb-4'>Choose the type of change to make to this application.</p>
+                      <div className='grid grid-cols-1 gap-3'>
+
+                        {/* Correct Property option — available for all application types */}
+                        <button
+                            onClick={() => handleSelectRestructureMode('correct_property')}
+                            className='w-full text-left p-4 rounded-xl border-2 border-gray-200 hover:border-amber-400 hover:bg-amber-50 transition-all group'
+                          >
+                            <div className='flex items-start gap-3'>
+                              <div className='mt-0.5 w-9 h-9 rounded-lg bg-amber-100 flex items-center justify-center flex-shrink-0 group-hover:bg-amber-200 transition-colors'>
+                                <Building className='w-5 h-5 text-amber-700' />
+                              </div>
+                              <div>
+                                <p className='text-sm font-semibold text-gray-900'>Correct Property</p>
+                                <p className='text-xs text-gray-500 mt-0.5 leading-relaxed'>
+                                  Change the property associated with this application. Tasks will be reset and rebuilt accordingly.
+                                </p>
+                              </div>
+                            </div>
+                          </button>
+
+                        {/* Upgrade to Rush option */}
+                        {isStandard && (
+                          <button
+                            onClick={() => handleSelectRestructureMode('rush_upgrade')}
+                            className='w-full text-left p-4 rounded-xl border-2 border-gray-200 hover:border-orange-400 hover:bg-orange-50 transition-all group'
+                          >
+                            <div className='flex items-start gap-3'>
+                              <div className='mt-0.5 w-9 h-9 rounded-lg bg-orange-100 flex items-center justify-center flex-shrink-0 group-hover:bg-orange-200 transition-colors'>
+                                <Clock className='w-5 h-5 text-orange-700' />
+                              </div>
+                              <div>
+                                <p className='text-sm font-semibold text-gray-900'>Upgrade to Rush</p>
+                                <p className='text-xs text-gray-500 mt-0.5 leading-relaxed'>
+                                  Expedite processing from 15 calendar days to 5 business days. An additional rush fee applies.
+                                </p>
+                              </div>
+                            </div>
+                          </button>
+                        )}
+
+                      </div>
+                    </div>
+                  )}
+
+                  {/* ── Correct Property sub-flow ── */}
+                  {restructureMode === 'correct_property' && (
+                    <div className='space-y-4'>
+                      {fetchingMcNetwork ? (
+                        <div className='flex items-center justify-center py-8 text-gray-500'>
+                          <RefreshCw className='w-5 h-5 animate-spin mr-2' />
+                          Loading related communities…
+                        </div>
+                      ) : mcNetworkProperties.length === 0 ? (
+                        <div className='py-6 text-center text-sm text-gray-500'>
+                          No other multi-community properties found in this network.
+                        </div>
+                      ) : !selectedNewPrimary ? (
+                        <div className='space-y-2'>
+                          <p className='text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2'>Select the correct primary community:</p>
+                          {mcNetworkProperties.map((prop) => (
+                            <button
+                              key={prop.id}
+                              onClick={() => handleSelectNewPrimary(prop)}
+                              className='w-full text-left px-4 py-3 rounded-lg border-2 border-gray-200 hover:border-amber-400 hover:bg-amber-50 transition-all'
+                            >
+                              <p className='text-sm font-medium text-gray-900'>{prop.name}</p>
+                              {prop.location && <p className='text-xs text-gray-500 mt-0.5'>{prop.location}</p>}
+                            </button>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className='space-y-3'>
+                          {/* Selected property card */}
+                          <div className='px-4 py-3 rounded-lg bg-amber-50 border border-amber-200'>
+                            <p className='text-xs font-semibold text-amber-700 uppercase tracking-wide mb-1'>New primary</p>
+                            <p className='text-sm font-semibold text-gray-900'>{selectedNewPrimary.name}</p>
+                            {selectedNewPrimary.location && <p className='text-xs text-gray-500'>{selectedNewPrimary.location}</p>}
+                          </div>
+
+                          {/* Package type selector */}
+                          <div>
+                            <p className='text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2'>Processing type</p>
+                            <div className='grid grid-cols-2 gap-2'>
+                              {['standard', 'rush'].map((pkg) => (
+                                <button
+                                  key={pkg}
+                                  onClick={() => handleChangeCorrectionPackage(pkg)}
+                                  className={`px-3 py-2.5 rounded-lg border-2 text-sm font-medium transition-all ${
+                                    (selectedCorrectionPackage || selectedApplication.package_type) === pkg
+                                      ? pkg === 'rush'
+                                        ? 'border-amber-500 bg-amber-50 text-amber-800'
+                                        : 'border-green-500 bg-green-50 text-green-800'
+                                      : 'border-gray-200 text-gray-600 hover:border-gray-300'
+                                  }`}
+                                >
+                                  {pkg === 'standard' ? 'Standard (15 days)' : 'Rush (5 bus. days)'}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+
+                          {/* Delta info */}
+                          {!dryRunResult && (
+                            <div className='flex items-center gap-2 text-sm text-gray-500'>
+                              <RefreshCw className='w-4 h-4 animate-spin' />
+                              Calculating price difference…
+                            </div>
+                          )}
+                          {dryRunResult && (
+                            <div className={`rounded-lg p-4 text-sm space-y-2 ${
+                              dryRunResult.totalAdditionalCents > 0 ? 'bg-amber-50 border border-amber-200'
+                              : dryRunResult.delta < 0 ? 'bg-blue-50 border border-blue-200'
+                              : 'bg-green-50 border border-green-200'
+                            }`}>
+                              {dryRunResult.totalAdditionalCents === 0 && dryRunResult.delta >= 0 && (
+                                <p className='text-green-800 font-medium'>No additional payment needed.</p>
+                              )}
+                              {dryRunResult.totalAdditionalCents > 0 && (
+                                <>
+                                  {/* Additional properties breakdown */}
+                                  {dryRunResult.delta > 0 && (() => {
+                                    const qty = dryRunResult.delta;
+                                    return (
+                                      <>
+                                        <div className='flex justify-between text-amber-800'>
+                                          <span className='font-medium'>{qty} additional propert{qty === 1 ? 'y' : 'ies'}</span>
+                                        </div>
+                                        <div className='flex justify-between text-amber-700 text-xs pl-2'>
+                                          <span>Base fee × {qty}</span>
+                                          <span>${(dryRunResult.effectiveBasePerProp * qty / 100).toFixed(2)}</span>
+                                        </div>
+                                        {dryRunResult.targetIsRush && dryRunResult.configRushFee > 0 && (
+                                          <div className='flex justify-between text-amber-700 text-xs pl-2'>
+                                            <span>Rush fee × {qty}</span>
+                                            <span>${(dryRunResult.configRushFee * qty / 100).toFixed(2)}</span>
+                                          </div>
+                                        )}
+                                        {dryRunResult.isCreditCard && (
+                                          <div className='flex justify-between text-amber-700 text-xs pl-2'>
+                                            <span>CC convenience fee × {qty}</span>
+                                            <span>${(dryRunResult.convFeePerProp * qty / 100).toFixed(2)}</span>
+                                          </div>
+                                        )}
+                                      </>
+                                    );
+                                  })()}
+                                  {/* Rush upgrade on existing properties */}
+                                  {dryRunResult.isUpgradingToRush && (() => {
+                                    const qty = dryRunResult.currentCount;
+                                    return (
+                                      <>
+                                        <div className='flex justify-between text-amber-800 mt-1'>
+                                          <span className='font-medium'>Rush upgrade — existing propert{qty === 1 ? 'y' : 'ies'}</span>
+                                        </div>
+                                        <div className='flex justify-between text-amber-700 text-xs pl-2'>
+                                          <span>Rush fee × {qty}</span>
+                                          <span>${(dryRunResult.configRushFee * qty / 100).toFixed(2)}</span>
+                                        </div>
+                                        {dryRunResult.isCreditCard && (
+                                          <div className='flex justify-between text-amber-700 text-xs pl-2'>
+                                            <span>CC convenience fee × {qty}</span>
+                                            <span>${(dryRunResult.convFeePerProp * qty / 100).toFixed(2)}</span>
+                                          </div>
+                                        )}
+                                      </>
+                                    );
+                                  })()}
+                                  {/* Total */}
+                                  <div className='flex justify-between font-bold text-amber-900 border-t border-amber-200 pt-2 mt-1'>
+                                    <span>Total owed by customer</span>
+                                    <span>${dryRunResult.totalAdditionalDisplay}</span>
+                                  </div>
+                                  <p className='text-amber-600 text-xs'>Tasks will be locked until the customer pays.</p>
+                                </>
+                              )}
+                              {dryRunResult.delta < 0 && (
+                                <p className='text-blue-800 font-medium'>
+                                  Correct setup has {Math.abs(dryRunResult.delta)} fewer propert{Math.abs(dryRunResult.delta) === 1 ? 'y' : 'ies'} than originally paid. No refund will be issued.
+                                </p>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* ── Rush Upgrade sub-flow ── */}
+                  {restructureMode === 'rush_upgrade' && (
+                    <div className='space-y-4'>
+                      {/* Summary card */}
+                      <div className='rounded-lg border border-gray-200 overflow-hidden'>
+                        <div className='bg-gray-50 px-4 py-2 border-b border-gray-200'>
+                          <p className='text-xs font-semibold text-gray-500 uppercase tracking-wide'>Package Change</p>
+                        </div>
+                        <div className='divide-y divide-gray-100'>
+                          <div className='flex justify-between items-center px-4 py-3 text-sm'>
+                            <span className='text-gray-600'>From</span>
+                            <span className='font-medium text-gray-700'>Standard — 15 calendar days</span>
+                          </div>
+                          <div className='flex justify-between items-center px-4 py-3 text-sm'>
+                            <span className='text-gray-600'>To</span>
+                            <span className='font-semibold text-amber-700'>Rush — 5 business days</span>
+                          </div>
+                          <div className='flex justify-between items-center px-4 py-3 text-sm'>
+                            <span className='text-gray-600'>New deadline</span>
+                            <span className='font-semibold text-gray-900'>{rushDeadlineStr}</span>
+                          </div>
+                          <div className='flex justify-between items-center px-4 py-3 text-sm'>
+                            <span className='text-gray-600'>Properties</span>
+                            <span className='font-medium text-gray-700'>{propCount}</span>
+                          </div>
+                          <div className='flex justify-between items-center px-4 py-3 text-sm'>
+                            <span className='text-gray-600'>Rush fee{propCount > 1 ? ` × ${propCount}` : ''}</span>
+                            <span className='font-semibold text-gray-900'>${totalRushFeeDollars}</span>
+                          </div>
+                          {isCreditCard && (
+                            <div className='flex justify-between items-center px-4 py-3 text-sm'>
+                              <span className='text-gray-500 text-xs'>Includes credit card convenience fee</span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Overdue warning */}
+                      {isDeadlinePast && (
+                        <div className='flex items-start gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2.5'>
+                          <AlertTriangle className='w-4 h-4 flex-shrink-0 mt-0.5' />
+                          <span>The standard deadline has already passed. The new rush deadline will also be in the past — upgrading will still adjust the package type and deadline date.</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Footer actions */}
+                {restructureMode === 'correct_property' && selectedNewPrimary && dryRunResult && (
+                  <div className='px-6 pb-6 flex flex-col gap-2'>
+                    {dryRunResult.totalAdditionalCents <= 0 && (
+                      <button
+                        onClick={() => handleApplyCorrection({ waiveDelta: false })}
+                        disabled={submittingCorrection}
+                        className='w-full px-4 py-2.5 bg-green-600 text-white text-sm font-medium rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2'
+                      >
+                        {submittingCorrection && <RefreshCw className='w-4 h-4 animate-spin' />}
+                        Confirm Correction
+                      </button>
+                    )}
+                    {dryRunResult.totalAdditionalCents > 0 && (
+                      <>
+                        <button
+                          onClick={() => handleApplyCorrection({ createInvoice: true })}
+                          disabled={submittingCorrection}
+                          className='w-full px-4 py-2.5 bg-green-600 text-white text-sm font-medium rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2'
+                        >
+                          {submittingCorrection && <RefreshCw className='w-4 h-4 animate-spin' />}
+                          Correct & Email Invoice (${dryRunResult.totalAdditionalDisplay})
+                        </button>
+                        <button
+                          onClick={() => handleApplyCorrection({ waiveDelta: true })}
+                          disabled={submittingCorrection}
+                          className='w-full px-4 py-2.5 bg-white border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2'
+                        >
+                          {submittingCorrection && <RefreshCw className='w-4 h-4 animate-spin' />}
+                          Waive Charge & Correct
+                        </button>
+                      </>
+                    )}
+                    <button
+                      onClick={() => { setSelectedNewPrimary(null); setDryRunResult(null); setSelectedCorrectionPackage(null); }}
+                      className='text-xs text-gray-400 hover:text-gray-600 text-center mt-1'
+                    >
+                      ← Choose a different property
+                    </button>
+                  </div>
+                )}
+
+                {restructureMode === 'rush_upgrade' && (
+                  <div className='px-6 pb-6 flex flex-col gap-2'>
+                    <button
+                      onClick={() => handleApplyRushUpgrade({ waiveFee: false })}
+                      disabled={submittingRushUpgrade}
+                      className='w-full px-4 py-2.5 bg-amber-600 text-white text-sm font-medium rounded-lg hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2'
+                    >
+                      {submittingRushUpgrade && <RefreshCw className='w-4 h-4 animate-spin' />}
+                      Email Rush Invoice (${totalRushFeeDollars}) to Customer
+                    </button>
+                    <button
+                      onClick={() => handleApplyRushUpgrade({ waiveFee: true })}
+                      disabled={submittingRushUpgrade}
+                      className='w-full px-4 py-2.5 bg-white border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2'
+                    >
+                      {submittingRushUpgrade && <RefreshCw className='w-4 h-4 animate-spin' />}
+                      Waive Fee & Upgrade to Rush
+                    </button>
+                  </div>
+                )}
+
+                {/* Back button */}
+                {restructureMode !== null && (
+                  <div className='px-6 pb-4 border-t border-gray-100 pt-3'>
+                    <button
+                      onClick={() => { setRestructureMode(null); setSelectedNewPrimary(null); setDryRunResult(null); }}
+                      className='text-xs text-gray-400 hover:text-gray-600'
+                    >
+                      ← Back to options
+                    </button>
+                  </div>
+                )}
+
+              </div>
+            </div>
+          );
+        })()}
 
         {/* Reject Modal */}
         {showRejectModal && (

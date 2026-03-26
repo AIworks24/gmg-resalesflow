@@ -1,6 +1,6 @@
 import { getServerStripe, getWebhookSecret } from '../../../lib/stripe';
 import { getTestModeFromRequest } from '../../../lib/stripeMode';
-import { sendInvoiceReceiptEmail, sendPaymentConfirmationEmail } from '../../../lib/emailService';
+import { sendEmail, sendInvoiceReceiptEmail, sendPaymentConfirmationEmail } from '../../../lib/emailService';
 
 // Helper function to get raw body for webhook signature verification
 function getRawBody(req) {
@@ -91,7 +91,18 @@ export default async function handler(req, res) {
     switch (event.type) {
       case 'checkout.session.completed':
         const session = event.data.object;
-        
+
+        // --- Correction payment early exit ---
+        // Correction payments (additional_property, rush_upgrade) are created by the
+        // Restructure Application feature. They use correction_stripe_session_id on the
+        // application row — NOT stripe_session_id — so the standard lookup below would
+        // silently no-op. Route them to the dedicated handler instead.
+        if (session.metadata?.correctionType) {
+          console.log(`[Webhook] Correction payment detected: type=${session.metadata.correctionType}, session=${session.id}`);
+          await handleCorrectionPayment(session, stripe, supabase);
+          break;
+        }
+
         // Update application status - keep as pending_payment to allow user to continue the flow
         const updateData = {
           status: 'pending_payment',
@@ -253,8 +264,23 @@ export default async function handler(req, res) {
 
       case 'payment_intent.succeeded':
         const paymentIntent = event.data.object;
+
+        // --- Correction payment early exit ---
+        // The correctionType lives on the checkout session metadata, not the payment intent.
+        // Do a quick session lookup to detect correction payments before running the
+        // standard form-creation / status-update logic, which would corrupt correction payments.
+        try {
+          const piSessions = await stripe.checkout.sessions.list({ payment_intent: paymentIntent.id, limit: 1 });
+          if (piSessions.data.length > 0 && piSessions.data[0].metadata?.correctionType) {
+            console.log(`[Webhook] payment_intent.succeeded is a correction payment — already handled by checkout.session.completed. Skipping.`);
+            break;
+          }
+        } catch (piSessionErr) {
+          console.warn('[Webhook] Could not check payment intent for correctionType:', piSessionErr.message);
+        }
+
         const isMultiCommunity = paymentIntent.metadata?.isMultiCommunity === 'true';
-        
+
         // For multi-community apps, record payment metadata but DON'T change status yet.
         // The status update is deferred until AFTER property groups are created, so the
         // application only appears in the admin dashboard once the tree view data is ready.
@@ -569,6 +595,33 @@ export default async function handler(req, res) {
               .update({ status: 'under_review' })
               .eq('id', applicationId);
             console.log(`Skipping property owner forms for lender questionnaire application ${applicationId}`);
+          } else if (appData?.application_type === 'info_packet') {
+            // Info Packet: auto-complete and send documents immediately — no staff review needed
+            console.log(`[Webhook] Info Packet application ${applicationId} — auto-completing and sending documents`);
+            try {
+              const baseUrl = process.env.NEXT_PUBLIC_SITE_URL || `https://${process.env.VERCEL_URL}` || 'http://localhost:3000';
+              const emailRes = await fetch(`${baseUrl}/api/send-info-packet-email`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': `Bearer ${process.env.INTERNAL_API_SECRET}`,
+                },
+                body: JSON.stringify({ applicationId }),
+              });
+              if (!emailRes.ok) {
+                const errText = await emailRes.text();
+                console.error(`[Webhook] Info Packet email send failed (${emailRes.status}):`, errText);
+              } else {
+                console.log(`[Webhook] Info Packet documents sent for application ${applicationId}`);
+              }
+            } catch (emailErr) {
+              console.error('[Webhook] Info Packet email send threw:', emailErr);
+              // Don't fail the webhook — mark complete even if email fails; admin can resend
+              await supabase
+                .from('applications')
+                .update({ status: 'completed', updated_at: new Date().toISOString() })
+                .eq('id', applicationId);
+            }
           } else if (resolvedIsMultiCommunity) {
             await handleMultiCommunityApplication(applicationId, paymentIntent.metadata);
           } else {
@@ -614,6 +667,366 @@ export default async function handler(req, res) {
   } catch (error) {
     console.error('Error processing webhook:', error);
     res.status(500).json({ error: 'Webhook processing failed' });
+  }
+}
+
+// ─── Correction Payment Handler ───────────────────────────────────────────────
+// Handles checkout.session.completed for correction payments originating from the
+// "Restructure Application" feature. Two correctionTypes are supported:
+//   - 'additional_property': property correction with extra communities (delta > 0)
+//   - 'rush_upgrade':        package upgrade from standard → rush
+//
+// These sessions use correction_stripe_session_id on the application row (NOT
+// stripe_session_id) so the standard webhook path cannot find them.
+async function handleCorrectionPayment(session, stripe, supabase) {
+  const correctionType = session.metadata?.correctionType;
+  const applicationId  = session.metadata?.applicationId;
+
+  if (!applicationId) {
+    console.error('[Webhook][Correction] Missing applicationId in session metadata:', session.id);
+    return;
+  }
+
+  // Look up application by correction_stripe_session_id
+  const { data: app, error: appError } = await supabase
+    .from('applications')
+    .select('id, submitter_email, submitter_name, property_address, package_type, application_type, submitted_at, impersonation_metadata, notes, correction_metadata')
+    .eq('correction_stripe_session_id', session.id)
+    .single();
+
+  if (appError || !app) {
+    console.error(`[Webhook][Correction] No application found for correction session ${session.id}. appError:`, appError?.message);
+    return;
+  }
+
+  console.log(`[Webhook][Correction] Processing ${correctionType} for application ${app.id}`);
+
+  // Build update payload — unlock tasks in all cases
+  const amountDisplay = session.amount_total ? (session.amount_total / 100).toFixed(2) : null;
+  const correctionLabel = correctionType === 'rush_upgrade' ? 'rush upgrade' : 'property correction';
+  const auditNote = `[${new Date().toISOString()}] Invoice paid by ${app.submitter_email}${amountDisplay ? ` ($${amountDisplay})` : ''} for ${correctionLabel}.`;
+
+  const updatePayload = {
+    processing_locked:        false,
+    processing_locked_at:     null,
+    processing_locked_reason: null,
+    notes:                    app.notes ? `${app.notes}\n\n${auditNote}` : auditNote,
+    updated_at:               new Date().toISOString(),
+  };
+
+  if (correctionType === 'rush_upgrade') {
+    // Upgrade package and recalculate expected_completion_date (5 business days from submitted_at)
+    updatePayload.package_type      = 'rush';
+    updatePayload.rush_upgraded_at  = new Date().toISOString();
+
+    if (app.submitted_at) {
+      // Count 5 business days forward from submitted_at
+      let deadline = new Date(app.submitted_at);
+      let businessDaysAdded = 0;
+      while (businessDaysAdded < 5) {
+        deadline.setDate(deadline.getDate() + 1);
+        const dow = deadline.getDay();
+        if (dow !== 0 && dow !== 6) businessDaysAdded++; // skip weekends
+      }
+      updatePayload.expected_completion_date = deadline.toISOString().split('T')[0];
+      console.log(`[Webhook][Correction] New rush deadline: ${updatePayload.expected_completion_date}`);
+    }
+  }
+
+  const { error: updateError } = await supabase
+    .from('applications')
+    .update(updatePayload)
+    .eq('id', app.id);
+
+  if (updateError) {
+    console.error(`[Webhook][Correction] Failed to update application ${app.id}:`, updateError.message);
+    return;
+  }
+
+  console.log(`[Webhook][Correction] Application ${app.id} unlocked. correctionType=${correctionType}`);
+
+  // Send receipt email (reuse existing sendInvoiceReceiptEmail)
+  const impersonationMeta = app.impersonation_metadata;
+  const shouldSendEmail   = !(impersonationMeta && impersonationMeta.send_emails === false);
+
+  if (!shouldSendEmail) {
+    console.log(`[Webhook][Correction] Skipping receipt email — impersonation mode for application ${app.id}`);
+    return;
+  }
+
+  try {
+    let receiptUrl    = null;
+    let receiptNumber = null;
+    let paymentMethod = null;
+    let lineItems     = [];
+
+    // Retrieve charge for receipt URL + payment method
+    if (session.payment_intent) {
+      try {
+        const pi     = await stripe.paymentIntents.retrieve(session.payment_intent);
+        if (pi.latest_charge) {
+          const charge = await stripe.charges.retrieve(pi.latest_charge);
+          receiptUrl    = charge.receipt_url;
+          receiptNumber = charge.receipt_number;
+          if (charge.payment_method_details?.card) {
+            const { brand, last4 } = charge.payment_method_details.card;
+            paymentMethod = `${(brand || 'CARD').toUpperCase()} - ${last4 || '****'}`;
+          }
+        }
+      } catch (chargeErr) {
+        console.warn('[Webhook][Correction] Could not retrieve charge:', chargeErr.message);
+      }
+    }
+
+    // Retrieve line items from checkout session
+    try {
+      const sessionLineItems = await stripe.checkout.sessions.listLineItems(session.id, {
+        expand: ['data.price.product'],
+      });
+      if (sessionLineItems?.data?.length > 0) {
+        lineItems = sessionLineItems.data.map(item => {
+          const product = item.price?.product && typeof item.price.product !== 'string'
+            ? item.price.product : null;
+          return {
+            name:        product?.name        || item.description || 'Service',
+            description: product?.description || item.description || null,
+            amount:      (item.amount_total / 100).toFixed(2),
+            quantity:    item.quantity || 1,
+          };
+        });
+      }
+    } catch (liErr) {
+      console.warn('[Webhook][Correction] Could not retrieve line items:', liErr.message);
+    }
+
+    await sendInvoiceReceiptEmail({
+      to:              app.submitter_email,
+      applicationId:   app.id,
+      customerName:    app.submitter_name    || session.metadata?.customerName || 'Customer',
+      propertyAddress: app.property_address  || session.metadata?.propertyAddress || '',
+      packageType:     correctionType === 'rush_upgrade' ? 'rush' : (app.package_type || 'standard'),
+      totalAmount:     (session.amount_total / 100).toFixed(2),
+      invoiceNumber:   receiptNumber || `COR-${app.id}`,
+      invoicePdfUrl:   receiptUrl,
+      hostedInvoiceUrl: receiptUrl,
+      stripeChargeId:  session.payment_intent,
+      invoiceDate:     new Date().toISOString(),
+      applicationType: app.application_type || 'single_property',
+      paymentMethod,
+      lineItems,
+    });
+
+    console.log(`[Webhook][Correction] Receipt email sent to ${app.submitter_email} for application ${app.id}`);
+  } catch (emailErr) {
+    console.error('[Webhook][Correction] Failed to send receipt email:', emailErr);
+    // Don't fail the webhook if email fails
+  }
+
+  // ── Notify property owners ──────────────────────────────────────────────────
+  // Logic differs by correctionType:
+  //
+  // RUSH UPGRADE: all property owners are the same — notify them the timeline changed.
+  //
+  // PROPERTY CORRECTION: uses correction_metadata (saved before old groups were deleted):
+  //   A) Old owner NO LONGER in new setup  → "application corrected, now it is {new property}"
+  //   B) Old owner STILL in new setup      → "new application from correction for your property"
+  //   C) Brand-new owner (not in old set)  → "new application from correction for your property"
+  try {
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://dnivljiyahzxpyxjjifi.supabase.co';
+    const logoUrl     = `${supabaseUrl}/storage/v1/object/public/bucket0/assets/company_logo_white.png`;
+    const brandColor  = '#0f4734';
+    const isRushUpgrade = correctionType === 'rush_upgrade';
+    const processingLabel = (app.package_type === 'rush' || isRushUpgrade)
+      ? 'Rush — 5 business days'
+      : 'Standard — 15 calendar days';
+
+    // Shared email builder — keeps HTML consistent across all notification types
+    const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || process.env.NEXT_PUBLIC_APP_URL || 'https://resalesflow.gmgva.com';
+    const buildPropertyOwnerEmail = ({ heading, body, propertyName, nextStepNote, ctaUrl, ctaLabel }) => `<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>${heading}</title></head>
+<body style="margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;background-color:#f5f5f5;line-height:1.6;color:#333333;">
+  <div style="max-width:600px;margin:0 auto;background-color:#ffffff;">
+    <div style="background-color:${brandColor};padding:30px 20px;">
+      <div style="margin-bottom:16px;"><img src="${logoUrl}" alt="Goodman Management Group" width="140" height="42" style="height:42px;width:auto;display:block;border:0;"/></div>
+      <div style="text-align:center;"><h1 style="margin:0;color:#ffffff;font-size:26px;font-weight:700;line-height:1.2;">${heading}</h1></div>
+    </div>
+    <div style="padding:30px 20px;">
+      <p style="margin:0 0 16px 0;font-size:15px;color:#333333;">Dear Property Manager,</p>
+      <p style="margin:0 0 24px 0;font-size:15px;color:#555555;">${body}</p>
+      <div style="background-color:#f9fafb;border-radius:8px;padding:20px;border:1px solid #e5e7eb;margin:0 0 24px 0;">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;border-collapse:collapse;">
+          <tr>
+            <td style="padding:8px 0;border-bottom:1px solid #e5e7eb;font-size:14px;color:#374151;"><strong>Application ID:</strong></td>
+            <td style="padding:8px 0;border-bottom:1px solid #e5e7eb;font-size:14px;color:#111827;text-align:right;">#${app.id}</td>
+          </tr>
+          ${propertyName ? `<tr>
+            <td style="padding:8px 0;border-bottom:1px solid #e5e7eb;font-size:14px;color:#374151;"><strong>Your Property:</strong></td>
+            <td style="padding:8px 0;border-bottom:1px solid #e5e7eb;font-size:14px;color:#111827;text-align:right;">${propertyName}</td>
+          </tr>` : ''}
+          <tr>
+            <td style="padding:8px 0;font-size:14px;color:#374151;"><strong>Processing:</strong></td>
+            <td style="padding:8px 0;font-size:14px;color:#111827;text-align:right;">${processingLabel}</td>
+          </tr>
+        </table>
+      </div>
+      ${nextStepNote ? `<div style="background-color:#f0f9f4;border-left:4px solid ${brandColor};border-radius:6px;padding:16px;margin:0 0 24px 0;">
+        <p style="margin:0;font-size:14px;color:#065f46;">${nextStepNote}</p>
+      </div>` : ''}
+      ${ctaUrl ? `<div style="text-align:center;margin:0 0 24px 0;">
+        <a href="${ctaUrl}" style="display:inline-block;padding:14px 32px;background-color:${brandColor};color:#ffffff;text-decoration:none;border-radius:6px;font-size:16px;font-weight:600;">${ctaLabel || 'View Application'}</a>
+      </div>` : ''}
+      <div style="text-align:center;padding:20px 0;">
+        <p style="margin:0;font-size:14px;color:#6b7280;">Questions? Contact us at <a href="mailto:resales@gmgva.com" style="color:${brandColor};text-decoration:none;font-weight:500;">resales@gmgva.com</a></p>
+      </div>
+    </div>
+    <div style="background-color:#f9fafb;padding:20px;border-top:1px solid #e5e7eb;text-align:center;">
+      <p style="margin:0;font-size:12px;color:#6b7280;"><strong style="color:${brandColor};">Goodman Management Group</strong><br>Professional HOA Management &amp; Resale Services</p>
+    </div>
+  </div>
+</body>
+</html>`;
+
+    if (isRushUpgrade) {
+      // Fetch current groups and notify all property owners of the timeline change
+      const { data: currentGroups } = await supabase
+        .from('application_property_groups')
+        .select('property_name, property_owner_email')
+        .eq('application_id', app.id)
+        .not('property_owner_email', 'is', null);
+
+      if (currentGroups && currentGroups.length > 0) {
+        const seen = new Set();
+        const unique = currentGroups.filter(g => {
+          const key = g.property_owner_email.toLowerCase();
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+
+        await Promise.allSettled(unique.map(g => sendEmail({
+          to:      g.property_owner_email,
+          subject: `Application Updated — Rush Processing Upgrade (#${app.id})`,
+          html:    buildPropertyOwnerEmail({
+            heading:      'Rush Processing Upgrade',
+            body:         `A resale certificate application associated with your property has been upgraded to <strong>Rush processing (5 business days)</strong>. Our team will prioritise completing the required documents as quickly as possible.`,
+            propertyName: g.property_name,
+            nextStepNote: 'No action is required from you at this time. Processing will continue on the expedited timeline.',
+            ctaUrl:       `${siteUrl}/admin/login?applicationId=${app.id}`,
+            ctaLabel:     'View Application',
+          }),
+          context: 'PropertyOwnerRushUpgradeNotification',
+        }).then(() => {
+          console.log(`[Webhook][Correction] Rush upgrade notice sent to ${g.property_owner_email} (${g.property_name})`);
+        }).catch(err => {
+          console.error(`[Webhook][Correction] Failed rush upgrade notice to ${g.property_owner_email}:`, err.message);
+        })));
+      }
+
+    } else {
+      // PROPERTY CORRECTION — 3-way logic using correction_metadata
+      const meta         = app.correction_metadata || {};
+      const oldOwners    = meta.oldOwners || [];          // [{ propertyId, propertyName, email, isPrimary }]
+      const newPrimName  = meta.newPrimaryPropertyName || '';
+
+      const { data: currentGroups } = await supabase
+        .from('application_property_groups')
+        .select('property_id, property_name, property_owner_email')
+        .eq('application_id', app.id)
+        .not('property_owner_email', 'is', null);
+
+      const newGroups = currentGroups || [];
+
+      // Build lookup sets
+      const oldEmailSet = new Set(oldOwners.map(o => o.email.toLowerCase()));
+      const newEmailSet = new Set(newGroups.map(g => g.property_owner_email.toLowerCase()));
+      const newPropIdSet = new Set(newGroups.map(g => g.property_id));
+
+      const emails = []; // [{ to, subject, html, context, label }]
+
+      // A) Old owners REMOVED from the application
+      const removedOwners = oldOwners.filter(o => !newPropIdSet.has(o.propertyId));
+      const removedSeen   = new Set();
+      for (const owner of removedOwners) {
+        const key = owner.email.toLowerCase();
+        if (removedSeen.has(key)) continue;
+        removedSeen.add(key);
+        emails.push({
+          to:      owner.email,
+          subject: `Application Update — Property Correction (#${app.id})`,
+          html:    buildPropertyOwnerEmail({
+            heading:      'Application Property Updated',
+            body:         `A resale certificate application previously associated with <strong>${owner.propertyName}</strong> has been corrected by the applicant. The application is now assigned to <strong>${newPrimName}</strong>. Your property is no longer part of this application.`,
+            propertyName: owner.propertyName,
+            nextStepNote: 'No further action is required from you for this application.',
+            ctaUrl:       `${siteUrl}/admin/login?applicationId=${app.id}`,
+            ctaLabel:     'View Application',
+          }),
+          context: 'PropertyOwnerRemovedNotification',
+          label:   `removed: ${owner.email}`,
+        });
+      }
+
+      // B) Old owners STILL in the new setup — they have a "new" application from correction
+      const continuingOwners = oldOwners.filter(o => newPropIdSet.has(o.propertyId));
+      const continuingSeen   = new Set();
+      for (const owner of continuingOwners) {
+        const key = owner.email.toLowerCase();
+        if (continuingSeen.has(key)) continue;
+        continuingSeen.add(key);
+        // Find the matching new group for the property name
+        const newGroup = newGroups.find(g => g.property_id === owner.propertyId);
+        emails.push({
+          to:      owner.email,
+          subject: `New Application Submitted — Property Correction (#${app.id})`,
+          html:    buildPropertyOwnerEmail({
+            heading:      'New Application for Your Property',
+            body:         `A resale certificate application has been updated and now includes your property. This application was recently corrected by the applicant and your community has been confirmed as part of the new application.`,
+            propertyName: newGroup?.property_name || owner.propertyName,
+            ctaUrl:       `${siteUrl}/admin/login?applicationId=${app.id}`,
+            ctaLabel:     'View Application',
+          }),
+          context: 'PropertyOwnerCorrectionContinuingNotification',
+          label:   `continuing: ${owner.email}`,
+        });
+      }
+
+      // C) Brand-new property owners not in the old set
+      const newOnlySeen = new Set([...removedSeen, ...continuingSeen]);
+      for (const g of newGroups) {
+        const key = g.property_owner_email.toLowerCase();
+        if (newOnlySeen.has(key) || oldEmailSet.has(key)) continue;
+        newOnlySeen.add(key);
+        emails.push({
+          to:      g.property_owner_email,
+          subject: `New Application Submitted — Property Correction (#${app.id})`,
+          html:    buildPropertyOwnerEmail({
+            heading:      'New Application for Your Property',
+            body:         `A new resale certificate application has been submitted and assigned to your property. This application was recently corrected by the applicant to include your community.`,
+            propertyName: g.property_name,
+            ctaUrl:       `${siteUrl}/admin/login?applicationId=${app.id}`,
+            ctaLabel:     'View Application',
+          }),
+          context: 'PropertyOwnerNewCorrectionNotification',
+          label:   `new: ${g.property_owner_email}`,
+        });
+      }
+
+      await Promise.allSettled(emails.map(e => sendEmail({ to: e.to, subject: e.subject, html: e.html, context: e.context })
+        .then(() => console.log(`[Webhook][Correction] Property owner email sent (${e.label}) for application ${app.id}`))
+        .catch(err => console.error(`[Webhook][Correction] Failed property owner email (${e.label}):`, err.message))
+      ));
+    }
+
+    // Clear correction_metadata now that emails are sent — keeps the column lean
+    await supabase
+      .from('applications')
+      .update({ correction_metadata: null })
+      .eq('id', app.id);
+
+  } catch (propOwnerErr) {
+    console.error('[Webhook][Correction] Failed to send property owner notifications:', propOwnerErr);
+    // Non-fatal — correction was already applied
   }
 }
 

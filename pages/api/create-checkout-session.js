@@ -61,7 +61,7 @@ export default async function handler(req, res) {
         throw new Error('Could not determine property location');
       }
 
-      applicationType = determineApplicationType(formData.submitterType, hoaProperty, formData.publicOffering);
+      applicationType = determineApplicationType(formData.submitterType, hoaProperty, formData.publicOffering, formData.infoPacket);
       
       // Check if this is a multi-community property
       // Skip multi-community for lender_questionnaire - MC is resale only (Public Offering is exception via builder)
@@ -202,6 +202,110 @@ export default async function handler(req, res) {
         process.env.SUPABASE_SERVICE_ROLE_KEY
       );
       await supabase
+        .from('applications')
+        .update({ stripe_session_id: session.id, payment_status: 'pending' })
+        .eq('id', applicationId);
+
+      return res.status(200).json({ sessionId: session.id });
+    }
+
+    // Info Packet (Welcome Package) special handling
+    // Charged per association: uses property's info_packet_price or env-var default ($200)
+    // Supports multi-community (one line item per linked association)
+    if (formData?.submitterType === 'builder' && formData?.infoPacket) {
+      const TRANSFER_THRESHOLD_CENTS = 20000; // $200.00
+      const TRANSFER_AMOUNT_PER_ITEM_CENTS = 2100; // $21.00 per property item
+      const rushFeeCents = packageType === 'rush' ? 7066 : 0;
+      const creditCardFeeCents = paymentMethod === 'credit_card' ? 995 : 0;
+
+      // Build one line item per association (or one for a single property)
+      const lineItems = [];
+      let totalCents = 0;
+      let propertyItemCount = 0;
+
+      for (const prop of allProperties) {
+        const basePriceDollars = prop.info_packet_price != null ? Number(prop.info_packet_price) : 200.0;
+        const basePriceCents = Math.round(basePriceDollars * 100);
+
+        lineItems.push({
+          price_data: {
+            currency: 'usd',
+            product_data: {
+              name: `Info Packet — ${prop.name}`,
+              description: 'Welcome Package document delivery',
+            },
+            unit_amount: basePriceCents,
+          },
+          quantity: 1,
+        });
+        totalCents += basePriceCents;
+        propertyItemCount++;
+
+        if (rushFeeCents > 0) {
+          lineItems.push({
+            price_data: {
+              currency: 'usd',
+              product_data: { name: 'Rush Processing', description: '5 business days' },
+              unit_amount: rushFeeCents,
+            },
+            quantity: 1,
+          });
+          totalCents += rushFeeCents;
+        }
+
+        if (creditCardFeeCents > 0) {
+          lineItems.push({
+            price_data: {
+              currency: 'usd',
+              product_data: { name: 'Credit Card Processing Fee' },
+              unit_amount: creditCardFeeCents,
+            },
+            quantity: 1,
+          });
+          totalCents += creditCardFeeCents;
+        }
+      }
+
+      const infoPacketSessionData = {
+        payment_method_types: ['card'],
+        line_items: lineItems,
+        mode: 'payment',
+        allow_promotion_codes: true,
+        success_url: `${req.headers.origin}/?payment_success=true&session_id={CHECKOUT_SESSION_ID}&app_id=${applicationId}`,
+        cancel_url: `${req.headers.origin}/?payment_cancelled=true&app_id=${applicationId}`,
+        metadata: {
+          applicationId: applicationId,
+          packageType: packageType,
+          paymentMethod: paymentMethod,
+          specialRequest: 'info_packet',
+          isMultiCommunity: allProperties.length > 1 ? 'true' : 'false',
+        },
+        customer_email: formData.submitterEmail,
+        billing_address_collection: 'required',
+      };
+
+      // Stripe Connect transfer (same threshold as POS)
+      if (totalCents >= TRANSFER_THRESHOLD_CENTS) {
+        const connectedAccountId = getConnectedAccountId(finalTestMode);
+        if (connectedAccountId) {
+          const totalTransferCents = TRANSFER_AMOUNT_PER_ITEM_CENTS * propertyItemCount;
+          infoPacketSessionData.payment_intent_data = {
+            transfer_data: {
+              destination: connectedAccountId,
+              amount: totalTransferCents,
+            },
+          };
+        }
+      }
+
+      const session = await stripe.checkout.sessions.create(infoPacketSessionData);
+
+      const { createClient: createClientInfo } = await import('@supabase/supabase-js');
+      const supabaseInfo = createClientInfo(
+        process.env.NEXT_PUBLIC_SUPABASE_URL,
+        process.env.SUPABASE_SERVICE_ROLE_KEY
+      );
+      await supabaseInfo
         .from('applications')
         .update({ stripe_session_id: session.id, payment_status: 'pending' })
         .eq('id', applicationId);

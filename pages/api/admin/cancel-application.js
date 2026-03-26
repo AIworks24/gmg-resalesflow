@@ -31,7 +31,7 @@ export default async function handler(req, res) {
     // Check if user has admin role (only admins can reject applications)
     const { data: profile } = await supabase
       .from('profiles')
-      .select('role')
+      .select('role, first_name, last_name')
       .eq('id', user.id)
       .single();
 
@@ -89,10 +89,12 @@ export default async function handler(req, res) {
     // Store cancellation/rejection comments in notes field
     // Append to existing notes if any
     const existingNotes = application.notes || '';
-    const actionLabel = action === 'cancel' ? 'Cancelled' : 'Rejected';
-    const timestamp = new Date().toLocaleString();
-    const newNote = `\n\n--- ${actionLabel} on ${timestamp} ---\n${comments || 'No reason provided'}`;
-    updateData.notes = existingNotes + newNote;
+    const adminName = `${profile.first_name || ''} ${profile.last_name || ''}`.trim() || 'Admin';
+    const actionLabel = action === 'cancel' ? 'cancelled' : 'rejected';
+    const isoTimestamp = new Date().toISOString();
+    const reason = comments || 'No reason provided';
+    const newNote = `[${isoTimestamp}] Application ${actionLabel} by ${adminName}. Reason: "${reason}"`;
+    updateData.notes = existingNotes ? `${existingNotes}\n\n${newNote}` : newNote;
 
     // Add cancelled_at or rejected_at timestamp
     if (action === 'cancel') {
