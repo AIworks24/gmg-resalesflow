@@ -173,16 +173,17 @@ export default async function handler(req, res) {
 
       invoiceUrl = session.url;
 
-      // Store session ID on application so webhook can find it.
-      // Note: we do NOT set processing_locked for rush upgrades — tasks can
-      // still be processed while the customer pays. The webhook will apply
-      // the deadline change and package_type update on payment.
-      const auditNote = `[${new Date().toISOString()}] Rush upgrade invoice ($${totalFeeDisplay}) created and emailed to ${application.submitter_email} by ${adminName}. Pending customer payment. New deadline on payment: ${newDeadlineDate}.`;
+      // Store session ID and lock tasks until the customer pays.
+      // The webhook will clear the lock and apply the deadline change on payment.
+      const auditNote = `[${new Date().toISOString()}] Rush upgrade invoice ($${totalFeeDisplay}) created and emailed to ${application.submitter_email} by ${adminName}. Tasks locked pending customer payment. New deadline on payment: ${newDeadlineDate}.`;
 
       await supabase
         .from('applications')
         .update({
           correction_stripe_session_id: session.id,
+          processing_locked:            true,
+          processing_locked_at:         new Date().toISOString(),
+          processing_locked_reason:     'pending_rush_upgrade_payment',
           notes: application.notes
             ? `${application.notes}\n\n${auditNote}`
             : auditNote,

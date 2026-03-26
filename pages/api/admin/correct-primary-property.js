@@ -2,6 +2,7 @@ import { createPagesServerClient } from '@supabase/auth-helpers-nextjs';
 import { getServerStripe } from '../../../lib/stripe';
 import { sendEmail } from '../../../lib/emailService';
 import { getPricing } from '../../../lib/pricingConfig';
+import { parseEmails } from '../../../lib/emailUtils';
 
 const CONVENIENCE_FEE_CENTS = 995;   // $9.95 per property
 
@@ -114,8 +115,13 @@ export default async function handler(req, res) {
       return res.status(500).json({ error: 'Failed to fetch current property groups' });
     }
 
+    // Single-property applications have no application_property_groups rows (those are only
+    // created for multi-community apps). Treat the original hoa_property_id as 1 already-paid
+    // property so delta and effectiveBasePerProp are derived from the actual amount paid
+    // rather than falling back to the pricing-config default.
+    const hasGroups      = (currentGroups || []).length > 0;
+    const currentCount   = hasGroups ? currentGroups.length : 1;
     const newTotalCount  = 1 + (newLinked).length;
-    const currentCount   = (currentGroups || []).length;
     const delta          = newTotalCount - currentCount;
 
     // Pricing — use desiredPackageType if provided, otherwise keep current
@@ -297,8 +303,13 @@ export default async function handler(req, res) {
     let invoiceUrl = null;
     let invoiceError = null;
     if (createInvoice && totalAdditionalCents > 0) {
-      // Identify which specific properties are new (in new set but not in old set)
-      const oldPropertyIds = new Set((currentGroups || []).map(g => g.property_id));
+      // Identify which specific properties are new (in new set but not in old set).
+      // For single-property apps (no groups), include hoa_property_id as already-paid
+      // so it is excluded from line items when it reappears as a linked community of the new MC.
+      const oldPropertyIds = new Set([
+        ...(currentGroups || []).map(g => g.property_id),
+        ...(!hasGroups ? [application.hoa_property_id] : []),
+      ]);
       const allNewProperties = [
         { id: newPrimary.id, name: newPrimary.name, location: newPrimary.location },
         ...(newLinked).map(l => ({ id: l.linked_property_id, name: l.property_name, location: l.location })),
@@ -661,6 +672,159 @@ export default async function handler(req, res) {
       } catch (confirmEmailErr) {
         console.error('correct-primary-property: Confirmation email failed:', confirmEmailErr);
         // Non-fatal — correction was applied successfully
+      }
+    }
+
+    // When no Stripe invoice was created (waived or zero-cost correction), the webhook will
+    // never fire, so we must notify property owners directly and clean up correction_metadata.
+    if (!invoiceUrl) {
+      try {
+        const supabaseUrlEnv = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://dnivljiyahzxpyxjjifi.supabase.co';
+        const logoUrl       = `${supabaseUrlEnv}/storage/v1/object/public/bucket0/assets/company_logo_white.png`;
+        const brandColor    = '#0f4734';
+        const siteUrl       = process.env.NEXT_PUBLIC_SITE_URL || process.env.NEXT_PUBLIC_APP_URL || 'https://resalesflow.gmgva.com';
+        const processingLabel = targetIsRush ? 'Rush — 5 business days' : 'Standard — 15 calendar days';
+
+        const buildOwnerEmail = ({ heading, body, propertyName, nextStepNote, ctaUrl, ctaLabel }) => `<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>${heading}</title></head>
+<body style="margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;background-color:#f5f5f5;line-height:1.6;color:#333333;">
+  <div style="max-width:600px;margin:0 auto;background-color:#ffffff;">
+    <div style="background-color:${brandColor};padding:30px 20px;">
+      <div style="margin-bottom:16px;"><img src="${logoUrl}" alt="Goodman Management Group" width="140" height="42" style="height:42px;width:auto;display:block;border:0;"/></div>
+      <div style="text-align:center;"><h1 style="margin:0;color:#ffffff;font-size:26px;font-weight:700;line-height:1.2;">${heading}</h1></div>
+    </div>
+    <div style="padding:30px 20px;">
+      <p style="margin:0 0 16px 0;font-size:15px;color:#333333;">Dear Property Manager,</p>
+      <p style="margin:0 0 24px 0;font-size:15px;color:#555555;">${body}</p>
+      <div style="background-color:#f9fafb;border-radius:8px;padding:20px;border:1px solid #e5e7eb;margin:0 0 24px 0;">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;border-collapse:collapse;">
+          <tr>
+            <td style="padding:8px 0;border-bottom:1px solid #e5e7eb;font-size:14px;color:#374151;"><strong>Application ID:</strong></td>
+            <td style="padding:8px 0;border-bottom:1px solid #e5e7eb;font-size:14px;color:#111827;text-align:right;">#${applicationId}</td>
+          </tr>
+          ${propertyName ? `<tr>
+            <td style="padding:8px 0;border-bottom:1px solid #e5e7eb;font-size:14px;color:#374151;"><strong>Your Property:</strong></td>
+            <td style="padding:8px 0;border-bottom:1px solid #e5e7eb;font-size:14px;color:#111827;text-align:right;">${propertyName}</td>
+          </tr>` : ''}
+          <tr>
+            <td style="padding:8px 0;font-size:14px;color:#374151;"><strong>Processing:</strong></td>
+            <td style="padding:8px 0;font-size:14px;color:#111827;text-align:right;">${processingLabel}</td>
+          </tr>
+        </table>
+      </div>
+      ${nextStepNote ? `<div style="background-color:#f0f9f4;border-left:4px solid ${brandColor};border-radius:6px;padding:16px;margin:0 0 24px 0;">
+        <p style="margin:0;font-size:14px;color:#065f46;">${nextStepNote}</p>
+      </div>` : ''}
+      ${ctaUrl ? `<div style="text-align:center;margin:0 0 24px 0;">
+        <a href="${ctaUrl}" style="display:inline-block;padding:14px 32px;background-color:${brandColor};color:#ffffff;text-decoration:none;border-radius:6px;font-size:16px;font-weight:600;">${ctaLabel || 'View Application'}</a>
+      </div>` : ''}
+      <div style="text-align:center;padding:20px 0;">
+        <p style="margin:0;font-size:14px;color:#6b7280;">Questions? Contact us at <a href="mailto:resales@gmgva.com" style="color:${brandColor};text-decoration:none;font-weight:500;">resales@gmgva.com</a></p>
+      </div>
+    </div>
+    <div style="background-color:#f9fafb;padding:20px;border-top:1px solid #e5e7eb;text-align:center;">
+      <p style="margin:0;font-size:12px;color:#6b7280;"><strong style="color:${brandColor};">Goodman Management Group</strong><br>Professional HOA Management &amp; Resale Services</p>
+    </div>
+  </div>
+</body>
+</html>`;
+
+        // 3-way property owner notification (same logic as webhook's handleCorrectionPayment)
+        const newPropIdSetOwner = new Set(newGroups.map(g => g.property_id));
+        const ownerEmails = []; // [{ to, subject, html, context, label }]
+
+        // A) Old owners whose property is no longer in the application
+        const removedSeenOwner = new Set();
+        for (const owner of oldOwners.filter(o => !newPropIdSetOwner.has(o.propertyId))) {
+          for (const email of parseEmails(owner.email)) {
+            const key = email.toLowerCase();
+            if (removedSeenOwner.has(key)) continue;
+            removedSeenOwner.add(key);
+            ownerEmails.push({
+              to:      email,
+              subject: `Application Update — Property Correction (#${applicationId})`,
+              html:    buildOwnerEmail({
+                heading:      'Application Property Updated',
+                body:         `A resale certificate application previously associated with <strong>${owner.propertyName}</strong> has been corrected. The application is now assigned to <strong>${newPrimary.name}</strong>. Your property is no longer part of this application.`,
+                propertyName: owner.propertyName,
+                nextStepNote: 'No further action is required from you for this application.',
+                ctaUrl:       `${siteUrl}/admin/login?applicationId=${applicationId}`,
+                ctaLabel:     'View Application',
+              }),
+              context: 'PropertyOwnerRemovedNotification',
+              label:   `removed: ${email}`,
+            });
+          }
+        }
+
+        // B) Old owners whose property is still in the new setup
+        const continuingSeenOwner = new Set();
+        for (const owner of oldOwners.filter(o => newPropIdSetOwner.has(o.propertyId))) {
+          const matchedGroup = newGroups.find(g => g.property_id === owner.propertyId);
+          for (const email of parseEmails(owner.email)) {
+            const key = email.toLowerCase();
+            if (continuingSeenOwner.has(key)) continue;
+            continuingSeenOwner.add(key);
+            ownerEmails.push({
+              to:      email,
+              subject: `New Application Submitted — Property Correction (#${applicationId})`,
+              html:    buildOwnerEmail({
+                heading:      'New Application for Your Property',
+                body:         `A resale certificate application has been updated and now includes your property. The application was recently corrected and your community has been confirmed as part of the updated application.`,
+                propertyName: matchedGroup?.property_name || owner.propertyName,
+                ctaUrl:       `${siteUrl}/admin/login?applicationId=${applicationId}`,
+                ctaLabel:     'View Application',
+              }),
+              context: 'PropertyOwnerCorrectionContinuingNotification',
+              label:   `continuing: ${email}`,
+            });
+          }
+        }
+
+        // C) Brand-new owners not already notified
+        const allHandledOwnerEmails = new Set([...removedSeenOwner, ...continuingSeenOwner]);
+        for (const g of newGroups) {
+          for (const email of parseEmails(g.property_owner_email)) {
+            const key = email.toLowerCase();
+            if (allHandledOwnerEmails.has(key)) continue;
+            allHandledOwnerEmails.add(key);
+            ownerEmails.push({
+              to:      email,
+              subject: `New Application Submitted — Property Correction (#${applicationId})`,
+              html:    buildOwnerEmail({
+                heading:      'New Application for Your Property',
+                body:         `A new resale certificate application has been submitted and assigned to your property. The application was recently corrected to include your community.`,
+                propertyName: g.property_name,
+                ctaUrl:       `${siteUrl}/admin/login?applicationId=${applicationId}`,
+                ctaLabel:     'View Application',
+              }),
+              context: 'PropertyOwnerNewCorrectionNotification',
+              label:   `new: ${email}`,
+            });
+          }
+        }
+
+        await Promise.allSettled(ownerEmails.map(e =>
+          sendEmail({ to: e.to, subject: e.subject, html: e.html, context: e.context })
+            .then(() => console.log(`[correct-primary-property] Property owner email sent (${e.label})`))
+            .catch(err => console.error(`[correct-primary-property] Failed property owner email (${e.label}):`, err.message))
+        ));
+
+        console.log(`[correct-primary-property] Sent ${ownerEmails.length} property owner notification(s) for application ${applicationId}`);
+      } catch (ownerEmailErr) {
+        console.error('correct-primary-property: Property owner notification failed:', ownerEmailErr);
+        // Non-fatal — correction was already applied successfully
+      }
+
+      // Clear correction_metadata — no webhook will fire to clear it since no invoice was created
+      try {
+        await supabase
+          .from('applications')
+          .update({ correction_metadata: null, updated_at: new Date().toISOString() })
+          .eq('id', applicationId);
+      } catch (cleanupErr) {
+        console.error('correct-primary-property: Failed to clear correction_metadata:', cleanupErr);
       }
     }
 

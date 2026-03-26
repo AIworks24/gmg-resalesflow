@@ -3660,8 +3660,10 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
   const handleSelectNewPrimary = async (property) => {
     setSelectedNewPrimary(property);
     setDryRunResult(null);
-    // Default package type to current on new property selection
-    const pkg = selectedCorrectionPackage || selectedApplication.package_type;
+    // Default package type to current; rush applications can never downgrade
+    const pkg = selectedApplication.package_type === 'rush'
+      ? 'rush'
+      : (selectedCorrectionPackage || selectedApplication.package_type);
     setSelectedCorrectionPackage(pkg);
     await runCorrectionDryRun(property.id, pkg);
   };
@@ -6527,26 +6529,32 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                             {selectedNewPrimary.location && <p className='text-xs text-gray-500'>{selectedNewPrimary.location}</p>}
                           </div>
 
-                          {/* Package type selector */}
+                          {/* Package type selector — can't downgrade from rush */}
                           <div>
                             <p className='text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2'>Processing type</p>
-                            <div className='grid grid-cols-2 gap-2'>
-                              {['standard', 'rush'].map((pkg) => (
-                                <button
-                                  key={pkg}
-                                  onClick={() => handleChangeCorrectionPackage(pkg)}
-                                  className={`px-3 py-2.5 rounded-lg border-2 text-sm font-medium transition-all ${
-                                    (selectedCorrectionPackage || selectedApplication.package_type) === pkg
-                                      ? pkg === 'rush'
-                                        ? 'border-amber-500 bg-amber-50 text-amber-800'
-                                        : 'border-green-500 bg-green-50 text-green-800'
-                                      : 'border-gray-200 text-gray-600 hover:border-gray-300'
-                                  }`}
-                                >
-                                  {pkg === 'standard' ? 'Standard (15 days)' : 'Rush (5 bus. days)'}
-                                </button>
-                              ))}
-                            </div>
+                            {selectedApplication.package_type === 'rush' ? (
+                              <div className='px-3 py-2.5 rounded-lg border-2 border-amber-500 bg-amber-50 text-amber-800 text-sm font-medium text-center'>
+                                Rush (5 bus. days)
+                              </div>
+                            ) : (
+                              <div className='grid grid-cols-2 gap-2'>
+                                {['standard', 'rush'].map((pkg) => (
+                                  <button
+                                    key={pkg}
+                                    onClick={() => handleChangeCorrectionPackage(pkg)}
+                                    className={`px-3 py-2.5 rounded-lg border-2 text-sm font-medium transition-all ${
+                                      (selectedCorrectionPackage || selectedApplication.package_type) === pkg
+                                        ? pkg === 'rush'
+                                          ? 'border-amber-500 bg-amber-50 text-amber-800'
+                                          : 'border-green-500 bg-green-50 text-green-800'
+                                        : 'border-gray-200 text-gray-600 hover:border-gray-300'
+                                    }`}
+                                  >
+                                    {pkg === 'standard' ? 'Standard (15 days)' : 'Rush (5 bus. days)'}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
                           </div>
 
                           {/* Delta info */}

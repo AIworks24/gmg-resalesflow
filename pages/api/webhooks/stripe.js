@@ -1,6 +1,7 @@
 import { getServerStripe, getWebhookSecret } from '../../../lib/stripe';
 import { getTestModeFromRequest } from '../../../lib/stripeMode';
 import { sendEmail, sendInvoiceReceiptEmail, sendPaymentConfirmationEmail } from '../../../lib/emailService';
+import { parseEmails } from '../../../lib/emailUtils';
 
 // Helper function to get raw body for webhook signature verification
 function getRawBody(req) {
@@ -707,11 +708,12 @@ async function handleCorrectionPayment(session, stripe, supabase) {
   const auditNote = `[${new Date().toISOString()}] Invoice paid by ${app.submitter_email}${amountDisplay ? ` ($${amountDisplay})` : ''} for ${correctionLabel}.`;
 
   const updatePayload = {
-    processing_locked:        false,
-    processing_locked_at:     null,
-    processing_locked_reason: null,
-    notes:                    app.notes ? `${app.notes}\n\n${auditNote}` : auditNote,
-    updated_at:               new Date().toISOString(),
+    processing_locked:            false,
+    processing_locked_at:         null,
+    processing_locked_reason:     null,
+    correction_stripe_session_id: null, // clear so future corrections are not blocked
+    notes:                        app.notes ? `${app.notes}\n\n${auditNote}` : auditNote,
+    updated_at:                   new Date().toISOString(),
   };
 
   if (correctionType === 'rush_upgrade') {
@@ -896,30 +898,34 @@ async function handleCorrectionPayment(session, stripe, supabase) {
         .not('property_owner_email', 'is', null);
 
       if (currentGroups && currentGroups.length > 0) {
+        // Expand comma-separated property_owner_email into individual recipients and deduplicate
         const seen = new Set();
-        const unique = currentGroups.filter(g => {
-          const key = g.property_owner_email.toLowerCase();
-          if (seen.has(key)) return false;
-          seen.add(key);
-          return true;
-        });
+        const recipients = [];
+        for (const g of currentGroups) {
+          for (const email of parseEmails(g.property_owner_email)) {
+            const key = email.toLowerCase();
+            if (seen.has(key)) continue;
+            seen.add(key);
+            recipients.push({ email, propertyName: g.property_name });
+          }
+        }
 
-        await Promise.allSettled(unique.map(g => sendEmail({
-          to:      g.property_owner_email,
+        await Promise.allSettled(recipients.map(({ email, propertyName }) => sendEmail({
+          to:      email,
           subject: `Application Updated — Rush Processing Upgrade (#${app.id})`,
           html:    buildPropertyOwnerEmail({
             heading:      'Rush Processing Upgrade',
             body:         `A resale certificate application associated with your property has been upgraded to <strong>Rush processing (5 business days)</strong>. Our team will prioritise completing the required documents as quickly as possible.`,
-            propertyName: g.property_name,
+            propertyName: propertyName,
             nextStepNote: 'No action is required from you at this time. Processing will continue on the expedited timeline.',
             ctaUrl:       `${siteUrl}/admin/login?applicationId=${app.id}`,
             ctaLabel:     'View Application',
           }),
           context: 'PropertyOwnerRushUpgradeNotification',
         }).then(() => {
-          console.log(`[Webhook][Correction] Rush upgrade notice sent to ${g.property_owner_email} (${g.property_name})`);
+          console.log(`[Webhook][Correction] Rush upgrade notice sent to ${email} (${propertyName})`);
         }).catch(err => {
-          console.error(`[Webhook][Correction] Failed rush upgrade notice to ${g.property_owner_email}:`, err.message);
+          console.error(`[Webhook][Correction] Failed rush upgrade notice to ${email}:`, err.message);
         })));
       }
 
@@ -937,79 +943,83 @@ async function handleCorrectionPayment(session, stripe, supabase) {
 
       const newGroups = currentGroups || [];
 
-      // Build lookup sets
-      const oldEmailSet = new Set(oldOwners.map(o => o.email.toLowerCase()));
-      const newEmailSet = new Set(newGroups.map(g => g.property_owner_email.toLowerCase()));
+      // Build lookup sets — use individual parsed emails (not whole comma-separated strings)
+      const oldEmailSet = new Set(
+        oldOwners.flatMap(o => parseEmails(o.email).map(e => e.toLowerCase()))
+      );
       const newPropIdSet = new Set(newGroups.map(g => g.property_id));
 
       const emails = []; // [{ to, subject, html, context, label }]
 
       // A) Old owners REMOVED from the application
-      const removedOwners = oldOwners.filter(o => !newPropIdSet.has(o.propertyId));
-      const removedSeen   = new Set();
-      for (const owner of removedOwners) {
-        const key = owner.email.toLowerCase();
-        if (removedSeen.has(key)) continue;
-        removedSeen.add(key);
-        emails.push({
-          to:      owner.email,
-          subject: `Application Update — Property Correction (#${app.id})`,
-          html:    buildPropertyOwnerEmail({
-            heading:      'Application Property Updated',
-            body:         `A resale certificate application previously associated with <strong>${owner.propertyName}</strong> has been corrected by the applicant. The application is now assigned to <strong>${newPrimName}</strong>. Your property is no longer part of this application.`,
-            propertyName: owner.propertyName,
-            nextStepNote: 'No further action is required from you for this application.',
-            ctaUrl:       `${siteUrl}/admin/login?applicationId=${app.id}`,
-            ctaLabel:     'View Application',
-          }),
-          context: 'PropertyOwnerRemovedNotification',
-          label:   `removed: ${owner.email}`,
-        });
+      const removedSeen = new Set();
+      for (const owner of oldOwners.filter(o => !newPropIdSet.has(o.propertyId))) {
+        for (const email of parseEmails(owner.email)) {
+          const key = email.toLowerCase();
+          if (removedSeen.has(key)) continue;
+          removedSeen.add(key);
+          emails.push({
+            to:      email,
+            subject: `Application Update — Property Correction (#${app.id})`,
+            html:    buildPropertyOwnerEmail({
+              heading:      'Application Property Updated',
+              body:         `A resale certificate application previously associated with <strong>${owner.propertyName}</strong> has been corrected by the applicant. The application is now assigned to <strong>${newPrimName}</strong>. Your property is no longer part of this application.`,
+              propertyName: owner.propertyName,
+              nextStepNote: 'No further action is required from you for this application.',
+              ctaUrl:       `${siteUrl}/admin/login?applicationId=${app.id}`,
+              ctaLabel:     'View Application',
+            }),
+            context: 'PropertyOwnerRemovedNotification',
+            label:   `removed: ${email}`,
+          });
+        }
       }
 
       // B) Old owners STILL in the new setup — they have a "new" application from correction
-      const continuingOwners = oldOwners.filter(o => newPropIdSet.has(o.propertyId));
-      const continuingSeen   = new Set();
-      for (const owner of continuingOwners) {
-        const key = owner.email.toLowerCase();
-        if (continuingSeen.has(key)) continue;
-        continuingSeen.add(key);
-        // Find the matching new group for the property name
+      const continuingSeen = new Set();
+      for (const owner of oldOwners.filter(o => newPropIdSet.has(o.propertyId))) {
         const newGroup = newGroups.find(g => g.property_id === owner.propertyId);
-        emails.push({
-          to:      owner.email,
-          subject: `New Application Submitted — Property Correction (#${app.id})`,
-          html:    buildPropertyOwnerEmail({
-            heading:      'New Application for Your Property',
-            body:         `A resale certificate application has been updated and now includes your property. This application was recently corrected by the applicant and your community has been confirmed as part of the new application.`,
-            propertyName: newGroup?.property_name || owner.propertyName,
-            ctaUrl:       `${siteUrl}/admin/login?applicationId=${app.id}`,
-            ctaLabel:     'View Application',
-          }),
-          context: 'PropertyOwnerCorrectionContinuingNotification',
-          label:   `continuing: ${owner.email}`,
-        });
+        for (const email of parseEmails(owner.email)) {
+          const key = email.toLowerCase();
+          if (continuingSeen.has(key)) continue;
+          continuingSeen.add(key);
+          emails.push({
+            to:      email,
+            subject: `New Application Submitted — Property Correction (#${app.id})`,
+            html:    buildPropertyOwnerEmail({
+              heading:      'New Application for Your Property',
+              body:         `A resale certificate application has been updated and now includes your property. This application was recently corrected by the applicant and your community has been confirmed as part of the new application.`,
+              propertyName: newGroup?.property_name || owner.propertyName,
+              ctaUrl:       `${siteUrl}/admin/login?applicationId=${app.id}`,
+              ctaLabel:     'View Application',
+            }),
+            context: 'PropertyOwnerCorrectionContinuingNotification',
+            label:   `continuing: ${email}`,
+          });
+        }
       }
 
-      // C) Brand-new property owners not in the old set
-      const newOnlySeen = new Set([...removedSeen, ...continuingSeen]);
+      // C) Brand-new property owners not already notified via Case A or B
+      const allHandledEmails = new Set([...removedSeen, ...continuingSeen]);
       for (const g of newGroups) {
-        const key = g.property_owner_email.toLowerCase();
-        if (newOnlySeen.has(key) || oldEmailSet.has(key)) continue;
-        newOnlySeen.add(key);
-        emails.push({
-          to:      g.property_owner_email,
-          subject: `New Application Submitted — Property Correction (#${app.id})`,
-          html:    buildPropertyOwnerEmail({
-            heading:      'New Application for Your Property',
-            body:         `A new resale certificate application has been submitted and assigned to your property. This application was recently corrected by the applicant to include your community.`,
-            propertyName: g.property_name,
-            ctaUrl:       `${siteUrl}/admin/login?applicationId=${app.id}`,
-            ctaLabel:     'View Application',
-          }),
-          context: 'PropertyOwnerNewCorrectionNotification',
-          label:   `new: ${g.property_owner_email}`,
-        });
+        for (const email of parseEmails(g.property_owner_email)) {
+          const key = email.toLowerCase();
+          if (allHandledEmails.has(key)) continue;
+          allHandledEmails.add(key);
+          emails.push({
+            to:      email,
+            subject: `New Application Submitted — Property Correction (#${app.id})`,
+            html:    buildPropertyOwnerEmail({
+              heading:      'New Application for Your Property',
+              body:         `A new resale certificate application has been submitted and assigned to your property. This application was recently corrected by the applicant to include your community.`,
+              propertyName: g.property_name,
+              ctaUrl:       `${siteUrl}/admin/login?applicationId=${app.id}`,
+              ctaLabel:     'View Application',
+            }),
+            context: 'PropertyOwnerNewCorrectionNotification',
+            label:   `new: ${email}`,
+          });
+        }
       }
 
       await Promise.allSettled(emails.map(e => sendEmail({ to: e.to, subject: e.subject, html: e.html, context: e.context })

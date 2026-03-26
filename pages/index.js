@@ -3444,7 +3444,7 @@ const LenderQuestionnaireUploadStep = ({ formData, applicationId, setCurrentStep
         }, 1000);
       }
 
-      const response = await fetch('/api/upload-lender-questionnaire', {
+      const response = await fetchWithImpersonation('/api/upload-lender-questionnaire', {
         method: 'POST',
         body: formData,
       });

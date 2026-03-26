@@ -1,7 +1,7 @@
-import { createPagesServerClient } from '@supabase/auth-helpers-nextjs';
 import { createClient } from '@supabase/supabase-js';
 import formidable from 'formidable';
 import fs from 'fs';
+import { resolveActingUser } from '../../lib/impersonation';
 
 // Disable body parsing, we'll handle it with formidable
 export const config = {
@@ -22,19 +22,15 @@ export default async function handler(req, res) {
   }
 
   try {
-    // Create authenticated client to verify user session
-    // IMPORTANT: Do this BEFORE parsing form data to ensure cookies are available
-    const supabase = createPagesServerClient({ req, res });
+    // Resolve acting user BEFORE parsing form data so cookies are available
+    const identity = await resolveActingUser(req, res);
 
-    // Verify user is authenticated BEFORE parsing form data
-    // This ensures session cookies are read before formidable consumes the request
-    const { data: { session }, error: authError } = await supabase.auth.getSession();
-    
-    if (authError || !session) {
+    if (!identity.authenticated) {
       return res.status(401).json({ error: 'Unauthorized - Please log in to upload files' });
     }
 
-    const userId = session.user.id;
+    const userId = identity.actingUserId;
+    const { isImpersonating } = identity;
 
     // Parse form data AFTER auth check
     // Note: formidable may consume the request stream, but we've already read the session
@@ -55,8 +51,8 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'No application ID provided' });
     }
 
-    // Verify the user owns this application
-    const { data: application, error: appError } = await supabase
+    // Verify the user owns this application (use service role to bypass RLS for impersonation)
+    const { data: application, error: appError } = await supabaseAdmin
       .from('applications')
       .select('id, user_id, application_type')
       .eq('id', applicationId)
@@ -144,8 +140,8 @@ export default async function handler(req, res) {
     deletionDate.setDate(deletionDate.getDate() + 30);
 
     // Update application record with file path and deletion date
-    // Use authenticated client to update (ensures user owns the application)
-    const { error: updateError } = await supabase
+    // Use service role client to bypass RLS (ownership already verified above)
+    const { error: updateError } = await supabaseAdmin
       .from('applications')
       .update({
         lender_questionnaire_file_path: filePath,
@@ -176,10 +172,14 @@ export default async function handler(req, res) {
       // Don't fail the request if notification creation fails
     }
 
-    // Send confirmation email
+    // Send confirmation email (skip if impersonating and emails are suppressed)
+    const sendEmails = req.headers['x-impersonate-send-emails'] !== 'false';
     try {
-      // Get application details for email (use authenticated client)
-      const { data: applicationData, error: appError } = await supabase
+      if (isImpersonating && !sendEmails) {
+        throw new Error('EMAIL_SUPPRESSED');
+      }
+      // Get application details for email (use service role to support impersonation)
+      const { data: applicationData, error: appError } = await supabaseAdmin
         .from('applications')
         .select(`
           submitter_name, 
@@ -194,7 +194,7 @@ export default async function handler(req, res) {
           )
         `)
         .eq('id', applicationId)
-        .eq('user_id', userId) // Ensure we only get user's own applications
+        .eq('user_id', userId)
         .single();
 
       if (!appError && applicationData) {
@@ -293,8 +293,10 @@ export default async function handler(req, res) {
         });
       }
     } catch (emailError) {
-      console.error('Error sending confirmation email:', emailError);
-      // Don't fail the request if email fails
+      if (emailError.message !== 'EMAIL_SUPPRESSED') {
+        console.error('Error sending confirmation email:', emailError);
+      }
+      // Don't fail the request if email fails or is suppressed
     }
 
     return res.status(200).json({
