@@ -117,7 +117,7 @@ export default async function handler(req, res) {
     .from('applications')
     .select(`
       id, submitter_email, submitter_name, property_address, hoa_property_id, buyer_email,
-      application_type,
+      buyer_name, application_type,
       hoa_properties(id, name, is_multi_community)
     `)
     .eq('id', applicationId)
@@ -138,6 +138,11 @@ export default async function handler(req, res) {
     ? [...buyerEmails.slice(1), application.submitter_email]
     : [];
 
+  // Address the email to the buyer if one exists, otherwise to the requester.
+  const recipientName = buyerEmails.length > 0
+    ? (application.buyer_name || application.submitter_name)
+    : application.submitter_name;
+
   // Determine if this is a multi-community info packet by checking the property directly.
   // Property groups are never created for info packets (unlike standard resale applications),
   // so we cannot rely on application_property_groups to detect multi-community.
@@ -154,7 +159,7 @@ export default async function handler(req, res) {
 
         await sendApprovalEmail({
           to: primaryTo,
-          submitterName: application.submitter_name,
+          submitterName: recipientName,
           propertyAddress: application.property_address,
           hoaName,
           pdfUrl: null,
@@ -173,7 +178,7 @@ export default async function handler(req, res) {
 
       await sendApprovalEmail({
         to: primaryTo,
-        submitterName: application.submitter_name,
+        submitterName: recipientName,
         propertyAddress: application.property_address,
         hoaName,
         pdfUrl: null,
