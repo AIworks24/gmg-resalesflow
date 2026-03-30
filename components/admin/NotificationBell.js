@@ -27,11 +27,30 @@ const NotificationBell = ({ user, userEmail }) => {
   // Local state for UI only
   const [showDropdown, setShowDropdown] = useState(false);
   const [clearedNotifications, setClearedNotifications] = useState(new Set());
+  const [toasts, setToasts] = useState([]);
   const supabase = createClientComponentClient();
   const router = useRouter();
   
   // Keep a ref to track if we've initialized to prevent unnecessary refetches
   const initializedRef = useRef(false);
+
+  const addToast = (notification) => {
+    const id = notification.id || (notification.property_id ? `expiring_${notification.property_id}` : Date.now());
+    setToasts((prev) => {
+      // Prevent duplicate toasts
+      if (prev.some(t => t.toastId === id)) return prev;
+      return [...prev, { ...notification, toastId: id }];
+    });
+    
+    // Auto remove after 5 seconds
+    setTimeout(() => {
+      setToasts((prev) => prev.filter((t) => t.toastId !== id));
+    }, 5000);
+  };
+
+  const removeToast = (id) => {
+    setToasts((prev) => prev.filter((t) => t.toastId !== id));
+  };
 
   // Load cleared notifications from localStorage
   useEffect(() => {
@@ -128,6 +147,30 @@ const NotificationBell = ({ user, userEmail }) => {
       setNotifications(appNotifications.notifications);
       setExpiringDocs(expiringDocsList);
       updateUnreadCount(appNotifications.notifications, expiringDocsList);
+
+      // Show toasts for unread notifications that haven't been shown yet
+      try {
+        const shownToastsStr = sessionStorage.getItem('shown_toasts') || '[]';
+        const shownToasts = new Set(JSON.parse(shownToastsStr));
+        
+        const newUnread = appNotifications.notifications.filter(n => !n.is_read && !shownToasts.has(n.id));
+        const newExpiring = expiringDocsList.filter(d => !shownToasts.has(`expiring_${d.property_id}`));
+        
+        const allNewToasts = [...newUnread, ...newExpiring];
+        
+        // Show at most 3 toasts at once to avoid overwhelming the user
+        allNewToasts.slice(0, 3).forEach(n => {
+          addToast(n);
+        });
+        
+        // Mark all new unread as "shown" so they don't pop up next time
+        newUnread.forEach(n => shownToasts.add(n.id));
+        newExpiring.forEach(d => shownToasts.add(`expiring_${d.property_id}`));
+        
+        sessionStorage.setItem('shown_toasts', JSON.stringify(Array.from(shownToasts)));
+      } catch (e) {
+        console.error('Error managing toasts:', e);
+      }
     } catch (error) {
       console.error('❌ Error fetching notifications:', error);
       // On error, keep existing count (don't reset to 0)
@@ -440,9 +483,61 @@ const NotificationBell = ({ user, userEmail }) => {
   const unreadNotifications = notifications.filter(n => !n.is_read);
 
   return (
-    <div className="relative notifications-container">
-      <button
-        onClick={() => setShowDropdown(!showDropdown)}
+    <>
+      {/* Toast Container */}
+      <div className="fixed bottom-4 right-4 z-[9999] flex flex-col gap-2 pointer-events-none">
+        {toasts.map((toast) => (
+          <div 
+            key={toast.toastId} 
+            className="bg-white rounded-lg shadow-lg border border-gray-200 p-4 w-80 pointer-events-auto flex items-start gap-3 animate-slide-up"
+            onClick={() => {
+              if (toast.id) {
+                handleNotificationClick(toast);
+              } else if (toast.property_id) {
+                const documentKey = toast.documents?.[0]?.document_key;
+                const url = documentKey 
+                  ? `/admin/property-files/${toast.property_id}?docKey=${encodeURIComponent(documentKey)}`
+                  : `/admin/property-files/${toast.property_id}`;
+                router.push(url);
+              }
+              removeToast(toast.toastId);
+            }}
+          >
+            <div className={`flex-shrink-0 mt-1 ${
+              toast.notification_type === 'new_application' ? 'text-blue-600' : 'text-green-600'
+            }`}>
+              {toast.notification_type === 'new_application' ? (
+                <FileText className="w-5 h-5" />
+              ) : toast.property_id ? (
+                <AlertCircle className="w-5 h-5 text-yellow-600" />
+              ) : (
+                <Check className="w-5 h-5" />
+              )}
+            </div>
+            <div className="flex-1 min-w-0 cursor-pointer">
+              <p className="text-sm font-medium text-gray-900">
+                {toast.subject || `Documents Expiring - ${toast.property_name}`}
+              </p>
+              <p className="text-sm text-gray-600 mt-1 line-clamp-2">
+                {toast.message || `${toast.documents?.length} document(s) expiring within 30 days`}
+              </p>
+            </div>
+            <button 
+              onClick={(e) => {
+                e.stopPropagation();
+                removeToast(toast.toastId);
+              }}
+              className="text-gray-400 hover:text-gray-600 flex-shrink-0"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        ))}
+      </div>
+
+      <div className="relative notifications-container">
+        <button
+          onClick={() => setShowDropdown(!showDropdown)}
         className="relative p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
         aria-label="Notifications"
       >
@@ -614,6 +709,7 @@ const NotificationBell = ({ user, userEmail }) => {
         </>
       )}
     </div>
+    </>
   );
 };
 

@@ -1,10 +1,13 @@
 import { createPagesServerClient } from '@supabase/auth-helpers-nextjs';
 import { getServerStripe } from '../../../lib/stripe';
+import { getConnectedAccountId } from '../../../lib/stripeMode';
 import { sendEmail } from '../../../lib/emailService';
 import { getPricing } from '../../../lib/pricingConfig';
 import { parseEmails } from '../../../lib/emailUtils';
 
 const CONVENIENCE_FEE_CENTS = 995;   // $9.95 per property
+const TRANSFER_THRESHOLD_CENTS = 20000; // $200.00 — minimum base price to trigger transfer
+const TRANSFER_AMOUNT_PER_PROPERTY_CENTS = 2100; // $21.00 per additional property
 
 // Older applications were stored with application_type = 'standard' before the
 // multi-type schema was introduced. Map them to 'single_property' for pricing.
@@ -140,15 +143,8 @@ export default async function handler(req, res) {
     const appTypeForRush = HUNDRED_DOLLAR_RUSH_TYPES.includes(application.application_type) ? application.application_type : 'single_property';
     const configRushFee  = getPricing(appTypeForRush, true).rushFee;
 
-    // Derive the actual per-property BASE rate from what the customer originally paid.
-    // total_amount is stored in DOLLARS and contains base + rush fees only (no CC fees).
-    // This handles cases where the stored application_type doesn't match the pricing tier
-    // used at submission time (e.g. an MC app priced at single-property rates).
-    const totalAmountCents     = Math.round((parseFloat(application.total_amount) || 0) * 100);
-    const origRushFeeTotal     = currentIsRush ? configRushFee * currentCount : 0;
-    const effectiveBasePerProp = currentCount > 0
-      ? Math.round((totalAmountCents - origRushFeeTotal) / currentCount)
-      : getPricing(normalizeAppType(application.application_type), false).base;
+    // Base fee is always the single-property price ($317.95) regardless of app type.
+    const effectiveBasePerProp = getPricing('single_property', false).base;
 
     // Keep pricing object available for display helpers (dry-run response etc.)
     const pricing = getPricing(normalizeAppType(application.application_type), targetIsRush);
@@ -168,6 +164,22 @@ export default async function handler(req, res) {
     const totalAdditionalCents   = deltaAmountCents + rushUpgradeCents;
     const totalAdditionalDisplay = (totalAdditionalCents / 100).toFixed(2);
 
+    // Compute which properties are additional (new ones not already paid) — used in both dry-run and apply
+    const oldPropertyIds = new Set([
+      ...(currentGroups || []).map(g => g.property_id),
+      ...(!hasGroups ? [application.hoa_property_id] : []),
+    ]);
+    const allNewProperties = [
+      { id: newPrimary.id, name: newPrimary.name, location: newPrimary.location },
+      ...(newLinked).map(l => ({ id: l.linked_property_id, name: l.property_name, location: l.location })),
+    ];
+    const additionalProperties = allNewProperties.filter(p => !oldPropertyIds.has(p.id));
+
+    // Current properties — needed for rush upgrade display
+    const currentProperties = hasGroups
+      ? currentGroups.map(g => ({ name: g.property_name }))
+      : [{ name: oldPrimaryName }];
+
     // --- DRY RUN: return preview only ---
     if (dryRun) {
       return res.status(200).json({
@@ -185,7 +197,9 @@ export default async function handler(req, res) {
         targetIsRush,
         isUpgradingToRush,
         isCreditCard,
-        // Breakdown fields for UI display
+        // Per-property breakdown for UI display
+        additionalProperties:      additionalProperties.map(p => ({ name: p.name, location: p.location })),
+        currentProperties,
         effectiveBasePerProp,
         effectiveBaseDisplay:      (effectiveBasePerProp / 100).toFixed(2),
         convFeePerProp,
@@ -226,8 +240,22 @@ export default async function handler(req, res) {
         isPrimary:    g.is_primary,
       }));
 
+    // Determine if the application_type should change.
+    // A single-property app corrected to an MC property becomes 'multi_community'.
+    // An MC app corrected to a non-MC property reverts to 'single_property'.
+    const currentIsSettlement = ['settlement_va', 'settlement_nc'].includes(application.application_type);
+    let newApplicationType = application.application_type;
+    if (!currentIsSettlement) {
+      if (newPrimary.is_multi_community) {
+        newApplicationType = 'multi_community';
+      } else if (application.application_type === 'multi_community') {
+        newApplicationType = 'single_property';
+      }
+    }
+
     const appUpdate = {
       hoa_property_id:      newPrimaryPropertyId,
+      application_type:     newApplicationType,
       notes:                application.notes ? `${application.notes}\n\n${correctionNote}` : correctionNote,
       correction_metadata:  {
         oldOwners,
@@ -303,19 +331,6 @@ export default async function handler(req, res) {
     let invoiceUrl = null;
     let invoiceError = null;
     if (createInvoice && totalAdditionalCents > 0) {
-      // Identify which specific properties are new (in new set but not in old set).
-      // For single-property apps (no groups), include hoa_property_id as already-paid
-      // so it is excluded from line items when it reappears as a linked community of the new MC.
-      const oldPropertyIds = new Set([
-        ...(currentGroups || []).map(g => g.property_id),
-        ...(!hasGroups ? [application.hoa_property_id] : []),
-      ]);
-      const allNewProperties = [
-        { id: newPrimary.id, name: newPrimary.name, location: newPrimary.location },
-        ...(newLinked).map(l => ({ id: l.linked_property_id, name: l.property_name, location: l.location })),
-      ];
-      const additionalProperties = allNewProperties.filter(p => !oldPropertyIds.has(p.id));
-
       // Build line items — broken out as base fee + rush fee + CC fee per additional property,
       // plus rush upgrade fee for any already-paid properties if upgrading standard → rush.
       const lineItems = [];
@@ -388,7 +403,10 @@ export default async function handler(req, res) {
         const isTestTransaction = !!application.is_test_transaction
           || (application.stripe_session_id || '').startsWith('cs_test_');
         const stripe = getServerStripe(req, { forceTestMode: isTestTransaction });
-        const session = await stripe.checkout.sessions.create({
+
+        // Stripe Connect transfer: $21 per additional property when base price >= $200.
+        // Rush-only upgrades do not trigger a transfer (no new properties added).
+        const sessionData = {
           mode: 'payment',
           payment_method_types: ['card'],
           line_items: lineItems,
@@ -399,7 +417,23 @@ export default async function handler(req, res) {
             applicationId: String(applicationId),
             correctionType: 'additional_property',
           },
-        });
+        };
+
+        if (additionalProperties.length > 0 && effectiveBasePerProp >= TRANSFER_THRESHOLD_CENTS) {
+          const connectedAccountId = getConnectedAccountId(isTestTransaction);
+          if (connectedAccountId) {
+            const totalTransferCents = TRANSFER_AMOUNT_PER_PROPERTY_CENTS * additionalProperties.length;
+            sessionData.payment_intent_data = {
+              transfer_data: {
+                destination: connectedAccountId,
+                amount: totalTransferCents,
+              },
+            };
+            console.log(`[Stripe Connect] Correction transfer: $${(totalTransferCents / 100).toFixed(2)} ($${(TRANSFER_AMOUNT_PER_PROPERTY_CENTS / 100).toFixed(2)} × ${additionalProperties.length} propert${additionalProperties.length === 1 ? 'y' : 'ies'}) to ${connectedAccountId}`);
+          }
+        }
+
+        const session = await stripe.checkout.sessions.create(sessionData);
         invoiceUrl = session.url;
 
         // Store the correction session ID and lock the application for processing.
@@ -456,17 +490,18 @@ export default async function handler(req, res) {
     <!-- Body -->
     <div class="email-content" style="padding:30px 20px;background-color:#ffffff;">
       <p style="margin:0 0 16px 0;font-size:16px;color:#333333;">Dear ${customerName},</p>
+      <p style="margin:0 0 8px 0;font-size:16px;color:#666666;">
+        Your resale certificate application has been updated. The property association has been corrected from
+        <strong style="color:#111827;">${oldPrimaryName}</strong> to <strong style="color:#111827;">${newPrimary.name}</strong>.
+      </p>
       <p style="margin:0 0 24px 0;font-size:16px;color:#666666;">
-        Your resale certificate application has been updated to include an additional property association.
-        An additional payment is required to complete processing of your full package.
+        An additional payment is required to complete processing of your updated package.
       </p>
 
       <!-- Payment Due Card -->
       <div style="background-color:#fff8ed;border:1px solid #fed7aa;border-radius:8px;padding:24px;margin:0 0 24px 0;text-align:center;">
         <p style="margin:0 0 6px 0;font-size:13px;font-weight:600;color:#92400e;text-transform:uppercase;letter-spacing:0.05em;">Amount Due</p>
         <p style="margin:0 0 16px 0;font-size:40px;font-weight:700;color:#78350f;">$${amountDisplay}</p>
-        ${targetIsRush ? '<p style="margin:0 0 4px 0;font-size:13px;color:#92400e;">Includes rush processing fee</p>' : ''}
-        ${isCreditCard ? '<p style="margin:0 0 4px 0;font-size:13px;color:#92400e;">Includes credit card convenience fee</p>' : ''}
         <div style="margin-top:16px;">
           <a href="${invoiceUrl}" style="display:inline-block;padding:14px 32px;background-color:${brandColor};color:#ffffff;text-decoration:none;border-radius:6px;font-size:16px;font-weight:600;">Pay Now</a>
         </div>
@@ -475,25 +510,69 @@ export default async function handler(req, res) {
         </p>
       </div>
 
-      <!-- Application Details Card -->
-      <div class="email-card" style="background-color:#f9fafb;padding:24px;border-radius:8px;margin:0 0 24px 0;border:1px solid #e5e7eb;">
-        <h2 style="margin:0 0 20px 0;font-size:20px;font-weight:600;color:${brandColor};">Application Details</h2>
+      <!-- Property Change Card -->
+      <div style="background-color:#f9fafb;padding:24px;border-radius:8px;margin:0 0 24px 0;border:1px solid #e5e7eb;">
+        <h2 style="margin:0 0 20px 0;font-size:18px;font-weight:600;color:${brandColor};">Property Change</h2>
         <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;border-collapse:collapse;">
           <tr>
-            <td style="padding:12px 0;border-bottom:1px solid #e5e7eb;font-size:14px;"><strong style="color:#374151;">Application ID:</strong></td>
+            <td style="padding:12px 0;border-bottom:1px solid #e5e7eb;font-size:14px;vertical-align:top;width:45%;"><strong style="color:#374151;">Application ID:</strong></td>
             <td style="padding:12px 0;border-bottom:1px solid #e5e7eb;font-size:14px;color:#111827;text-align:right;font-weight:500;">#${applicationId}</td>
           </tr>
           <tr>
-            <td style="padding:12px 0;border-bottom:1px solid #e5e7eb;font-size:14px;"><strong style="color:#374151;">Property Address:</strong></td>
+            <td style="padding:12px 0;border-bottom:1px solid #e5e7eb;font-size:14px;vertical-align:top;"><strong style="color:#374151;">Property Address:</strong></td>
             <td style="padding:12px 0;border-bottom:1px solid #e5e7eb;font-size:14px;color:#111827;text-align:right;font-weight:500;">${application.property_address || 'N/A'}</td>
           </tr>
           <tr>
-            <td style="padding:12px 0;border-bottom:1px solid #e5e7eb;font-size:14px;"><strong style="color:#374151;">HOA Community:</strong></td>
-            <td style="padding:12px 0;border-bottom:1px solid #e5e7eb;font-size:14px;color:#111827;text-align:right;font-weight:500;">${newPrimary.name}</td>
+            <td style="padding:12px 0;border-bottom:1px solid #e5e7eb;font-size:14px;vertical-align:top;"><strong style="color:#374151;">Previous HOA:</strong></td>
+            <td style="padding:12px 0;border-bottom:1px solid #e5e7eb;font-size:14px;color:#6b7280;text-align:right;">${oldPrimaryName}</td>
+          </tr>
+          <tr>
+            <td style="padding:12px 0;border-bottom:1px solid #e5e7eb;font-size:14px;vertical-align:top;"><strong style="color:#374151;">New HOA Package:</strong></td>
+            <td style="padding:12px 0;border-bottom:1px solid #e5e7eb;font-size:14px;color:#111827;text-align:right;font-weight:500;">
+              ${allNewProperties.map(p => `<div style="margin-bottom:2px;">${p.name}</div>`).join('')}
+            </td>
           </tr>
           <tr>
             <td style="padding:12px 0;font-size:14px;"><strong style="color:#374151;">Processing Type:</strong></td>
             <td style="padding:12px 0;font-size:14px;color:#111827;text-align:right;font-weight:500;">${processingType}</td>
+          </tr>
+        </table>
+      </div>
+
+      <!-- Fee Breakdown Card -->
+      <div style="background-color:#f9fafb;padding:24px;border-radius:8px;margin:0 0 24px 0;border:1px solid #e5e7eb;">
+        <h2 style="margin:0 0 20px 0;font-size:18px;font-weight:600;color:${brandColor};">Fee Breakdown</h2>
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;border-collapse:collapse;">
+          <tr style="background-color:#f3f4f6;">
+            <td style="padding:8px 10px;font-size:12px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:0.05em;">Property</td>
+            <td style="padding:8px 10px;font-size:12px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:0.05em;text-align:right;">Base</td>
+            ${targetIsRush ? '<td style="padding:8px 10px;font-size:12px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:0.05em;text-align:right;">Rush</td>' : ''}
+            ${isCreditCard ? '<td style="padding:8px 10px;font-size:12px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:0.05em;text-align:right;">CC Fee</td>' : ''}
+            <td style="padding:8px 10px;font-size:12px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:0.05em;text-align:right;">Subtotal</td>
+          </tr>
+          ${additionalProperties.map(p => {
+            const propSubtotal = ((effectiveBasePerProp + (targetIsRush ? configRushFee : 0) + convFeePerProp) / 100).toFixed(2);
+            return `<tr style="border-top:1px solid #e5e7eb;">
+              <td style="padding:12px 10px;font-size:14px;color:#111827;">${p.name}<br><span style="font-size:12px;color:#6b7280;">New property</span></td>
+              <td style="padding:12px 10px;font-size:14px;color:#374151;text-align:right;">$${(effectiveBasePerProp / 100).toFixed(2)}</td>
+              ${targetIsRush ? `<td style="padding:12px 10px;font-size:14px;color:#374151;text-align:right;">$${(configRushFee / 100).toFixed(2)}</td>` : ''}
+              ${isCreditCard ? `<td style="padding:12px 10px;font-size:14px;color:#374151;text-align:right;">$${(convFeePerProp / 100).toFixed(2)}</td>` : ''}
+              <td style="padding:12px 10px;font-size:14px;font-weight:600;color:#111827;text-align:right;">$${propSubtotal}</td>
+            </tr>`;
+          }).join('')}
+          ${isUpgradingToRush ? currentProperties.map(p => {
+            const rushSubtotal = ((configRushFee + convFeePerProp) / 100).toFixed(2);
+            return `<tr style="border-top:1px solid #e5e7eb;">
+              <td style="padding:12px 10px;font-size:14px;color:#111827;">${p.name}<br><span style="font-size:12px;color:#6b7280;">Rush upgrade</span></td>
+              <td style="padding:12px 10px;font-size:14px;color:#6b7280;text-align:right;">—</td>
+              ${targetIsRush ? `<td style="padding:12px 10px;font-size:14px;color:#374151;text-align:right;">$${(configRushFee / 100).toFixed(2)}</td>` : ''}
+              ${isCreditCard ? `<td style="padding:12px 10px;font-size:14px;color:#374151;text-align:right;">$${(convFeePerProp / 100).toFixed(2)}</td>` : ''}
+              <td style="padding:12px 10px;font-size:14px;font-weight:600;color:#111827;text-align:right;">$${rushSubtotal}</td>
+            </tr>`;
+          }).join('') : ''}
+          <tr style="border-top:2px solid #d1d5db;background-color:#f3f4f6;">
+            <td colspan="${1 + (targetIsRush ? 1 : 0) + (isCreditCard ? 1 : 0)}" style="padding:14px 10px;font-size:15px;font-weight:700;color:#111827;">Total Due</td>
+            <td style="padding:14px 10px;font-size:15px;font-weight:700;color:${brandColor};text-align:right;">$${amountDisplay}</td>
           </tr>
         </table>
       </div>

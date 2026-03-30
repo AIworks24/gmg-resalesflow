@@ -43,6 +43,7 @@ import {
   Send,
   CreditCard,
   PenLine,
+  Lock,
 } from 'lucide-react';
 import { useRouter } from 'next/router';
 import { mapFormDataToPDFFields } from '../../lib/pdfFieldMapper';
@@ -1327,6 +1328,13 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
   // Auto-scroll to specific property when opening modal from multi-community tree View
   useEffect(() => {
     if (!selectedApplication || !scrollToPropertyGroupId || !propertyGroups.length) return;
+
+    // Do not auto-scroll if the application is locked, so the user sees the warning first
+    if (selectedApplication.processing_locked) {
+      setScrollToPropertyGroupId(null);
+      return;
+    }
+
     const el = document.getElementById(`property-group-${scrollToPropertyGroupId}`);
     if (el) {
       const timer = setTimeout(() => {
@@ -1335,7 +1343,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
       }, 200);
       return () => clearTimeout(timer);
     }
-  }, [selectedApplication?.id, scrollToPropertyGroupId, propertyGroups.length]);
+  }, [selectedApplication?.id, scrollToPropertyGroupId, propertyGroups.length, selectedApplication?.processing_locked]);
 
   // Client-side filtering and pagination using useMemo
   const { applications, totalCount } = useMemo(() => {
@@ -2128,15 +2136,9 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                 )}
              </div>
           </div>
-          <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2 w-full lg:w-auto lg:flex-shrink-0">
-             {selectedApplication?.processing_locked ? (
-               <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-700 text-xs font-medium whitespace-nowrap">
-                 <svg className="w-3.5 h-3.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>
-                 Awaiting payment
-               </span>
-             ) : null}
-             {children}
-          </div>
+         <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2 w-full lg:w-auto lg:flex-shrink-0">
+            {children}
+         </div>
        </div>
     </div>
   );
@@ -4188,10 +4190,18 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                     else if (appType === 'lender_questionnaire') { typeLabel = 'Lender Questionnaire'; typeColor = 'bg-indigo-100 text-indigo-800'; }
                     else { typeLabel = 'Single Property'; typeColor = 'bg-gray-100 text-gray-800'; }
                     return (
-                      <div className='flex items-center justify-center gap-2'>
-                        <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${typeColor}`}>{typeLabel}</span>
-                        {isRush && <span className='inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-orange-100 text-orange-800'>RUSH</span>}
-                        {appType === 'settlement_va' && !isRush && <span className='text-xs text-gray-500'>FREE</span>}
+                      <div className='flex flex-col items-center gap-1.5'>
+                        <div className='flex items-center justify-center gap-2'>
+                          <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${typeColor}`}>{typeLabel}</span>
+                          {isRush && <span className='inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-orange-100 text-orange-800'>RUSH</span>}
+                          {appType === 'settlement_va' && !isRush && <span className='text-xs text-gray-500'>FREE</span>}
+                        </div>
+                        {app.processing_locked && app.processing_locked_reason === 'pending_property_correction_payment' && (
+                          <span className='inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-amber-100 text-amber-800 border border-amber-300'>
+                            <Lock className='w-3 h-3' />
+                            Awaiting Payment
+                          </span>
+                        )}
                       </div>
                     );
                   };
@@ -4505,9 +4515,15 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                   </div>
 
                   {/* Type Badge */}
-                  <div className='flex items-center gap-2'>
+                  <div className='flex flex-wrap items-center gap-2'>
                     <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${typeColor}`}>{typeLabel}</span>
                     {isRush && <span className='inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-orange-100 text-orange-800'>RUSH</span>}
+                    {app.processing_locked && app.processing_locked_reason === 'pending_property_correction_payment' && (
+                      <span className='inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-amber-100 text-amber-800 border border-amber-300'>
+                        <Lock className='w-3 h-3' />
+                        Awaiting Payment
+                      </span>
+                    )}
                   </div>
 
                   {/* Details Grid */}
@@ -5784,6 +5800,12 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                                       )}
                                     </div>
                                     {/* Status Badge Logic */}
+                                    {selectedApplication?.processing_locked ? (
+                                      <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-700 text-xs font-medium whitespace-nowrap">
+                                        <svg className="w-3.5 h-3.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>
+                                        Awaiting payment
+                                      </span>
+                                    ) : null}
                                     {(() => {
                                       const isSettlementApp = selectedApplication.submitter_type === 'settlement' || selectedApplication.application_type?.startsWith('settlement');
                                       let isCompleted = false;
@@ -6109,10 +6131,18 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                   return !isMultiCommunity && !isLenderQuestionnaire && !isInfoPacket;
                 })() && (
                   <div>
-                    <h3 className='text-lg font-bold text-gray-900 mb-4 flex items-center gap-2'>
-                       <CheckSquare className='w-5 h-5 text-gray-500' />
-                       Tasks Checklist
-                    </h3>
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
+                      <h3 className='text-lg font-bold text-gray-900 flex items-center gap-2'>
+                         <CheckSquare className='w-5 h-5 text-gray-500' />
+                         Tasks Checklist
+                      </h3>
+                      {selectedApplication?.processing_locked && (
+                        <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-700 text-xs font-medium whitespace-nowrap">
+                          <svg className="w-3.5 h-3.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>
+                          Awaiting payment
+                        </span>
+                      )}
+                    </div>
                     <div className='space-y-4'>
                     {(() => {
                       const taskStatuses = getTaskStatuses(selectedApplication);
@@ -6575,54 +6605,63 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                               )}
                               {dryRunResult.totalAdditionalCents > 0 && (
                                 <>
-                                  {/* Additional properties breakdown */}
-                                  {dryRunResult.delta > 0 && (() => {
-                                    const qty = dryRunResult.delta;
+                                  {/* Additional properties — per-property breakdown */}
+                                  {dryRunResult.delta > 0 && (dryRunResult.additionalProperties || []).map((prop, i) => {
+                                    const base = dryRunResult.effectiveBasePerProp;
+                                    const rush = dryRunResult.targetIsRush ? dryRunResult.configRushFee : 0;
+                                    const conv = dryRunResult.isCreditCard ? dryRunResult.convFeePerProp : 0;
+                                    const subtotal = base + rush + conv;
                                     return (
-                                      <>
-                                        <div className='flex justify-between text-amber-800'>
-                                          <span className='font-medium'>{qty} additional propert{qty === 1 ? 'y' : 'ies'}</span>
+                                      <div key={i} className='border-b border-amber-200 pb-2 mb-2 last:border-0 last:pb-0 last:mb-0'>
+                                        <div className='font-medium text-amber-800 mb-1 text-xs'>{prop.name}</div>
+                                        <div className='flex justify-between text-amber-700 text-xs ml-4'>
+                                          <span>Base fee:</span>
+                                          <span>${(base / 100).toFixed(2)}</span>
                                         </div>
-                                        <div className='flex justify-between text-amber-700 text-xs pl-2'>
-                                          <span>Base fee × {qty}</span>
-                                          <span>${(dryRunResult.effectiveBasePerProp * qty / 100).toFixed(2)}</span>
-                                        </div>
-                                        {dryRunResult.targetIsRush && dryRunResult.configRushFee > 0 && (
-                                          <div className='flex justify-between text-amber-700 text-xs pl-2'>
-                                            <span>Rush fee × {qty}</span>
-                                            <span>${(dryRunResult.configRushFee * qty / 100).toFixed(2)}</span>
+                                        {rush > 0 && (
+                                          <div className='flex justify-between text-amber-700 text-xs ml-4'>
+                                            <span>Rush Processing:</span>
+                                            <span>+${(rush / 100).toFixed(2)}</span>
                                           </div>
                                         )}
-                                        {dryRunResult.isCreditCard && (
-                                          <div className='flex justify-between text-amber-700 text-xs pl-2'>
-                                            <span>CC convenience fee × {qty}</span>
-                                            <span>${(dryRunResult.convFeePerProp * qty / 100).toFixed(2)}</span>
+                                        {conv > 0 && (
+                                          <div className='flex justify-between text-amber-700 text-xs ml-4'>
+                                            <span>Non-refundable convenience fee:</span>
+                                            <span>+${(conv / 100).toFixed(2)}</span>
                                           </div>
                                         )}
-                                      </>
+                                        <div className='flex justify-between text-amber-800 text-xs ml-4 font-medium'>
+                                          <span>Subtotal:</span>
+                                          <span>${(subtotal / 100).toFixed(2)}</span>
+                                        </div>
+                                      </div>
                                     );
-                                  })()}
-                                  {/* Rush upgrade on existing properties */}
-                                  {dryRunResult.isUpgradingToRush && (() => {
-                                    const qty = dryRunResult.currentCount;
+                                  })}
+                                  {/* Rush upgrade on existing properties — per-property breakdown */}
+                                  {dryRunResult.isUpgradingToRush && (dryRunResult.currentProperties || []).map((prop, i) => {
+                                    const rush = dryRunResult.configRushFee;
+                                    const conv = dryRunResult.isCreditCard ? dryRunResult.convFeePerProp : 0;
+                                    const subtotal = rush + conv;
                                     return (
-                                      <>
-                                        <div className='flex justify-between text-amber-800 mt-1'>
-                                          <span className='font-medium'>Rush upgrade — existing propert{qty === 1 ? 'y' : 'ies'}</span>
+                                      <div key={`ru-${i}`} className='border-b border-amber-200 pb-2 mb-2 last:border-0 last:pb-0 last:mb-0'>
+                                        <div className='font-medium text-amber-800 mb-1 text-xs'>{prop.name}</div>
+                                        <div className='flex justify-between text-amber-700 text-xs ml-4'>
+                                          <span>Rush Processing:</span>
+                                          <span>+${(rush / 100).toFixed(2)}</span>
                                         </div>
-                                        <div className='flex justify-between text-amber-700 text-xs pl-2'>
-                                          <span>Rush fee × {qty}</span>
-                                          <span>${(dryRunResult.configRushFee * qty / 100).toFixed(2)}</span>
-                                        </div>
-                                        {dryRunResult.isCreditCard && (
-                                          <div className='flex justify-between text-amber-700 text-xs pl-2'>
-                                            <span>CC convenience fee × {qty}</span>
-                                            <span>${(dryRunResult.convFeePerProp * qty / 100).toFixed(2)}</span>
+                                        {conv > 0 && (
+                                          <div className='flex justify-between text-amber-700 text-xs ml-4'>
+                                            <span>Non-refundable convenience fee:</span>
+                                            <span>+${(conv / 100).toFixed(2)}</span>
                                           </div>
                                         )}
-                                      </>
+                                        <div className='flex justify-between text-amber-800 text-xs ml-4 font-medium'>
+                                          <span>Subtotal:</span>
+                                          <span>${(subtotal / 100).toFixed(2)}</span>
+                                        </div>
+                                      </div>
                                     );
-                                  })()}
+                                  })}
                                   {/* Total */}
                                   <div className='flex justify-between font-bold text-amber-900 border-t border-amber-200 pt-2 mt-1'>
                                     <span>Total owed by customer</span>
