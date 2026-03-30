@@ -141,8 +141,8 @@ export default async function handler(req, res) {
           price_data: {
             currency: 'usd',
             product_data: {
-              name: 'Credit Card Convenience Fee',
-              description: 'Non-refundable convenience fee',
+              name: 'Credit Card Processing Fee',
+              description: 'Processing fee for credit card payments',
             },
             unit_amount: CONVENIENCE_FEE_CENTS,
           },

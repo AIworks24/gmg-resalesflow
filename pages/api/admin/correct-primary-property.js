@@ -346,7 +346,7 @@ export default async function handler(req, res) {
             currency: 'usd',
             product_data: {
               name: `${documentLabel} — ${prop.name}`,
-              description: `Base processing fee${propLocation}`,
+              description: `${targetIsRush ? 'Rush' : 'Standard'} ${documentLabel} for ${application.property_address || prop.name} (${targetIsRush ? '5 business days' : '15 calendar days'})`,
             },
             unit_amount: effectiveBasePerProp,
           },
@@ -374,8 +374,8 @@ export default async function handler(req, res) {
             price_data: {
               currency: 'usd',
               product_data: {
-                name: 'Credit Card Convenience Fee',
-                description: `Non-refundable fee for ${prop.name}`,
+                name: 'Credit Card Processing Fee',
+                description: 'Processing fee for credit card payments',
               },
               unit_amount: CONVENIENCE_FEE_CENTS,
             },

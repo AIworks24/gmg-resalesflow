@@ -140,7 +140,7 @@ export default async function handler(req, res) {
         lineItems.push({
           price_data: {
             currency: 'usd',
-            product_data: { name: 'Credit Card Processing Fee' },
+            product_data: { name: 'Credit Card Processing Fee', description: 'Non-refundable processing fee for credit card payments' },
             unit_amount: creditCardFeeCents,
           },
           quantity: 1,
@@ -257,7 +257,7 @@ export default async function handler(req, res) {
           lineItems.push({
             price_data: {
               currency: 'usd',
-              product_data: { name: 'Credit Card Processing Fee' },
+              product_data: { name: 'Credit Card Processing Fee', description: 'Non-refundable processing fee for credit card payments' },
               unit_amount: creditCardFeeCents,
             },
             quantity: 1,
@@ -271,7 +271,7 @@ export default async function handler(req, res) {
         line_items: lineItems,
         mode: 'payment',
         allow_promotion_codes: true,
-        success_url: `${req.headers.origin}/?payment_success=true&session_id={CHECKOUT_SESSION_ID}&app_id=${applicationId}`,
+        success_url: `${req.headers.origin}/payment/success?session_id={CHECKOUT_SESSION_ID}`,
         cancel_url: `${req.headers.origin}/?payment_cancelled=true&app_id=${applicationId}`,
         metadata: {
           applicationId: applicationId,
@@ -284,16 +284,24 @@ export default async function handler(req, res) {
         billing_address_collection: 'required',
       };
 
+      // Set payment_intent_data metadata so the webhook can identify the application
+      // directly from paymentIntent.metadata without needing a session fallback lookup.
+      infoPacketSessionData.payment_intent_data = {
+        metadata: {
+          applicationId: applicationId,
+          specialRequest: 'info_packet',
+          isMultiCommunity: allProperties.length > 1 ? 'true' : 'false',
+        },
+      };
+
       // Stripe Connect transfer (same threshold as POS)
       if (totalCents >= TRANSFER_THRESHOLD_CENTS) {
         const connectedAccountId = getConnectedAccountId(finalTestMode);
         if (connectedAccountId) {
           const totalTransferCents = TRANSFER_AMOUNT_PER_ITEM_CENTS * propertyItemCount;
-          infoPacketSessionData.payment_intent_data = {
-            transfer_data: {
-              destination: connectedAccountId,
-              amount: totalTransferCents,
-            },
+          infoPacketSessionData.payment_intent_data.transfer_data = {
+            destination: connectedAccountId,
+            amount: totalTransferCents,
           };
         }
       }
@@ -464,15 +472,7 @@ export default async function handler(req, res) {
         
         if (totalPerAssociationCents > 0) {
           // Build description with breakdown
-          let description = `${messaging.formType} for ${association.name}`;
-          if (packageType === 'rush') {
-            description += ` (5 business days)`;
-            if (association.rushFee > 0) {
-              description += ` - Base: $${association.basePrice.toFixed(2)}, Rush: +$${association.rushFee.toFixed(2)}`;
-            }
-          } else {
-            description += ` (15 calendar days)`;
-          }
+          const description = `${packageType === 'rush' ? 'Rush' : 'Standard'} ${messaging.formType} for ${formData.propertyAddress || association.name} (${packageType === 'rush' ? '5 business days' : '15 calendar days'})`;
           
           lineItems.push({
             price_data: {
@@ -493,7 +493,7 @@ export default async function handler(req, res) {
                 currency: 'usd',
                 product_data: {
                   name: 'Credit Card Processing Fee',
-                  description: `Processing fee for ${association.name}`,
+                  description: 'Non-refundable processing fee for credit card payments',
                 },
                 unit_amount: creditCardFeeCents,
               },
@@ -622,7 +622,7 @@ export default async function handler(req, res) {
               currency: 'usd',
               product_data: {
                 name: productName,
-                description: `${messaging.formType} for ${formData.propertyAddress || 'your property'} (${deliveryTime})`,
+                description: `${packageType === 'rush' ? 'Rush' : 'Standard'} ${messaging.formType} for ${formData.propertyAddress || 'your property'} (${deliveryTime})`,
               },
               unit_amount: basePriceCents, // This already includes rush fee if rush is selected
             },
@@ -638,7 +638,7 @@ export default async function handler(req, res) {
             currency: 'usd',
             product_data: {
               name: 'Credit Card Processing Fee',
-              description: 'Processing fee for credit card payments',
+              description: 'Non-refundable processing fee for credit card payments',
             },
             unit_amount: creditCardFeeCents,
           },

@@ -1094,6 +1094,13 @@ const PackagePaymentStep = ({
       handleInputChange('paymentMethod', 'credit_card');
     }
   }, [ACH_OPTION_ENABLED, formData.paymentMethod, handleInputChange]);
+
+  // Info Packet has no rush/standard choice — always standard
+  React.useEffect(() => {
+    if (applicationType === 'info_packet' && formData.packageType !== 'standard') {
+      handleInputChange('packageType', 'standard');
+    }
+  }, [applicationType, formData.packageType, handleInputChange]);
   
   React.useEffect(() => {
     const checkApplicationStatus = async () => {
@@ -1736,10 +1743,12 @@ const PackagePaymentStep = ({
       
       <div className='text-center mb-8'>
         <h3 className='text-2xl font-bold text-green-900 mb-2'>
-          Package Selection & Payment
+          {applicationType === 'info_packet' ? 'Checkout' : 'Package Selection & Payment'}
         </h3>
         <p className='text-gray-600'>
-          Choose your processing speed and payment method
+          {applicationType === 'info_packet'
+            ? 'Select your payment method to complete your Info Packet order'
+            : 'Choose your processing speed and payment method'}
         </p>
       </div>
 
@@ -1855,6 +1864,7 @@ const PackagePaymentStep = ({
         </div>
       )}
 
+      {applicationType !== 'info_packet' && (
       <div className='grid grid-cols-1 md:grid-cols-2 gap-6'>
         <div
           onClick={() => handleInputChange('packageType', 'standard')}
@@ -2185,6 +2195,7 @@ const PackagePaymentStep = ({
           </ul>
         </div>
       </div>
+      )}
 
       <div className='bg-white p-6 rounded-lg border border-gray-200'>
         <h4 className='font-semibold text-gray-900 mb-4'>Payment Method</h4>
@@ -4944,7 +4955,9 @@ export default function GMGResaleFlow() {
         submitter_phone: formData.submitterPhone,
         realtor_license: formData.realtorLicense,
         buyer_name: formData.buyerName,
-        buyer_email: formData.buyerEmail,
+        buyer_email: Array.isArray(formData.buyerEmails) && formData.buyerEmails.length > 0
+          ? formData.buyerEmails.join(',')
+          : (formData.buyerEmail || ''),
         buyer_phone: formData.buyerPhone,
         seller_name: formData.sellerName,
         seller_email: formData.sellerEmail,
@@ -6942,6 +6955,14 @@ export default function GMGResaleFlow() {
         { number: 4, title: 'Package & Payment', icon: CreditCard },
         { number: 5, title: 'Upload Lender Form', icon: Upload },
         { number: 6, title: 'Review & Submit', icon: CheckCircle },
+      ];
+    }
+    if (applicationType === 'info_packet') {
+      return [
+        { number: 1, title: 'HOA Selection', icon: Building2 },
+        { number: 2, title: 'Submitter Info', icon: User },
+        { number: 3, title: 'Buyer Details', icon: Users },
+        { number: 4, title: 'Package & Payment', icon: CreditCard },
       ];
     }
     return [

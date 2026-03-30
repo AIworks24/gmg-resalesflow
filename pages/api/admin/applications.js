@@ -95,7 +95,8 @@ export default async function handler(req, res) {
       `, { count: 'exact' })
       .is('deleted_at', null) // Only get non-deleted applications
       .neq('status', 'draft')
-      .neq('status', 'pending_payment');
+      .neq('status', 'pending_payment')
+      .neq('application_type', 'info_packet'); // Info Packets are auto-completed — no staff processing needed
 
     // All admin, staff, and accounting users can see all applications
     // (No role-based filtering - accounting users now have full visibility)

@@ -9,6 +9,7 @@
 
 import { createClient } from '@supabase/supabase-js';
 import { sendApprovalEmail } from '../../lib/emailService';
+import { getAllPropertiesForTransaction } from '../../lib/multiCommunityUtils';
 
 function parseBuyerEmails(buyerEmail) {
   if (!buyerEmail) return [];
@@ -116,8 +117,8 @@ export default async function handler(req, res) {
     .from('applications')
     .select(`
       id, submitter_email, submitter_name, property_address, hoa_property_id, buyer_email,
-      application_type, application_property_groups(*),
-      hoa_properties(id, name)
+      application_type,
+      hoa_properties(id, name, is_multi_community)
     `)
     .eq('id', applicationId)
     .single();
@@ -129,40 +130,41 @@ export default async function handler(req, res) {
 
   const EXPIRY_30_DAYS = 30 * 24 * 60 * 60;
   const buyerEmails = parseBuyerEmails(application.buyer_email);
-  const propertyGroups = application.application_property_groups || [];
-  const isMultiCommunity = propertyGroups.length > 1;
+
+  // Primary recipient is the buyer; requester gets CC'd.
+  // If no buyer email, fall back to sending directly to the requester.
+  const primaryTo = buyerEmails.length > 0 ? buyerEmails[0] : application.submitter_email;
+  const ccList = buyerEmails.length > 0
+    ? [...buyerEmails.slice(1), application.submitter_email]
+    : [];
+
+  // Determine if this is a multi-community info packet by checking the property directly.
+  // Property groups are never created for info packets (unlike standard resale applications),
+  // so we cannot rely on application_property_groups to detect multi-community.
+  const isPrimaryMultiCommunity = application.hoa_properties?.is_multi_community === true;
 
   try {
-    if (isMultiCommunity) {
-      // Send one email per associated community
-      for (const group of propertyGroups) {
-        const propertyId = group.property_id || application.hoa_property_id;
-        const hoaName = group.property_name || application.hoa_properties?.name;
-        const downloadLinks = await buildInfoPacketLinks(supabase, propertyId, EXPIRY_30_DAYS);
+    if (isPrimaryMultiCommunity) {
+      // Multi-community info packet: fetch all linked properties and send one email per community.
+      const allProperties = await getAllPropertiesForTransaction(application.hoa_property_id, supabase);
+
+      for (const prop of allProperties) {
+        const hoaName = prop.name;
+        const downloadLinks = await buildInfoPacketLinks(supabase, prop.id, EXPIRY_30_DAYS);
 
         await sendApprovalEmail({
-          to: application.submitter_email,
+          to: primaryTo,
           submitterName: application.submitter_name,
           propertyAddress: application.property_address,
           hoaName,
           pdfUrl: null,
           applicationId,
           downloadLinks,
-          cc: buyerEmails,
+          cc: ccList,
           customSubject: `Your Info Packet for ${hoaName} is Ready`,
           customTitle: `Your Info Packet for ${hoaName} is Ready!`,
           customMessage: `Your Info Packet (Welcome Package) documents for <strong>${application.property_address}</strong> — <strong>${hoaName}</strong> are now available for download.`,
         });
-
-        // Mark group as emailed
-        await supabase
-          .from('application_property_groups')
-          .update({
-            email_status: 'completed',
-            email_completed_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', group.id);
       }
     } else {
       const propertyId = application.hoa_property_id;
@@ -170,14 +172,14 @@ export default async function handler(req, res) {
       const downloadLinks = await buildInfoPacketLinks(supabase, propertyId, EXPIRY_30_DAYS);
 
       await sendApprovalEmail({
-        to: application.submitter_email,
+        to: primaryTo,
         submitterName: application.submitter_name,
         propertyAddress: application.property_address,
         hoaName,
         pdfUrl: null,
         applicationId,
         downloadLinks,
-        cc: buyerEmails,
+        cc: ccList,
         customSubject: `Your Info Packet for ${application.property_address} is Ready`,
         customTitle: 'Your Info Packet is Ready!',
         customMessage: `Your Info Packet (Welcome Package) documents for <strong>${application.property_address}</strong> in <strong>${hoaName}</strong> are now available for download.`,
