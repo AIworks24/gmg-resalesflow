@@ -63,9 +63,31 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Application is already on rush processing' });
     }
 
-    // Guard: prevent double-invoicing
+    // Guard: prevent double-invoicing — but allow resend if the existing session has expired
     if (createInvoice && application.correction_stripe_session_id) {
-      return res.status(409).json({ error: 'A correction payment is already pending for this application' });
+      try {
+        const isTestExisting = !!application.is_test_transaction
+          || (application.stripe_session_id || '').startsWith('cs_test_');
+        const stripeCheck = getServerStripe(req, { forceTestMode: isTestExisting });
+        const existingSession = await stripeCheck.checkout.sessions.retrieve(application.correction_stripe_session_id);
+        if (existingSession.status !== 'expired') {
+          return res.status(409).json({ error: 'A correction payment is already pending for this application' });
+        }
+        // Existing session is expired — clear it so a new one can be created below
+        await createPagesServerClient({ req, res })
+          .from('applications')
+          .update({
+            correction_stripe_session_id: null,
+            processing_locked:            false,
+            processing_locked_at:         null,
+            processing_locked_reason:     null,
+          })
+          .eq('id', applicationId);
+        application.correction_stripe_session_id = null;
+      } catch (checkErr) {
+        console.error('upgrade-to-rush: could not verify existing session status:', checkErr);
+        return res.status(409).json({ error: 'A correction payment is already pending for this application' });
+      }
     }
 
     // Fetch property groups to get count
@@ -162,6 +184,7 @@ export default async function handler(req, res) {
         mode:                 'payment',
         payment_method_types: ['card'],
         line_items:           lineItems,
+        expires_after:        172800, // 48 hours in seconds
         success_url:          `${process.env.NEXT_PUBLIC_SITE_URL}/payment/correction-success?session_id={CHECKOUT_SESSION_ID}`,
         cancel_url:           `${process.env.NEXT_PUBLIC_SITE_URL}/payment/cancel`,
         customer_email:       application.submitter_email,

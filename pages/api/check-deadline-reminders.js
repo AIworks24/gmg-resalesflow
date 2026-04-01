@@ -103,7 +103,7 @@ export default async function handler(req, res) {
           email_completed_at
         )
       `)
-      .neq('status', 'rejected')
+      .eq('status', 'under_review')
       .not('assigned_to', 'is', null);
 
     if (error) throw error;
