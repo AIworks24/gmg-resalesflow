@@ -168,6 +168,9 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
   const [submittingRushUpgrade, setSubmittingRushUpgrade] = useState(false);
   const [selectedCorrectionPackage, setSelectedCorrectionPackage] = useState(null); // 'standard' | 'rush'
 
+  // Live countdown for the 48-hr correction-payment window shown in the lock banner
+  const [lockCountdown, setLockCountdown] = useState('');
+
   const toggleMultiCommunityExpand = (appId) => {
     setCollapsedMultiCommunityApps((prev) => {
       const next = new Set(prev);
@@ -176,6 +179,33 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
       return next;
     });
   };
+
+  // Live 48-hr countdown for correction-payment lock banner
+  useEffect(() => {
+    if (!selectedApplication?.processing_locked || !selectedApplication?.processing_locked_at) {
+      setLockCountdown('');
+      return;
+    }
+    const expiresAt =
+      new Date(selectedApplication.processing_locked_at).getTime() + 48 * 60 * 60 * 1000;
+
+    const tick = () => {
+      const remaining = expiresAt - Date.now();
+      if (remaining <= 0) {
+        setLockCountdown('Expired');
+        return;
+      }
+      const h = Math.floor(remaining / 3600000);
+      const m = Math.floor((remaining % 3600000) / 60000);
+      const s = Math.floor((remaining % 60000) / 1000);
+      setLockCountdown(
+        `${h}h ${String(m).padStart(2, '0')}m ${String(s).padStart(2, '0')}s`
+      );
+    };
+    tick();
+    const interval = setInterval(tick, 1000);
+    return () => clearInterval(interval);
+  }, [selectedApplication?.processing_locked, selectedApplication?.processing_locked_at]);
 
   // Sync selectedStatus with URL query parameter when it changes (for dashboard navigation)
   useEffect(() => {
@@ -4196,10 +4226,10 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                           {isRush && <span className='inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-orange-100 text-orange-800'>RUSH</span>}
                           {appType === 'settlement_va' && !isRush && <span className='text-xs text-gray-500'>FREE</span>}
                         </div>
-                        {app.processing_locked && app.processing_locked_reason === 'pending_property_correction_payment' && (
+                        {app.processing_locked && (
                           <span className='inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-amber-100 text-amber-800 border border-amber-300'>
                             <Lock className='w-3 h-3' />
-                            Awaiting Payment
+                            {app.processing_locked_reason === 'pending_rush_upgrade_payment' ? 'Rush Upgrade Pending' : 'Awaiting Payment'}
                           </span>
                         )}
                       </div>
@@ -4518,10 +4548,10 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                   <div className='flex flex-wrap items-center gap-2'>
                     <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${typeColor}`}>{typeLabel}</span>
                     {isRush && <span className='inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-orange-100 text-orange-800'>RUSH</span>}
-                    {app.processing_locked && app.processing_locked_reason === 'pending_property_correction_payment' && (
+                    {app.processing_locked && (
                       <span className='inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-amber-100 text-amber-800 border border-amber-300'>
                         <Lock className='w-3 h-3' />
-                        Awaiting Payment
+                        {app.processing_locked_reason === 'pending_rush_upgrade_payment' ? 'Rush Upgrade Pending' : 'Awaiting Payment'}
                       </span>
                     )}
                   </div>
@@ -4815,7 +4845,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
               <div className='flex-1 overflow-y-auto custom-scrollbar p-6 space-y-8 bg-gray-50/30'>
                 {/* Processing Locked Banner */}
                 {selectedApplication.processing_locked && (
-                  <div className='bg-amber-500 rounded-2xl p-5 text-white shadow-lg shadow-amber-200 flex flex-col md:flex-row md:items-center justify-between gap-4 border border-amber-600 animate-in fade-in zoom-in-95 duration-300'>
+                  <div className={`rounded-2xl p-5 text-white shadow-lg flex flex-col md:flex-row md:items-center justify-between gap-4 border animate-in fade-in zoom-in-95 duration-300 ${lockCountdown === 'Expired' ? 'bg-red-600 shadow-red-200 border-red-700' : 'bg-amber-500 shadow-amber-200 border-amber-600'}`}>
                     <div className='flex items-center gap-4'>
                       <div className='h-12 w-12 rounded-full bg-white/20 flex items-center justify-center backdrop-blur-sm border border-white/30 flex-shrink-0'>
                         <AlertTriangle className='w-7 h-7 text-white' />
@@ -4835,6 +4865,19 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                         )}
                       </div>
                     </div>
+                    {lockCountdown && (
+                      <div className={`flex flex-col items-center justify-center rounded-xl px-5 py-3 min-w-[130px] border ${lockCountdown === 'Expired' ? 'bg-red-700/60 border-red-400/50' : 'bg-white/15 border-white/25'}`}>
+                        <span className='text-[10px] font-semibold uppercase tracking-widest text-white/70 mb-1'>
+                          {lockCountdown === 'Expired' ? 'Window Closed' : 'Payment Window'}
+                        </span>
+                        <span className={`text-lg font-mono font-bold leading-none ${lockCountdown === 'Expired' ? 'text-red-200' : 'text-white'}`}>
+                          {lockCountdown}
+                        </span>
+                        {lockCountdown !== 'Expired' && (
+                          <span className='text-[10px] text-white/60 mt-1'>remaining</span>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
 

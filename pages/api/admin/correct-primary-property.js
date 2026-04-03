@@ -9,12 +9,6 @@ const CONVENIENCE_FEE_CENTS = 995;   // $9.95 per property
 const TRANSFER_THRESHOLD_CENTS = 20000; // $200.00 — minimum base price to trigger transfer
 const TRANSFER_AMOUNT_PER_PROPERTY_CENTS = 2100; // $21.00 per additional property
 
-// Older applications were stored with application_type = 'standard' before the
-// multi-type schema was introduced. Map them to 'single_property' for pricing.
-function normalizeAppType(applicationType) {
-  if (!applicationType || applicationType === 'standard') return 'single_property';
-  return applicationType;
-}
 
 function getDocumentLabel(applicationType) {
   if (applicationType === 'settlement_va' || applicationType === 'settlement_nc') return 'Settlement Statement';
@@ -168,9 +162,6 @@ export default async function handler(req, res) {
     // Base fee is always the single-property price ($317.95) regardless of app type.
     const effectiveBasePerProp = getPricing('single_property', false).base;
 
-    // Keep pricing object available for display helpers (dry-run response etc.)
-    const pricing = getPricing(normalizeAppType(application.application_type), targetIsRush);
-
     // Per-property charge for NEW additional properties at the target package
     const pricePerProp     = effectiveBasePerProp + (targetIsRush ? configRushFee : 0);
     const deltaAmountCents = delta > 0
@@ -284,6 +275,15 @@ export default async function handler(req, res) {
         oldPrimaryPropertyName: oldPrimaryName,
         newPrimaryPropertyName: newPrimary.name,
         correctedAt:            new Date().toISOString(),
+        // Revert fields — used by check-correction-expiry cron if customer never pays
+        oldHoaPropertyId:       application.hoa_property_id,
+        oldApplicationType:     application.application_type,
+        oldPropertyGroups:      (currentGroups || []).map(g => ({
+          property_id:          g.property_id,
+          property_name:        g.property_name,
+          property_owner_email: g.property_owner_email,
+          is_primary:           g.is_primary,
+        })),
       },
       updated_at:           new Date().toISOString(),
     };
@@ -432,7 +432,6 @@ export default async function handler(req, res) {
           mode: 'payment',
           payment_method_types: ['card'],
           line_items: lineItems,
-          expires_after: 172800, // 48 hours in seconds
           success_url: `${process.env.NEXT_PUBLIC_SITE_URL}/payment/correction-success?session_id={CHECKOUT_SESSION_ID}`,
           cancel_url:  `${process.env.NEXT_PUBLIC_SITE_URL}/payment/cancel`,
           customer_email: application.submitter_email,
@@ -460,6 +459,9 @@ export default async function handler(req, res) {
         invoiceUrl = session.url;
 
         // Store the correction session ID and lock the application for processing.
+        // Also persist lineItems + paymentIntentData in correction_metadata so
+        // the public correction-session endpoint can recreate the session if it expires
+        // within the 48-hour payment window.
         // The webhook will clear processing_locked once the customer pays.
         await supabase
           .from('applications')
@@ -468,6 +470,13 @@ export default async function handler(req, res) {
             processing_locked:            true,
             processing_locked_at:         new Date().toISOString(),
             processing_locked_reason:     'pending_property_correction_payment',
+            correction_metadata: {
+              ...appUpdate.correction_metadata,
+              lineItems,
+              paymentIntentData:    sessionData.payment_intent_data || null,
+              totalAdditionalCents,
+              submitterEmail:       application.submitter_email,
+            },
             updated_at:                   new Date().toISOString(),
           })
           .eq('id', applicationId);
@@ -485,6 +494,8 @@ export default async function handler(req, res) {
           const amountDisplay = totalAdditionalDisplay;
           const customerName = application.submitter_name || 'Valued Customer';
           const processingType = application.package_type === 'rush' ? 'Rush (5 business days)' : 'Standard (15 calendar days)';
+          // Use custom payment page so we can handle session recreation + 48hr window enforcement
+          const paymentPageUrl = `${process.env.NEXT_PUBLIC_SITE_URL}/payment/correction?applicationId=${applicationId}`;
 
           const invoiceHtml = `<!DOCTYPE html>
 <html lang="en">
@@ -526,7 +537,7 @@ export default async function handler(req, res) {
         <p style="margin:0 0 6px 0;font-size:13px;font-weight:600;color:#92400e;text-transform:uppercase;letter-spacing:0.05em;">Amount Due</p>
         <p style="margin:0 0 16px 0;font-size:40px;font-weight:700;color:#78350f;">$${amountDisplay}</p>
         <div style="margin-top:16px;">
-          <a href="${invoiceUrl}" style="display:inline-block;padding:14px 32px;background-color:${brandColor};color:#ffffff;text-decoration:none;border-radius:6px;font-size:16px;font-weight:600;">Pay Now</a>
+          <a href="${paymentPageUrl}" style="display:inline-block;padding:14px 32px;background-color:${brandColor};color:#ffffff;text-decoration:none;border-radius:6px;font-size:16px;font-weight:600;">Pay Now</a>
         </div>
         <p style="margin:12px 0 0 0;font-size:12px;color:#b45309;">
           &#128274; Secure payment powered by <strong>Stripe</strong>

@@ -184,7 +184,6 @@ export default async function handler(req, res) {
         mode:                 'payment',
         payment_method_types: ['card'],
         line_items:           lineItems,
-        expires_after:        172800, // 48 hours in seconds
         success_url:          `${process.env.NEXT_PUBLIC_SITE_URL}/payment/correction-success?session_id={CHECKOUT_SESSION_ID}`,
         cancel_url:           `${process.env.NEXT_PUBLIC_SITE_URL}/payment/cancel`,
         customer_email:       application.submitter_email,

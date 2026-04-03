@@ -11,6 +11,10 @@
     {
       "path": "/api/check-deadline-reminders",
       "schedule": "0 5 * * *"
+    },
+    {
+      "path": "/api/check-correction-expiry",
+      "schedule": "*/30 * * * *"
     }
   ],
   "functions": {
@@ -22,6 +26,9 @@
     },
     "pages/api/check-deadline-reminders.js": {
       "maxDuration": 30
+    },
+    "pages/api/check-correction-expiry.js": {
+      "maxDuration": 60
     },
     "pages/api/webhooks/stripe.js": {
       "maxDuration": 300
