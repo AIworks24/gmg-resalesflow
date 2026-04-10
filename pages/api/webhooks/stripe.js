@@ -290,7 +290,7 @@ export default async function handler(req, res) {
           stripe_payment_intent_id: paymentIntent.id
         };
         if (!isMultiCommunity) {
-          paymentUpdateData.status = 'payment_completed';
+          paymentUpdateData.status = 'payment_confirmed';
         }
         
         // Correct the total amount based on actual payment
@@ -1284,12 +1284,12 @@ async function handleMultiCommunityApplication(applicationId, metadata) {
       linkedProperties
     );
 
-    // Set status to payment_completed immediately after property groups exist.
+    // Set status to payment_confirmed immediately after property groups exist.
     // This makes the application visible in the admin dashboard right away and
     // ensures createNotifications (below) does not skip due to pending_payment status.
     await supabase
       .from('applications')
-      .update({ status: 'payment_completed', updated_at: new Date().toISOString() })
+      .update({ status: 'payment_confirmed', updated_at: new Date().toISOString() })
       .eq('id', applicationId);
 
     // Purge any stale Redis cache
@@ -1325,7 +1325,7 @@ async function handleMultiCommunityApplication(applicationId, metadata) {
     // Ensure status is set even on failure so the app doesn't get stuck
     await supabase
       .from('applications')
-      .update({ status: 'payment_completed', updated_at: new Date().toISOString() })
+      .update({ status: 'payment_confirmed', updated_at: new Date().toISOString() })
       .eq('id', applicationId);
     await deleteCachePattern('admin:applications:*');
     console.log(`[MC] Application ${applicationId} status set after error fallback`);
