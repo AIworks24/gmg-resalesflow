@@ -606,6 +606,9 @@ export default async function handler(req, res) {
                 headers: {
                   'Content-Type': 'application/json',
                   'Authorization': `Bearer ${process.env.INTERNAL_API_SECRET}`,
+                  ...(process.env.VERCEL_AUTOMATION_BYPASS_SECRET && {
+                    'x-vercel-protection-bypass': process.env.VERCEL_AUTOMATION_BYPASS_SECRET,
+                  }),
                 },
                 body: JSON.stringify({ applicationId }),
               });
