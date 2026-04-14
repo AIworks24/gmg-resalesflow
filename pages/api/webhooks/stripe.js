@@ -1072,8 +1072,21 @@ async function createPropertyOwnerForms(applicationId, metadata) {
 
     console.log(`Creating forms for application type: ${application.application_type}, Required forms: ${JSON.stringify(requiredForms)}`);
 
-    // Create each required form
+    // Create each required form (skip if already exists to prevent duplicates from webhook retries)
     for (const formType of requiredForms) {
+      const { data: existing } = await supabase
+        .from('property_owner_forms')
+        .select('id')
+        .eq('application_id', applicationId)
+        .eq('form_type', formType)
+        .is('property_group_id', null)
+        .maybeSingle();
+
+      if (existing) {
+        console.log(`Skipping ${formType} for application ${applicationId} — already exists`);
+        continue;
+      }
+
       await supabase
         .from('property_owner_forms')
         .insert({
