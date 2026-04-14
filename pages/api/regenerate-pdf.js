@@ -98,7 +98,10 @@ export default async function handler(req, res) {
         .select('form_data, response_data')
         .eq('application_id', applicationId)
         .eq('form_type', 'resale_certificate')
-        .single();
+        .not('form_data', 'eq', '{}')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
       
       if (formRecord) {
         actualFormData = formRecord.form_data || formRecord.response_data || {};

@@ -35,10 +35,10 @@ const ResaleCertificateForm = ({ applicationId, token }) => {
     const loadFormData = async () => {
       if (!applicationId && !token) return;
       setLoading(true);
-      let query = supabase.from('property_owner_forms').select('id, form_data, response_data').eq('form_type', 'resale_certificate').limit(1);
+      let query = supabase.from('property_owner_forms').select('id, form_data, response_data').eq('form_type', 'resale_certificate').order('created_at', { ascending: false }).limit(1);
       if (applicationId) query = query.eq('application_id', applicationId);
       if (token) query = query.eq('access_token', token);
-      const { data, error } = await query.single();
+      const { data, error } = await query.maybeSingle();
       if (data && (data.form_data || data.response_data)) {
         // Use the complete form_data without any trimming
         const loaded = data.form_data || data.response_data;
@@ -95,7 +95,9 @@ const ResaleCertificateForm = ({ applicationId, token }) => {
           .select('id, access_token')
           .eq('application_id', applicationId)
           .eq('form_type', 'resale_certificate')
-          .single();
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
         
         if (existingForm) {
           // Update existing form

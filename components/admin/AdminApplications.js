@@ -2648,16 +2648,20 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
       console.log('[handleGeneratePDF] Fetching latest form data from database...');
       const { data: latestForms, error: formsError } = await supabase
         .from('property_owner_forms')
-        .select('form_type, form_data, response_data')
+        .select('form_type, form_data, response_data, created_at')
         .eq('application_id', applicationId)
-        .in('form_type', ['inspection_form', 'resale_certificate']);
-      
+        .in('form_type', ['inspection_form', 'resale_certificate'])
+        .order('created_at', { ascending: false });
+
       if (formsError) {
         console.warn('[handleGeneratePDF] Error fetching latest forms, using provided formData:', formsError);
       } else {
         // Use the latest data from database instead of potentially stale selectedApplication data
-        const latestInspectionForm = latestForms?.find(f => f.form_type === 'inspection_form');
-        const latestResaleForm = latestForms?.find(f => f.form_type === 'resale_certificate');
+        // find() on DESC-ordered array picks the most recent record with actual data
+        const latestInspectionForm = latestForms?.find(f => f.form_type === 'inspection_form' && (f.form_data || f.response_data))
+          || latestForms?.find(f => f.form_type === 'inspection_form');
+        const latestResaleForm = latestForms?.find(f => f.form_type === 'resale_certificate' && (f.form_data || f.response_data))
+          || latestForms?.find(f => f.form_type === 'resale_certificate');
         
         if (latestInspectionForm || latestResaleForm) {
           formData = {
