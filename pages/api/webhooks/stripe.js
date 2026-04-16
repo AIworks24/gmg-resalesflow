@@ -270,11 +270,17 @@ export default async function handler(req, res) {
         // The correctionType lives on the checkout session metadata, not the payment intent.
         // Do a quick session lookup to detect correction payments before running the
         // standard form-creation / status-update logic, which would corrupt correction payments.
+        // Also track whether a checkout session exists so we can skip the duplicate receipt email
+        // (checkout.session.completed already sends it for all Stripe Checkout payments).
+        let hasCheckoutSession = false;
         try {
           const piSessions = await stripe.checkout.sessions.list({ payment_intent: paymentIntent.id, limit: 1 });
-          if (piSessions.data.length > 0 && piSessions.data[0].metadata?.correctionType) {
-            console.log(`[Webhook] payment_intent.succeeded is a correction payment — already handled by checkout.session.completed. Skipping.`);
-            break;
+          if (piSessions.data.length > 0) {
+            if (piSessions.data[0].metadata?.correctionType) {
+              console.log(`[Webhook] payment_intent.succeeded is a correction payment — already handled by checkout.session.completed. Skipping.`);
+              break;
+            }
+            hasCheckoutSession = true;
           }
         } catch (piSessionErr) {
           console.warn('[Webhook] Could not check payment intent for correctionType:', piSessionErr.message);
@@ -489,6 +495,8 @@ export default async function handler(req, res) {
             
             if (isImpersonated && !shouldSendEmails) {
               console.log(`[Webhook] Skipping receipt email - impersonation mode with send_emails disabled for application ${updatedApplication.id}`);
+            } else if (hasCheckoutSession) {
+              console.log(`[Webhook] Skipping receipt email in payment_intent.succeeded — already sent by checkout.session.completed for application ${updatedApplication.id}`);
             } else {
               // Send receipt email
               console.log(`[Webhook] Sending receipt email with paymentMethod: ${paymentMethod}, lineItems count: ${lineItems.length}`);

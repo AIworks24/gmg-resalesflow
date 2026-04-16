@@ -95,8 +95,7 @@ export default async function handler(req, res) {
       `, { count: 'exact' })
       .is('deleted_at', null) // Only get non-deleted applications
       .neq('status', 'draft')
-      .neq('status', 'pending_payment')
-      .neq('application_type', 'info_packet'); // Info Packets are auto-completed — no staff processing needed
+      .neq('status', 'pending_payment');
 
     // All admin, staff, and accounting users can see all applications
     // (No role-based filtering - accounting users now have full visibility)
@@ -197,6 +196,11 @@ export default async function handler(req, res) {
     // Helper function to check if a regular (non-multi-community) application is fully completed
     // This matches the logic in getWorkflowStep to ensure consistency
     const isRegularApplicationCompleted = (app) => {
+      // Info Packet: completed if status is completed or email was sent
+      if (app.application_type === 'info_packet') {
+        return app.status === 'completed' || !!app.email_completed_at;
+      }
+
       // Check if this is a lender questionnaire application
       const isLenderQuestionnaire = app.application_type === 'lender_questionnaire';
       

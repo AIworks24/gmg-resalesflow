@@ -279,6 +279,9 @@ export default async function handler(req, res) {
           paymentMethod: paymentMethod,
           specialRequest: 'info_packet',
           isMultiCommunity: allProperties.length > 1 ? 'true' : 'false',
+          customerName: formData.submitterName || '',
+          customerEmail: formData.submitterEmail || '',
+          propertyAddress: formData.propertyAddress || '',
         },
         customer_email: formData.submitterEmail,
         billing_address_collection: 'required',
@@ -291,6 +294,7 @@ export default async function handler(req, res) {
           applicationId: applicationId,
           specialRequest: 'info_packet',
           isMultiCommunity: allProperties.length > 1 ? 'true' : 'false',
+          customerName: formData.submitterName || '',
         },
       };
 

@@ -4759,7 +4759,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                 </div>
                 <div className='flex items-center gap-2'>
                   {/* Edit Details Button - Only show if user is admin */}
-                  {userRole === 'admin' && !isEditingDetails && (
+                  {userRole === 'admin' && !isEditingDetails && selectedApplication?.application_type !== 'info_packet' && (
                     <button
                       onClick={handleStartEditDetails}
                       className='px-4 py-2 bg-blue-50 border border-blue-300 rounded-lg text-blue-700 hover:bg-blue-100 font-semibold transition-all flex items-center gap-2 text-sm'
@@ -4769,7 +4769,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                     </button>
                   )}
                   {/* Save/Cancel Buttons when editing */}
-                  {userRole === 'admin' && isEditingDetails && (
+                  {userRole === 'admin' && isEditingDetails && selectedApplication?.application_type !== 'info_packet' && (
                     <>
                       <button
                         onClick={handleSaveDetails}
@@ -4798,8 +4798,8 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                       </button>
                     </>
                   )}
-                  {/* Restructure Application Button - admin only, excludes lender questionnaire */}
-                  {userRole === 'admin' && !isEditingDetails && selectedApplication?.application_type !== 'lender_questionnaire' && (
+                  {/* Restructure Application Button - admin only, excludes lender questionnaire and info_packet */}
+                  {userRole === 'admin' && !isEditingDetails && selectedApplication?.application_type !== 'lender_questionnaire' && selectedApplication?.application_type !== 'info_packet' && (
                     <button
                       onClick={handleOpenCorrectPrimary}
                       className='px-4 py-2 bg-amber-50 border border-amber-300 rounded-lg text-amber-700 hover:bg-amber-100 font-semibold transition-all flex items-center gap-2 text-sm'
@@ -4809,8 +4809,8 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                       Restructure Application
                     </button>
                   )}
-                  {/* Reject Button - Only show if user is admin and application is not already rejected */}
-                  {userRole === 'admin' && selectedApplication && selectedApplication.status !== 'rejected' && !isEditingDetails && (
+                  {/* Reject Button - Only show if user is admin and application is not already rejected or info_packet */}
+                  {userRole === 'admin' && selectedApplication && selectedApplication.status !== 'rejected' && !isEditingDetails && selectedApplication?.application_type !== 'info_packet' && (
                     <button
                       onClick={() => setShowRejectModal(true)}
                       className='px-4 py-2 bg-red-50 border border-red-300 rounded-lg text-red-700 hover:bg-red-100 font-semibold transition-all flex items-center gap-2 text-sm'
