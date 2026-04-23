@@ -116,12 +116,19 @@ export default async function handler(req, res) {
           updateData.stripe_payment_intent_id = session.payment_intent;
         }
         
+        // Idempotency guard: skip if already processed (prevents duplicate emails on Stripe retries)
         const { data: updatedApp } = await supabase
           .from('applications')
           .update(updateData)
           .eq('stripe_session_id', session.id)
+          .neq('payment_status', 'completed')
           .select('id, application_type, impersonation_metadata')
           .single();
+
+        if (!updatedApp) {
+          console.log(`[Webhook] checkout.session.completed already processed for session ${session.id} — skipping duplicate`);
+          break;
+        }
 
         // Get receipt and send receipt email
         if (updatedApp) {
@@ -317,14 +324,15 @@ export default async function handler(req, res) {
             package_type,
             total_amount,
             application_type,
-            impersonation_metadata
+            impersonation_metadata,
+            payment_status
           `)
           .single();
 
         // If update by stripe_payment_intent_id failed, try to update by applicationId from metadata
         if (!updatedApplication && paymentIntent.metadata?.applicationId) {
           console.log(`[Webhook] Could not find application by stripe_payment_intent_id ${paymentIntent.id}, trying by applicationId from metadata: ${paymentIntent.metadata.applicationId}`);
-          
+
           const { data: fallbackApplication } = await supabase
             .from('applications')
             .update(paymentUpdateData)
@@ -337,10 +345,11 @@ export default async function handler(req, res) {
               package_type,
               total_amount,
               application_type,
-              impersonation_metadata
+              impersonation_metadata,
+              payment_status
             `)
             .single();
-          
+
           if (fallbackApplication) {
             updatedApplication = fallbackApplication;
             console.log(`[Webhook] Successfully updated application ${fallbackApplication.id} using applicationId from metadata`);
@@ -375,7 +384,8 @@ export default async function handler(req, res) {
                   package_type,
                   total_amount,
                   application_type,
-                  impersonation_metadata
+                  impersonation_metadata,
+                  payment_status
                 `)
                 .single();
 
@@ -389,9 +399,17 @@ export default async function handler(req, res) {
           }
         }
 
+        // If the Stripe API call to list checkout sessions failed (hasCheckoutSession stayed false),
+        // use payment_status as a fallback guard to avoid sending a duplicate receipt.
+        // checkout.session.completed sets payment_status = 'completed' before sending the email.
+        if (!hasCheckoutSession && updatedApplication?.payment_status === 'completed') {
+          console.log(`[Webhook] payment_intent.succeeded: receipt already sent via checkout.session.completed for application ${updatedApplication.id} — skipping duplicate`);
+          hasCheckoutSession = true;
+        }
+
         // Handle multi-community applications
         const applicationId = paymentIntent.metadata?.applicationId || updatedApplication?.id;
-        
+
         // Get receipt and send receipt email
         if (updatedApplication && updatedApplication.submitter_email) {
           try {
