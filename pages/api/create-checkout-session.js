@@ -41,6 +41,19 @@ export default async function handler(req, res) {
       process.env.SUPABASE_SERVICE_ROLE_KEY
     );
 
+    // Resolve the authenticated user_id for this application (server-side, not from client formData)
+    let applicationUserId = null;
+    try {
+      const { data: appRow } = await supabase
+        .from('applications')
+        .select('user_id')
+        .eq('id', applicationId)
+        .single();
+      applicationUserId = appRow?.user_id || null;
+    } catch (userIdErr) {
+      console.error('[Checkout] Could not resolve application user_id:', userIdErr);
+    }
+
     // Determine application type using database-driven approach
     let applicationType;
     let isMultiCommunity = false;
@@ -72,15 +85,15 @@ export default async function handler(req, res) {
         // Get all properties for this transaction (primary + linked)
         allProperties = await getAllPropertiesForTransaction(hoaProperty.id, supabase);
         
-        // Calculate multi-community pricing
-        // Pass submitterType and publicOffering to check if forced price applies
+        // Calculate multi-community pricing — pass userId so per-user override takes precedence
         multiCommunityPricing = await calculateMultiCommunityPricing(
           hoaProperty.id, 
           packageType, 
           applicationType,
           supabase,
           formData.submitterType,
-          formData.publicOffering
+          formData.publicOffering,
+          applicationUserId
         );
       } else {
         allProperties = [hoaProperty];
@@ -327,67 +340,67 @@ export default async function handler(req, res) {
 
     // Get pricing and messaging using database-driven approach
     let basePrice, totalAmount, messaging;
-    let hasForcedPrice = false; // Track if forced price is being used
-    
+    let hasForcedPrice = false; // true when a property or user override drove the price
+    let hasUserOverride = false; // true specifically when a per-user override is applied
+    let userOverridePricingId = null; // FK into builder_user_property_pricing for audit
+
     if (isMultiCommunity && multiCommunityPricing) {
       // Use multi-community pricing
-      // For multi-community, basePrice is just for display (not used in Stripe)
-      // totalAmount should be the sum of all associations (base + rush for each property)
-      // PLUS a credit card fee for EACH association if applicable
-      basePrice = multiCommunityPricing.total; // This is sum of all (base + rush) per association
+      basePrice = multiCommunityPricing.total;
       totalAmount = multiCommunityPricing.total + (paymentMethod === 'credit_card' ? 9.95 * allProperties.length : 0);
       messaging = getApplicationTypeMessaging(applicationType);
       
-      // Check if any property in multi-community has forced price
       if (multiCommunityPricing.associations && multiCommunityPricing.associations.some(a => a.hasForcedPrice)) {
         hasForcedPrice = true;
       }
+      hasUserOverride = !!multiCommunityPricing.hasUserOverride;
+      userOverridePricingId = multiCommunityPricing.userOverridePricingId || null;
       
-      // Multi-community pricing calculated
     } else {
       // Single property pricing
       try {
-        // Get property ID from hoaProperty (should be available from earlier fetch)
         const propertyId = allProperties.length > 0 ? allProperties[0].id : null;
         
-        // Get base price without credit card fee (pass propertyId, submitterType, and publicOffering to check for forced price)
-        basePrice = await getApplicationTypePricing(applicationType, packageType, propertyId, supabase, formData.submitterType, formData.publicOffering);
+        // getApplicationTypePricing now handles user override → property force price → catalog in order
+        basePrice = await getApplicationTypePricing(
+          applicationType, packageType, propertyId, supabase,
+          formData.submitterType, formData.publicOffering,
+          applicationUserId
+        );
         
-        // Calculate total amount
-        // Note: getApplicationTypePricing already handles forced price + rush fees correctly
-        // basePrice will contain: forced price (if enabled and applicable) + rush fee (if rush package)
-        // Forced price only applies to standard resale applications (single_property, multi_community)
-        // So we just need to add convenience fee
         if (propertyId) {
           const { shouldApplyForcedPrice } = require('../../lib/applicationTypes');
-          const { getForcedPriceValue } = require('../../lib/propertyPricingUtils');
           
-          // Only check for forced price if submitterType is 'builder' AND public offering is NOT requested
           if (shouldApplyForcedPrice(formData.submitterType, formData.publicOffering)) {
-            const forcedPrice = await getForcedPriceValue(propertyId, supabase);
-            if (forcedPrice !== null) {
-              // basePrice already includes forced price + rush fee (if rush)
-              // Just add convenience fee
-              hasForcedPrice = true; // Mark that forced price is being used
+            // Check per-user override first
+            const { getUserOverride } = require('../../lib/userPricingUtils');
+            const userOverride = applicationUserId
+              ? await getUserOverride(propertyId, applicationUserId, supabase)
+              : null;
+
+            if (userOverride) {
+              hasForcedPrice = true;
+              hasUserOverride = true;
+              userOverridePricingId = userOverride.pricingId;
               totalAmount = basePrice + (paymentMethod === 'credit_card' ? 9.95 : 0);
-              // Force price enabled for property
             } else {
-              // Use standard calculation with rush fees
-              totalAmount = await calculateTotalAmount(applicationType, packageType, paymentMethod);
+              const { getForcedPriceValue } = require('../../lib/propertyPricingUtils');
+              const forcedPrice = await getForcedPriceValue(propertyId, supabase);
+              if (forcedPrice !== null) {
+                hasForcedPrice = true;
+                totalAmount = basePrice + (paymentMethod === 'credit_card' ? 9.95 : 0);
+              } else {
+                totalAmount = await calculateTotalAmount(applicationType, packageType, paymentMethod);
+              }
             }
           } else {
-            // Forced price doesn't apply (not builder or public offering requested), use standard calculation
             totalAmount = await calculateTotalAmount(applicationType, packageType, paymentMethod);
           }
         } else {
-          // No propertyId available, use standard calculation
           totalAmount = await calculateTotalAmount(applicationType, packageType, paymentMethod);
         }
         
-        // Get messaging for the application type
         messaging = getApplicationTypeMessaging(applicationType);
-        
-        // Database pricing calculated
       } catch (error) {
         console.error('Database pricing error:', error);
         // Fallback pricing - try to determine correct pricing based on application type
@@ -616,10 +629,10 @@ export default async function handler(req, res) {
             deliveryTime = packageType === 'rush' ? '5 business days' : '10 Calendar Days';
           }
           
-          // For single property, use "Single Property" instead of formType
+          const accountRateSuffix = hasUserOverride ? ' — Account Rate' : '';
           const productName = applicationType === 'single_property' 
-            ? `Single Property - ${packageType === 'rush' ? 'Rush' : 'Standard'} Processing`
-            : `${messaging.formType} - ${packageType === 'rush' ? 'Rush' : 'Standard'} Processing`;
+            ? `Single Property - ${packageType === 'rush' ? 'Rush' : 'Standard'} Processing${accountRateSuffix}`
+            : `${messaging.formType} - ${packageType === 'rush' ? 'Rush' : 'Standard'} Processing${accountRateSuffix}`;
           
           lineItems.push({
             price_data: {
@@ -659,7 +672,9 @@ export default async function handler(req, res) {
       payment_method_types: ['card'],
       line_items: lineItems,
       mode: 'payment',
-      allow_promotion_codes: true, // Enable promo code input on Stripe checkout page
+      // Disable Stripe promo codes when a per-user override is already applied to prevent double-discounting.
+      // Allow promo codes for all other flows (property force price or catalog pricing).
+      allow_promotion_codes: !hasUserOverride,
       success_url: `${req.headers.origin}/?payment_success=true&session_id={CHECKOUT_SESSION_ID}&app_id=${applicationId}${testParam}`,
       cancel_url: `${req.headers.origin}/?payment_cancelled=true&app_id=${applicationId}${testParam}`,
       metadata: {
@@ -673,6 +688,12 @@ export default async function handler(req, res) {
         propertyCount: allProperties.length.toString(),
         primaryProperty: allProperties[0]?.name || formData.hoaProperty,
         linkedProperties: isMultiCommunity ? allProperties.slice(1).map(p => p.name || p.property_name).join(',') : '',
+        // Per-user override audit fields (populated when override applies)
+        ...(hasUserOverride && {
+          pricing_source: 'user_override',
+          builder_pricing_id: userOverridePricingId || '',
+          override_user_id: applicationUserId || '',
+        }),
       },
       customer_email: formData.submitterEmail,
       billing_address_collection: 'required',

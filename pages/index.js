@@ -24,6 +24,7 @@ import {
   isPaymentRequired 
 } from '../lib/applicationTypes';
 import { getPricing } from '../lib/pricingConfig';
+import { getLinkedProperties, calculateMultiCommunityPricing } from '../lib/multiCommunityUtils';
 import { formatDate, formatDateTime } from '../lib/timeUtils';
 import { parseEmails, formatEmailsForStorage, validateEmails } from '../lib/emailUtils';
 import Image from 'next/image';
@@ -181,13 +182,25 @@ const calculateTotal = (formData, stripePrices, hoaProperties) => {
     return 200.00;
   }
   
-  // Check for forced price override (single property) - ONLY for builder/developer WITHOUT public offering
+  // Check for builder price overrides (single property) - ONLY for builder/developer WITHOUT public offering or info packet
   if (shouldApplyForcedPrice(formData.submitterType, formData.publicOffering, formData.infoPacket) && formData.hoaProperty && hoaProperties) {
+    // 1. Per-user override takes precedence
+    if (formData._userOverridePrice != null) {
+      let total = formData._userOverridePrice;
+      if (formData.packageType === 'rush') {
+        total += stripePrices ? stripePrices.rush.rushFeeDisplay : 70.66;
+      }
+      if (formData.paymentMethod === 'credit_card' && total > 0) {
+        total += stripePrices ? stripePrices.convenienceFee.display : 9.95;
+      }
+      return Math.round(total * 100) / 100;
+    }
+
+    // 2. Property-wide force price
     const selectedProperty = hoaProperties.find(prop => prop.name === formData.hoaProperty);
     if (selectedProperty) {
       const forcedPrice = getForcedPriceSync(selectedProperty);
       if (forcedPrice !== null) {
-        // Forced price overrides base price, but rush fees still apply
         let total = forcedPrice;
         if (formData.packageType === 'rush') {
           total += stripePrices ? stripePrices.rush.rushFeeDisplay : 70.66;
@@ -223,7 +236,7 @@ const calculateTotal = (formData, stripePrices, hoaProperties) => {
 };
 
 // Async calculateTotalDatabase function using database-driven pricing for payment logic
-const calculateTotalDatabase = async (formData, hoaProperties, applicationType) => {
+const calculateTotalDatabase = async (formData, hoaProperties, applicationType, userId = null) => {
   try {
     // Lender Questionnaire pricing - check FIRST (even for multi-community, treat as single application)
     if (applicationType === 'lender_questionnaire') {
@@ -251,7 +264,8 @@ const calculateTotalDatabase = async (formData, hoaProperties, applicationType) 
           applicationType,
           null, // supabaseClient
           formData.submitterType,
-          formData.publicOffering
+          formData.publicOffering,
+          userId
         );
         
         // For multi-community, total_amount stores refundable service fees only.
@@ -261,23 +275,32 @@ const calculateTotalDatabase = async (formData, hoaProperties, applicationType) 
       }
     }
     
-    // Single property pricing - check for forced price first (ONLY for builder/developer WITHOUT public offering)
+    // Single property pricing — check builder overrides (per-user first, then property force price)
     if (shouldApplyForcedPrice(formData.submitterType, formData.publicOffering, formData.infoPacket) && formData.hoaProperty && hoaProperties) {
       const selectedProperty = hoaProperties.find(prop => prop.name === formData.hoaProperty);
       if (selectedProperty) {
-        const forcedPrice = getForcedPriceSync(selectedProperty);
-        if (forcedPrice !== null) {
-          // Forced price overrides base price, but rush fees still apply
-          let total = forcedPrice;
+        // 1. Per-user override — resolve via client-side Supabase (RLS-scoped)
+        if (formData._userOverridePrice != null) {
+          let total = formData._userOverridePrice;
           if (formData.packageType === 'rush') {
-            // Add rush fee (70.66 for standard, 100 for NC settlement)
             const { getPricing } = await import('../lib/pricingConfig');
             const pricing = getPricing(applicationType, true);
-            total += pricing.rushFee / 100; // Convert cents to dollars
+            total += pricing.rushFee / 100;
           }
-          if (formData.paymentMethod === 'credit_card' && total > 0) {
-            total += 9.95;
+          if (formData.paymentMethod === 'credit_card' && total > 0) total += 9.95;
+          return total;
+        }
+
+        // 2. Property-wide Builder Force Price
+        const forcedPrice = getForcedPriceSync(selectedProperty);
+        if (forcedPrice !== null) {
+          let total = forcedPrice;
+          if (formData.packageType === 'rush') {
+            const { getPricing } = await import('../lib/pricingConfig');
+            const pricing = getPricing(applicationType, true);
+            total += pricing.rushFee / 100;
           }
+          if (formData.paymentMethod === 'credit_card' && total > 0) total += 9.95;
           return total;
         }
       }
@@ -1074,19 +1097,107 @@ const PackagePaymentStep = ({
   testModeCode, // Add test mode code for API calls
   isImpersonating, // When true, payment uses test mode; Stripe.js must use test key
   impersonatedUser, // When impersonating, use this user's ID for application creation
+  prefetchedMcPricing, // Pre-fetched MC pricing from parent; null = not MC or not yet ready
 }) => {
   // Get sendEmails flag from store
   const { sendEmails } = useImpersonationStore();
   const [isProcessing, setIsProcessing] = useState(false);
   const [paymentError, setPaymentError] = useState(null);
-  const [multiCommunityPricing, setMultiCommunityPricing] = useState(null);
-  const [standardMultiCommunityPricing, setStandardMultiCommunityPricing] = useState(null);
-  const [rushMultiCommunityPricing, setRushMultiCommunityPricing] = useState(null);
-  const [linkedProperties, setLinkedProperties] = useState([]);
+  const [multiCommunityPricing, setMultiCommunityPricing] = useState(() => {
+    if (!prefetchedMcPricing) return null;
+    return (formData.packageType || 'standard') === 'rush'
+      ? prefetchedMcPricing.rushPricing
+      : prefetchedMcPricing.standardPricing;
+  });
+  const [standardMultiCommunityPricing, setStandardMultiCommunityPricing] = useState(
+    () => prefetchedMcPricing?.standardPricing ?? null
+  );
+  const [rushMultiCommunityPricing, setRushMultiCommunityPricing] = useState(
+    () => prefetchedMcPricing?.rushPricing ?? null
+  );
+  const [linkedProperties, setLinkedProperties] = useState(
+    () => prefetchedMcPricing?.linkedProperties ?? []
+  );
+  // _userOverrideData === undefined means parent hasn't fetched yet; null/object means done
+  const [userOverrideLoading, setUserOverrideLoading] = React.useState(
+    () => formData._userOverrideData === undefined && !!(user && shouldApplyForcedPrice(formData.submitterType, formData.publicOffering, formData.infoPacket))
+  );
+  const [mcPricingLoading, setMcPricingLoading] = React.useState(() => {
+    if (prefetchedMcPricing) return false;
+    if (!formData.hoaProperty || !hoaProperties || applicationType === 'lender_questionnaire') return false;
+    const prop = hoaProperties.find(p => p.name === formData.hoaProperty);
+    return !!(prop?.is_multi_community);
+  });
 
   // Check if this is a pending payment application
   const [isPendingPayment, setIsPendingPayment] = React.useState(false);
   const [isPaymentCompleted, setIsPaymentCompleted] = React.useState(false);
+
+  // Per-user Builder pricing override disclosure
+  const [userPricingOverride, setUserPricingOverride] = React.useState(
+    () => formData._userOverrideData !== undefined ? (formData._userOverrideData || null) : null
+  );
+
+  React.useEffect(() => {
+    const fetchUserOverride = async () => {
+      // Parent already ran fetchGlobalUserOverride — sync from formData, skip DB call
+      if (formData._userOverrideData !== undefined) {
+        setUserPricingOverride(formData._userOverrideData || null);
+        setUserOverrideLoading(false);
+        return;
+      }
+      // Fallback for direct navigation to step 4 (e.g. pending-payment link) where
+      // the parent effect may not have run yet.
+      if (!user || !shouldApplyForcedPrice(formData.submitterType, formData.publicOffering, formData.infoPacket)) {
+        setUserPricingOverride(null);
+        setFormData(prev => ({ ...prev, _userOverridePrice: null, _userOverrideData: null }));
+        setUserOverrideLoading(false);
+        return;
+      }
+      const selectedProperty = hoaProperties?.find(p => p.name === formData.hoaProperty);
+      if (!selectedProperty) {
+        setUserPricingOverride(null);
+        setFormData(prev => ({ ...prev, _userOverridePrice: null, _userOverrideData: null }));
+        setUserOverrideLoading(false);
+        return;
+      }
+      setUserOverrideLoading(true);
+      try {
+        const now = new Date().toISOString();
+        // Query from the junction table side — user_id lives in builder_pricing_offer_users.
+        // Intentionally omit the valid_until OR filter here and check it in JS below,
+        // since referencedTable or() syntax can behave unexpectedly across supabase-js versions.
+        const { data: rows, error: junctionError } = await supabase
+          .from('builder_pricing_offer_users')
+          .select(`
+            builder_user_property_pricing!inner (
+              override_price,
+              applicant_message,
+              valid_until
+            )
+          `)
+          .eq('user_id', user.id)
+          .eq('builder_user_property_pricing.hoa_property_id', selectedProperty.id)
+          .eq('builder_user_property_pricing.active', true)
+          .lte('builder_user_property_pricing.valid_from', now);
+        if (junctionError) console.error('[fetchUserOverride] query error:', junctionError);
+        // Filter valid_until in JS to avoid referencedTable or() issues
+        const validRow = (rows || []).find(r => {
+          const offer = r.builder_user_property_pricing;
+          return offer && (offer.valid_until === null || offer.valid_until >= now);
+        });
+        const data = validRow?.builder_user_property_pricing || null;
+        setUserPricingOverride(data || null);
+        setFormData(prev => ({ ...prev, _userOverridePrice: data ? parseFloat(data.override_price) : null, _userOverrideData: data }));
+      } catch {
+        setUserPricingOverride(null);
+        setFormData(prev => ({ ...prev, _userOverridePrice: null, _userOverrideData: null }));
+      } finally {
+        setUserOverrideLoading(false);
+      }
+    };
+    fetchUserOverride();
+  }, [user, formData.submitterType, formData.hoaProperty, formData.publicOffering, formData.infoPacket, hoaProperties, formData._userOverrideData]);
   
   // Ensure payment method defaults to credit_card when ACH is disabled
   React.useEffect(() => {
@@ -1136,30 +1247,42 @@ const PackagePaymentStep = ({
     checkApplicationStatus();
   }, [applicationId]);
 
-  // Load multi-community pricing when component mounts or formData changes
+  // Load multi-community pricing when component mounts or formData changes.
+  // When parent has prefetched, uses that data immediately (no DB call).
+  // packageType is in deps so switching standard↔rush updates multiCommunityPricing;
+  // with prefetched data that's just a local state swap, no network request.
   React.useEffect(() => {
     const loadMultiCommunityPricing = async () => {
+      if (prefetchedMcPricing) {
+        // Use prefetched data — no DB calls needed
+        setLinkedProperties(prefetchedMcPricing.linkedProperties);
+        setStandardMultiCommunityPricing(prefetchedMcPricing.standardPricing);
+        setRushMultiCommunityPricing(prefetchedMcPricing.rushPricing);
+        const currentPricing = (formData.packageType || 'standard') === 'rush'
+          ? prefetchedMcPricing.rushPricing
+          : prefetchedMcPricing.standardPricing;
+        setMultiCommunityPricing(currentPricing);
+        setMcPricingLoading(false);
+        return;
+      }
+
       if (formData.hoaProperty && hoaProperties) {
         const selectedProperty = hoaProperties.find(prop => prop.name === formData.hoaProperty);
         // Skip multi-community pricing for lender_questionnaire - treat as single application
         if (selectedProperty && selectedProperty.is_multi_community && applicationType !== 'lender_questionnaire') {
+          setMcPricingLoading(true);
           try {
-            const { getLinkedProperties, calculateMultiCommunityPricing } = await import('../lib/multiCommunityUtils');
-            
             const linked = await getLinkedProperties(selectedProperty.id);
             setLinkedProperties(linked);
-            
-            // Calculate both standard and rush pricing
-            // Use the actual applicationType instead of hardcoding 'standard'
+
             const [standardPricing, rushPricing] = await Promise.all([
-              calculateMultiCommunityPricing(selectedProperty.id, 'standard', applicationType, null, formData.submitterType, formData.publicOffering),
-              calculateMultiCommunityPricing(selectedProperty.id, 'rush', applicationType, null, formData.submitterType, formData.publicOffering)
+              calculateMultiCommunityPricing(selectedProperty.id, 'standard', applicationType, null, formData.submitterType, formData.publicOffering, user?.id),
+              calculateMultiCommunityPricing(selectedProperty.id, 'rush', applicationType, null, formData.submitterType, formData.publicOffering, user?.id)
             ]);
-            
+
             setStandardMultiCommunityPricing(standardPricing);
             setRushMultiCommunityPricing(rushPricing);
-            
-            // Set the current pricing based on selected package type
+
             const currentPricing = (formData.packageType || 'standard') === 'rush' ? rushPricing : standardPricing;
             setMultiCommunityPricing(currentPricing);
           } catch (error) {
@@ -1168,8 +1291,11 @@ const PackagePaymentStep = ({
             setStandardMultiCommunityPricing(null);
             setRushMultiCommunityPricing(null);
             setLinkedProperties([]);
+          } finally {
+            setMcPricingLoading(false);
           }
         } else {
+          setMcPricingLoading(false);
           setMultiCommunityPricing(null);
           setStandardMultiCommunityPricing(null);
           setRushMultiCommunityPricing(null);
@@ -1177,9 +1303,9 @@ const PackagePaymentStep = ({
         }
       }
     };
-    
+
     loadMultiCommunityPricing();
-  }, [formData.hoaProperty, formData.packageType, hoaProperties, applicationType]);
+  }, [formData.hoaProperty, formData.packageType, formData.submitterType, formData.publicOffering, formData.infoPacket, hoaProperties, applicationType, user, prefetchedMcPricing]);
 
 
   const handlePayment = async () => {
@@ -1219,7 +1345,7 @@ const PackagePaymentStep = ({
 
     try {
       // Calculate total amount for payment bypass check using database pricing
-      const totalAmount = await calculateTotalDatabase(formData, hoaProperties, applicationType);
+      const totalAmount = await calculateTotalDatabase(formData, hoaProperties, applicationType, user?.id);
       
       // Check if payment is required (bypass for $0 transactions)
       if (totalAmount === 0) {
@@ -1723,6 +1849,8 @@ const PackagePaymentStep = ({
     }
   };
 
+  const isPricingLoading = userOverrideLoading || mcPricingLoading;
+
   return (
     <div className='space-y-6'>
       {isPendingPayment && (
@@ -1864,6 +1992,28 @@ const PackagePaymentStep = ({
         </div>
       )}
 
+      {/* Account pricing disclosure — shown when a per-user Builder override is active */}
+      {userPricingOverride && (
+        <div className="mb-4 flex items-start gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+          <svg className="mt-0.5 h-4 w-4 flex-shrink-0 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M12 2a10 10 0 100 20A10 10 0 0012 2z" />
+          </svg>
+          <div>
+            <span className="font-semibold">Account pricing applied</span>
+            {' — '}your account rate of <strong>${Number(userPricingOverride.override_price).toFixed(2)}</strong> is active for this property.
+            {userPricingOverride.applicant_message && (
+              <p className="mt-0.5 text-blue-800">{userPricingOverride.applicant_message}</p>
+            )}
+            {userPricingOverride.valid_until && (
+              <p className="mt-0.5 text-blue-700">Rate valid until {new Date(userPricingOverride.valid_until).toLocaleDateString()}.</p>
+            )}
+            {!userPricingOverride.valid_until && !userPricingOverride.applicant_message && (
+              <p className="mt-0.5 text-blue-700">To extend or modify your rate, email <a href="mailto:resales@gmgva.com" className="underline font-medium">resales@gmgva.com</a>.</p>
+            )}
+          </div>
+        </div>
+      )}
+
       {applicationType !== 'info_packet' && (
       <div className='grid grid-cols-1 md:grid-cols-2 gap-6'>
         <div
@@ -1896,18 +2046,18 @@ const PackagePaymentStep = ({
             </div>
             <div className='text-right'>
               <div className='text-2xl font-bold text-green-600'>
-                ${(() => {
+                {isPricingLoading ? '---' : `$${(() => {
                   // Use multi-community pricing if available (even if total is 0, like VA settlement standard)
                   if (standardMultiCommunityPricing && standardMultiCommunityPricing.total !== undefined && standardMultiCommunityPricing.total !== null) {
                     const baseTotal = standardMultiCommunityPricing.total;
                     // Only add convenience fee if base total > 0 (for free transactions like VA settlement standard)
-                    const convenienceFeeTotal = (formData.paymentMethod === 'credit_card' && baseTotal > 0) ? 
+                    const convenienceFeeTotal = (formData.paymentMethod === 'credit_card' && baseTotal > 0) ?
                       standardMultiCommunityPricing.totalConvenienceFee : 0;
                     return (baseTotal + convenienceFeeTotal).toFixed(2);
                   }
                   // Fallback: compute using STANDARD package for display
                   const selectedProperty = hoaProperties?.find(p => p.name === formData.hoaProperty);
-                  const isVASettlement = formData.submitterType === 'settlement' && 
+                  const isVASettlement = formData.submitterType === 'settlement' &&
                     selectedProperty?.location?.toUpperCase()?.includes('VA');
                   if (isVASettlement) {
                     return '0.00';
@@ -1915,7 +2065,7 @@ const PackagePaymentStep = ({
                   const standardFormData = { ...formData, packageType: 'standard' };
                   const total = calculateTotal(standardFormData, stripePrices, hoaProperties);
                   return total.toFixed(2);
-                })()}
+                })()}`}
               </div>
             </div>
           </div>
@@ -2047,17 +2197,18 @@ const PackagePaymentStep = ({
             </div>
             <div className='text-right'>
               <div className='text-lg text-gray-500'>
-                {(() => {
-                  // Check for forced price first
+                {isPricingLoading ? '---' : (() => {
+                  // Check for builder price overrides first (per-user, then property force price)
                   const selectedProperty = hoaProperties?.find(prop => prop.name === formData.hoaProperty);
                   let basePrice = '317.95';
-                  
-                  if (selectedProperty) {
-                    // Only show forced price if submitterType is 'builder' AND public offering is NOT requested
-                    if (shouldApplyForcedPrice(formData.submitterType, formData.publicOffering, formData.infoPacket)) {
+
+                  if (shouldApplyForcedPrice(formData.submitterType, formData.publicOffering, formData.infoPacket)) {
+                    if (formData._userOverridePrice != null) {
+                      return parseFloat(formData._userOverridePrice).toFixed(2);
+                    }
+                    if (selectedProperty) {
                       const forcedPrice = getForcedPriceSync(selectedProperty);
                       if (forcedPrice !== null) {
-                        // Show forced price as base (for rush, the +$70.66 will be shown below)
                         return forcedPrice.toFixed(2);
                       }
                     }
@@ -2120,20 +2271,20 @@ const PackagePaymentStep = ({
                 </div>
               )}
               <div className='text-2xl font-bold text-orange-600'>
-                ${(() => {
+                {isPricingLoading ? '---' : `$${(() => {
                   // Use multi-community pricing if available (even if total is 0)
                   if (rushMultiCommunityPricing && rushMultiCommunityPricing.total !== undefined && rushMultiCommunityPricing.total !== null) {
                     // Calculate rush pricing for multi-community
                     const baseTotal = rushMultiCommunityPricing.total;
                     // Only add convenience fee if base total > 0 (for free transactions)
-                    const convenienceFeeTotal = (formData.paymentMethod === 'credit_card' && baseTotal > 0) ? 
+                    const convenienceFeeTotal = (formData.paymentMethod === 'credit_card' && baseTotal > 0) ?
                       rushMultiCommunityPricing.totalConvenienceFee : 0;
                     return (baseTotal + convenienceFeeTotal).toFixed(2);
                   }
                   const tempFormData = { ...formData, packageType: 'rush' };
                   const rushTotal = calculateTotal(tempFormData, stripePrices, hoaProperties);
                   return rushTotal.toFixed(2);
-                })()}
+                })()}`}
               </div>
             </div>
           </div>
@@ -2312,12 +2463,14 @@ const PackagePaymentStep = ({
               <>
                 <div className='flex justify-between'>
                   <span>Processing Fee:</span>
-                  <span>${(() => {
-                    // Check for forced price first
+                  <span>{isPricingLoading ? '---' : `$${(() => {
+                    // Check for builder price overrides first (per-user, then property force price)
                     const selectedProperty = hoaProperties?.find(prop => prop.name === formData.hoaProperty);
-                    if (selectedProperty) {
-                      // Only show forced price if submitterType is 'builder' AND public offering is NOT requested
-                      if (shouldApplyForcedPrice(formData.submitterType, formData.publicOffering, formData.infoPacket)) {
+                    if (shouldApplyForcedPrice(formData.submitterType, formData.publicOffering, formData.infoPacket)) {
+                      if (formData._userOverridePrice != null) {
+                        return parseFloat(formData._userOverridePrice).toFixed(2);
+                      }
+                      if (selectedProperty) {
                         const forcedPrice = getForcedPriceSync(selectedProperty);
                         if (forcedPrice !== null) {
                           return forcedPrice.toFixed(2);
@@ -2353,7 +2506,7 @@ const PackagePaymentStep = ({
                       return stripePrices.standard.displayAmount.toFixed(2);
                     }
                     return '317.95'; // Fallback for regular pricing
-                  })()}</span>
+                  })()}`}</span>
                 </div>
                 {formData.packageType === 'rush' && (
                   <div className='flex justify-between'>
@@ -2391,7 +2544,7 @@ const PackagePaymentStep = ({
                 )}
                 <div className='border-t border-green-200 pt-2 flex justify-between font-semibold text-green-900'>
                   <span>Total:</span>
-                  <span>${calculateTotal(formData, stripePrices, hoaProperties).toFixed(2)}</span>
+                  <span>{isPricingLoading ? '---' : `$${calculateTotal(formData, stripePrices, hoaProperties).toFixed(2)}`}</span>
                 </div>
               </>
             )}
@@ -2620,8 +2773,16 @@ const AuthModal = ({ authMode, setAuthMode, setShowAuthModal, handleAuth, resetP
   // Validation function
   const validateForm = () => {
     const errors = {};
-    
-    if (authMode === 'signup') {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+    if (showForgotPassword) {
+      // Only email is needed for the password reset request
+      if (!email.trim()) {
+        errors.email = 'Email is required';
+      } else if (!emailRegex.test(email)) {
+        errors.email = 'Please enter a valid email address';
+      }
+    } else if (authMode === 'signup') {
       // First Name validation
       if (!firstName.trim()) {
         errors.firstName = 'First name is required';
@@ -2633,7 +2794,6 @@ const AuthModal = ({ authMode, setAuthMode, setShowAuthModal, handleAuth, resetP
       }
       
       // Email validation
-      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
       if (!email.trim()) {
         errors.email = 'Email is required';
       } else if (!emailRegex.test(email)) {
@@ -2655,7 +2815,6 @@ const AuthModal = ({ authMode, setAuthMode, setShowAuthModal, handleAuth, resetP
       }
     } else {
       // Sign in validation
-      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
       if (!email.trim()) {
         errors.email = 'Email is required';
       } else if (!emailRegex.test(email)) {
@@ -3717,7 +3876,7 @@ const LenderQuestionnaireUploadStep = ({ formData, applicationId, setCurrentStep
   );
 };
 
-const ReviewSubmitStep = ({ formData, handleInputChange, stripePrices, applicationId, hoaProperties, handleSubmit, isSubmitting, setSnackbarData, setShowSnackbar }) => {
+const ReviewSubmitStep = ({ formData, handleInputChange, stripePrices, applicationId, hoaProperties, handleSubmit, isSubmitting, setSnackbarData, setShowSnackbar, user }) => {
   // Check if user just returned from payment
   const [showPaymentSuccess, setShowPaymentSuccess] = React.useState(false);
   const [multiCommunityInfo, setMultiCommunityInfo] = React.useState(null);
@@ -3793,7 +3952,8 @@ const ReviewSubmitStep = ({ formData, handleInputChange, stripePrices, applicati
                 applicationType,
                 null,
                 formData.submitterType,
-                formData.publicOffering
+                formData.publicOffering,
+                user?.id
               );
               setMultiCommunityPricing(pricing);
             }
@@ -3805,7 +3965,7 @@ const ReviewSubmitStep = ({ formData, handleInputChange, stripePrices, applicati
     };
     
     loadMultiCommunityInfo();
-  }, [formData.hoaProperty, formData.packageType, formData.submitterType, formData.publicOffering, formData.infoPacket, hoaProperties, applicationType]);
+  }, [formData.hoaProperty, formData.packageType, formData.submitterType, formData.publicOffering, formData.infoPacket, hoaProperties, applicationType, user]);
 
   // Initialize edit details when entering edit mode
   const handleStartEditDetails = () => {
@@ -4600,6 +4760,9 @@ export default function GMGResaleFlow() {
   const [customMessaging, setCustomMessaging] = useState(null);
   const [formSteps, setFormSteps] = useState([]);
 
+  // Prefetched MC pricing — populated before step 4 mounts so PackagePaymentStep has no wait
+  const [prefetchedMcPricing, setPrefetchedMcPricing] = useState(null);
+
   // Setup Realtime subscription for profile changes (email verification)
   useEffect(() => {
     if (!user || !profile) return;
@@ -5246,6 +5409,86 @@ export default function GMGResaleFlow() {
   useEffect(() => {
     // Applications state updated
   }, [applications]);
+
+  // Fetch per-user Builder pricing override whenever relevant form fields change.
+  // Lifted to the main component so ALL steps (including Review & Submit after a
+  // Stripe redirect) have the correct override price in formData._userOverridePrice.
+  useEffect(() => {
+    const fetchGlobalUserOverride = async () => {
+      if (!user || !shouldApplyForcedPrice(formData.submitterType, formData.publicOffering, formData.infoPacket)) {
+        setFormData(prev => ({ ...prev, _userOverridePrice: null, _userOverrideData: null }));
+        return;
+      }
+      const selectedProperty = (hoaProperties || []).find(p => p.name === formData.hoaProperty);
+      if (!selectedProperty) {
+        setFormData(prev => ({ ...prev, _userOverridePrice: null, _userOverrideData: null }));
+        return;
+      }
+      try {
+        const now = new Date().toISOString();
+        const { data: rows, error } = await supabase
+          .from('builder_pricing_offer_users')
+          .select(`
+            builder_user_property_pricing!inner (
+              override_price,
+              applicant_message,
+              valid_until
+            )
+          `)
+          .eq('user_id', user.id)
+          .eq('builder_user_property_pricing.hoa_property_id', selectedProperty.id)
+          .eq('builder_user_property_pricing.active', true)
+          .lte('builder_user_property_pricing.valid_from', now);
+        if (error) {
+          console.error('[fetchGlobalUserOverride] query error:', error);
+          setFormData(prev => ({ ...prev, _userOverridePrice: null, _userOverrideData: null }));
+          return;
+        }
+        const validRow = (rows || []).find(r => {
+          const offer = r.builder_user_property_pricing;
+          return offer && (offer.valid_until === null || offer.valid_until >= now);
+        });
+        const overrideData = validRow?.builder_user_property_pricing || null;
+        setFormData(prev => ({
+          ...prev,
+          _userOverridePrice: overrideData ? parseFloat(overrideData.override_price) : null,
+          _userOverrideData: overrideData,
+        }));
+      } catch (err) {
+        console.error('[fetchGlobalUserOverride] unexpected error:', err);
+        setFormData(prev => ({ ...prev, _userOverridePrice: null, _userOverrideData: null }));
+      }
+    };
+    fetchGlobalUserOverride();
+  }, [user, formData.submitterType, formData.hoaProperty, formData.publicOffering, formData.infoPacket, hoaProperties]);
+
+  // Prefetch MC pricing so PackagePaymentStep receives it ready-to-use on mount.
+  // Fires as soon as property + submitterType are known (steps 1–2), well before step 4.
+  useEffect(() => {
+    const prefetchMcPricing = async () => {
+      if (!formData.hoaProperty || !hoaProperties || applicationType === 'lender_questionnaire') {
+        setPrefetchedMcPricing(null);
+        return;
+      }
+      const selectedProperty = hoaProperties.find(p => p.name === formData.hoaProperty);
+      if (!selectedProperty?.is_multi_community) {
+        setPrefetchedMcPricing(null);
+        return;
+      }
+      try {
+        const linked = await getLinkedProperties(selectedProperty.id);
+        const [standardPricing, rushPricing] = await Promise.all([
+          calculateMultiCommunityPricing(selectedProperty.id, 'standard', applicationType, null, formData.submitterType, formData.publicOffering, user?.id),
+          calculateMultiCommunityPricing(selectedProperty.id, 'rush', applicationType, null, formData.submitterType, formData.publicOffering, user?.id),
+        ]);
+        setPrefetchedMcPricing({ linkedProperties: linked, standardPricing, rushPricing });
+      } catch (err) {
+        console.error('[prefetchMcPricing] error:', err);
+        setPrefetchedMcPricing(null);
+      }
+    };
+    prefetchMcPricing();
+  }, [formData.hoaProperty, formData.submitterType, formData.publicOffering, formData.infoPacket, hoaProperties, applicationType, user]);
 
   // Add this function to your application submission process
   // This should be called after an application is successfully created
@@ -7021,6 +7264,7 @@ export default function GMGResaleFlow() {
             testModeCode={testModeCode}
             isImpersonating={isImpersonating}
             impersonatedUser={impersonatedUser}
+            prefetchedMcPricing={prefetchedMcPricing}
           />
         );
       case 5:
@@ -7054,6 +7298,7 @@ export default function GMGResaleFlow() {
               isSubmitting={isSubmitting}
               setSnackbarData={setSnackbarData}
               setShowSnackbar={setShowSnackbar}
+              user={user}
             />
           );
         }
@@ -7072,6 +7317,7 @@ export default function GMGResaleFlow() {
             isSubmitting={isSubmitting}
             setSnackbarData={setSnackbarData}
             setShowSnackbar={setShowSnackbar}
+            user={user}
           />
         );
       default:

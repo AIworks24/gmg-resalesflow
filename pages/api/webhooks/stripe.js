@@ -130,6 +130,94 @@ export default async function handler(req, res) {
           break;
         }
 
+        // Write redemption audit record when a per-user Builder price override was applied.
+        // Primary path uses checkout metadata; fallback path resolves from the application
+        // so single-property checkouts are still counted even if metadata is incomplete.
+        if (session.metadata?.pricing_source === 'user_override' || updatedApp?.id) {
+          try {
+            let pricingId = session.metadata.builder_pricing_id || null;
+            let overrideUserId = session.metadata.override_user_id || null;
+            let appForOverride = null;
+            let canFallbackLookup = false;
+
+            if ((!pricingId || !overrideUserId) && updatedApp?.id) {
+              const { data: appRow } = await supabase
+                .from('applications')
+                .select('id, user_id, hoa_property_id, submitter_type, application_type')
+                .eq('id', updatedApp.id)
+                .single();
+              appForOverride = appRow;
+
+              // Fallback resolution is only valid for builder resale flows.
+              // Explicit metadata flag still takes precedence regardless of type.
+              canFallbackLookup =
+                session.metadata?.pricing_source === 'user_override' ||
+                (
+                  appForOverride?.submitter_type === 'builder' &&
+                  appForOverride?.application_type !== 'public_offering' &&
+                  appForOverride?.application_type !== 'info_packet' &&
+                  appForOverride?.application_type !== 'lender_questionnaire'
+                );
+
+              if (!overrideUserId) {
+                overrideUserId = appForOverride?.user_id || null;
+              }
+
+              if (canFallbackLookup && !pricingId && overrideUserId && appForOverride?.hoa_property_id) {
+                const propertyIds = [appForOverride.hoa_property_id];
+
+                const { data: linkedRows } = await supabase
+                  .from('linked_properties')
+                  .select('linked_property_id')
+                  .eq('primary_property_id', appForOverride.hoa_property_id);
+
+                for (const row of (linkedRows || [])) {
+                  if (row?.linked_property_id) propertyIds.push(row.linked_property_id);
+                }
+
+                const { getUserOverride } = await import('../../../lib/userPricingUtils');
+                for (const pid of propertyIds) {
+                  const resolved = await getUserOverride(pid, overrideUserId, supabase);
+                  if (resolved?.pricingId) {
+                    pricingId = resolved.pricingId;
+                    break;
+                  }
+                }
+              }
+            }
+
+            const { data: offer } = await supabase
+              .from('builder_user_property_pricing')
+              .select('override_price, hoa_property_id')
+              .eq('id', pricingId)
+              .single();
+            if (offer && overrideUserId && pricingId) {
+              await supabase
+                .from('builder_pricing_redemptions')
+                .upsert(
+                  {
+                    pricing_id:                pricingId,
+                    application_id:            updatedApp.id,
+                    user_id:                   overrideUserId,
+                    hoa_property_id:           offer.hoa_property_id,
+                    stripe_checkout_session_id: session.id,
+                    amount_paid:               session.amount_total / 100,
+                    override_price_snapshot:   parseFloat(offer.override_price),
+                    paid_at:                   new Date().toISOString(),
+                  },
+                  { onConflict: 'stripe_checkout_session_id', ignoreDuplicates: true }
+                );
+              console.log(`[Webhook] Builder pricing redemption recorded: offer=${pricingId}, app=${updatedApp.id}`);
+            } else if (session.metadata?.pricing_source === 'user_override') {
+              console.warn(
+                `[Webhook] Builder pricing redemption skipped: missing pricing/user metadata (session=${session.id}, app=${updatedApp?.id || 'unknown'})`
+              );
+            }
+          } catch (redemptionErr) {
+            console.error('[Webhook] Builder pricing redemption record failed (non-fatal):', redemptionErr);
+          }
+        }
+
         // Get receipt and send receipt email
         if (updatedApp) {
           try {
