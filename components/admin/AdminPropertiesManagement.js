@@ -582,6 +582,9 @@ const AdminPropertiesManagement = () => {
   // Accounting users for settlement assignee dropdown
   const [accountingUsers, setAccountingUsers] = useState([]);
 
+  // Info packet domain input (transient — domains stored in formData)
+  const [newInfoPacketDomain, setNewInfoPacketDomain] = useState('');
+
   // Snackbar helper function
   const showSnackbar = (message, type = 'success') => {
     setSnackbar({ show: true, message, type });
@@ -609,6 +612,7 @@ const AdminPropertiesManagement = () => {
     allow_public_offering: false,
     allow_info_packet: false,
     info_packet_price: null,
+    info_packet_allowed_domains: [],
     force_price_enabled: false,
     force_price_value: null,
     multi_community_comment: '',
@@ -727,6 +731,7 @@ const AdminPropertiesManagement = () => {
     });
     setLinkedProperties([]);
     setOwnerNameFromGmg(false);
+    setNewInfoPacketDomain('');
     setShowModal(true);
   };
 
@@ -802,13 +807,14 @@ const AdminPropertiesManagement = () => {
       allow_public_offering: property.allow_public_offering || false,
       allow_info_packet: property.allow_info_packet || false,
       info_packet_price: property.info_packet_price ?? null,
+      info_packet_allowed_domains: property.info_packet_allowed_domains || [],
       force_price_enabled: property.force_price_enabled || false,
       force_price_value: property.force_price_value || null,
       multi_community_comment: property.multi_community_comment || '',
       settlement_assignee_email: property.settlement_assignee_email || null
     });
     setLinkedProperties(linked);
-    
+    setNewInfoPacketDomain('');
     setShowModal(true);
   };
 
@@ -854,6 +860,7 @@ const AdminPropertiesManagement = () => {
             allow_public_offering: formData.allow_public_offering || false,
             allow_info_packet: formData.allow_info_packet || false,
             info_packet_price: formData.allow_info_packet ? (formData.info_packet_price || null) : null,
+            info_packet_allowed_domains: formData.allow_info_packet ? (formData.info_packet_allowed_domains || []) : [],
             force_price_enabled: formData.force_price_enabled || false,
             force_price_value: formData.force_price_enabled ? (formData.force_price_value || null) : null,
             multi_community_comment: formData.multi_community_comment || null,
@@ -892,6 +899,7 @@ const AdminPropertiesManagement = () => {
             allow_public_offering: formData.allow_public_offering || false,
             allow_info_packet: formData.allow_info_packet || false,
             info_packet_price: formData.allow_info_packet ? (formData.info_packet_price || null) : null,
+            info_packet_allowed_domains: formData.allow_info_packet ? (formData.info_packet_allowed_domains || []) : [],
             force_price_enabled: formData.force_price_enabled || false,
             force_price_value: formData.force_price_enabled ? (formData.force_price_value || null) : null,
             multi_community_comment: formData.multi_community_comment || null,
@@ -2337,6 +2345,65 @@ const AdminPropertiesManagement = () => {
                             className="w-32 px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                           />
                           <span className="text-xs text-gray-500">Leave blank for system default ($200.00)</span>
+                        </div>
+                      </div>
+
+                      {/* Eligible email domains */}
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          Eligible Email Domains
+                        </label>
+                        <p className="text-xs text-gray-500 mb-2">
+                          Only builders with a matching email domain will see this option. Leave empty to hide from everyone.
+                        </p>
+                        <div className="flex flex-wrap gap-2 mb-2">
+                          {(formData.info_packet_allowed_domains || []).length === 0 && (
+                            <span className="text-xs text-gray-400 italic">No domains — option hidden from all builders.</span>
+                          )}
+                          {(formData.info_packet_allowed_domains || []).map(domain => (
+                            <span key={domain} className="inline-flex items-center gap-1 px-2.5 py-1 bg-blue-50 border border-blue-200 text-blue-800 text-xs rounded-full">
+                              @{domain}
+                              <button
+                                type="button"
+                                onClick={() => setFormData({...formData, info_packet_allowed_domains: formData.info_packet_allowed_domains.filter(d => d !== domain)})}
+                                className="text-blue-400 hover:text-red-600 transition-colors"
+                              >
+                                <X className="w-3 h-3" />
+                              </button>
+                            </span>
+                          ))}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm text-gray-500 select-none">@</span>
+                          <input
+                            type="text"
+                            value={newInfoPacketDomain}
+                            onChange={(e) => setNewInfoPacketDomain(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key !== 'Enter') return;
+                              e.preventDefault();
+                              const domain = newInfoPacketDomain.trim().toLowerCase().replace(/^@/, '');
+                              if (!domain || (formData.info_packet_allowed_domains || []).includes(domain)) return;
+                              setFormData({...formData, info_packet_allowed_domains: [...(formData.info_packet_allowed_domains || []), domain].sort()});
+                              setNewInfoPacketDomain('');
+                            }}
+                            placeholder="example.com"
+                            className="w-40 px-3 py-1.5 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const domain = newInfoPacketDomain.trim().toLowerCase().replace(/^@/, '');
+                              if (!domain || (formData.info_packet_allowed_domains || []).includes(domain)) return;
+                              setFormData({...formData, info_packet_allowed_domains: [...(formData.info_packet_allowed_domains || []), domain].sort()});
+                              setNewInfoPacketDomain('');
+                            }}
+                            disabled={!newInfoPacketDomain.trim()}
+                            className="inline-flex items-center gap-1 px-3 py-1.5 bg-blue-600 text-white text-sm rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                          >
+                            <Plus className="w-3.5 h-3.5" />
+                            Add
+                          </button>
                         </div>
                       </div>
                     </div>

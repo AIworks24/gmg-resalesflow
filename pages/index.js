@@ -700,14 +700,20 @@ const HOASelectionStep = React.memo(
   }
 );
 
-const SubmitterInfoStep = React.memo(({ formData, handleInputChange, hoaProperties }) => {
+const SubmitterInfoStep = React.memo(({ formData, handleInputChange, hoaProperties, userEmail }) => {
   // Check if the selected property allows public offering statements
   const selectedProperty = formData.hoaProperty && hoaProperties
     ? hoaProperties.find(prop => prop.name === formData.hoaProperty)
     : null;
-  
+
   const canShowPublicOffering = selectedProperty?.allow_public_offering === true;
-  const canShowInfoPacket = selectedProperty?.allow_info_packet === true;
+
+  const userEmailDomain = userEmail?.split('@')[1]?.toLowerCase() ?? null;
+  const propertyDomains = selectedProperty?.info_packet_allowed_domains ?? [];
+  const isDomainEligible = propertyDomains.length > 0 &&
+    userEmailDomain !== null &&
+    propertyDomains.includes(userEmailDomain);
+  const canShowInfoPacket = selectedProperty?.allow_info_packet === true && isDomainEligible;
 
   // Check if the selected property is in North Carolina
   const isNorthCarolina = React.useMemo(() => {
@@ -6800,8 +6806,8 @@ export default function GMGResaleFlow() {
                   <h4 className='text-3xl font-bold text-gray-900 mb-2'>
                     {formData.submitterType === 'lender_questionnaire' ? 'Standard' : 'Standard Processing'}
                   </h4>
-                  <div className='flex items-baseline mb-2'>
-                    <span className='text-5xl font-extrabold text-gray-900'>
+                  <div className='flex flex-wrap items-end gap-x-2 gap-y-1 mb-2'>
+                    <span className='text-5xl lg:text-6xl font-extrabold text-gray-900 tracking-tight leading-none'>
                       {(() => {
                         if (formData.submitterType === 'lender_questionnaire') {
                           const pricing = getPricing('lender_questionnaire', false);
@@ -6810,10 +6816,24 @@ export default function GMGResaleFlow() {
                         return '$317.95';
                       })()}
                     </span>
+                    {formData.submitterType !== 'lender_questionnaire' && (
+                      <span className='text-2xl lg:text-3xl font-bold text-gray-400 mb-1'>
+                        to $450<span className='text-xl text-gray-400 font-medium ml-0.5'>*</span>
+                      </span>
+                    )}
                   </div>
-                  <p className='text-gray-500 mb-8 text-lg font-medium'>
+                  <p className={`text-gray-600 text-base font-medium ${formData.submitterType === 'lender_questionnaire' ? 'mb-8' : 'mb-4'}`}>
                     {formData.submitterType === 'lender_questionnaire' ? '10 Calendar Days' : '15 calendar days turnaround'}
                   </p>
+                  {formData.submitterType !== 'lender_questionnaire' && (
+                    <div className='mb-8 flex items-start gap-2 p-3 bg-gray-50 rounded-xl border border-gray-100'>
+                      <Info className='w-4 h-4 text-gray-400 flex-shrink-0 mt-0.5' />
+                      <p className='text-xs text-gray-500 leading-relaxed'>
+                        <span className='font-semibold text-gray-600'>* Specific pricing depends on community & location.</span><br/>
+                        Does not include credit card processing fees.
+                      </p>
+                    </div>
+                  )}
                   <div className='flex-1 border-t border-gray-100 pt-8 mb-8'>
                     <ul className='space-y-5'>
                       {[
@@ -6863,8 +6883,8 @@ export default function GMGResaleFlow() {
                   <h4 className='text-3xl font-bold text-gray-900 mb-2'>
                     {formData.submitterType === 'lender_questionnaire' ? 'Rush' : 'Rush Processing'}
                   </h4>
-                  <div className='flex items-baseline mb-2'>
-                    <span className='text-5xl font-extrabold text-gray-900'>
+                  <div className='flex flex-wrap items-end gap-x-2 gap-y-1 mb-2'>
+                    <span className='text-5xl lg:text-6xl font-extrabold text-gray-900 tracking-tight leading-none'>
                       {(() => {
                         if (formData.submitterType === 'lender_questionnaire') {
                           const pricing = getPricing('lender_questionnaire', true);
@@ -6873,10 +6893,24 @@ export default function GMGResaleFlow() {
                         return '$388.61';
                       })()}
                     </span>
+                    {formData.submitterType !== 'lender_questionnaire' && (
+                      <span className='text-2xl lg:text-3xl font-bold text-orange-400 mb-1'>
+                        to $550<span className='text-xl text-orange-400 font-medium ml-0.5'>*</span>
+                      </span>
+                    )}
                   </div>
-                  <p className='text-gray-500 mb-8 text-lg font-medium'>
+                  <p className={`text-gray-600 text-base font-medium ${formData.submitterType === 'lender_questionnaire' ? 'mb-8' : 'mb-4'}`}>
                     5 business days guaranteed
                   </p>
+                  {formData.submitterType !== 'lender_questionnaire' && (
+                    <div className='mb-8 flex items-start gap-2 p-3 bg-orange-50/50 rounded-xl border border-orange-100/50'>
+                      <Info className='w-4 h-4 text-orange-400 flex-shrink-0 mt-0.5' />
+                      <p className='text-xs text-gray-500 leading-relaxed'>
+                        <span className='font-semibold text-gray-700'>* Specific pricing depends on community & location.</span><br/>
+                        Does not include credit card processing fees.
+                      </p>
+                    </div>
+                  )}
                   <div className='flex-1 border-t border-orange-100 pt-8 mb-8'>
                     <ul className='space-y-5'>
                       {[
@@ -7233,6 +7267,7 @@ export default function GMGResaleFlow() {
             formData={formData}
             handleInputChange={handleInputChange}
             hoaProperties={hoaProperties}
+            userEmail={user?.email}
           />
         );
       case 3:

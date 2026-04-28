@@ -226,6 +226,14 @@ export default async function handler(req, res) {
     // Charged per association: uses property's info_packet_price or env-var default ($200)
     // Supports multi-community (one line item per linked association)
     if (formData?.submitterType === 'builder' && formData?.infoPacket) {
+      // Server-side domain eligibility check — must match client-side gate in SubmitterInfoStep
+      const requesterEmail = identity.profile?.email || identity.session?.user?.email || '';
+      const requesterDomain = requesterEmail.split('@')[1]?.toLowerCase() ?? '';
+      const propertyDomains = hoaProperty.info_packet_allowed_domains ?? [];
+      if (propertyDomains.length === 0 || !propertyDomains.includes(requesterDomain)) {
+        return res.status(403).json({ error: 'Your account is not eligible to purchase an Info Packet.' });
+      }
+
       const TRANSFER_THRESHOLD_CENTS = 20000; // $200.00
       const TRANSFER_AMOUNT_PER_ITEM_CENTS = 2100; // $21.00 per property item
       const rushFeeCents = packageType === 'rush' ? 7066 : 0;

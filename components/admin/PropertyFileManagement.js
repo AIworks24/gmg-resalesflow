@@ -48,6 +48,7 @@ const PropertyFileManagement = ({ propertyId, propertyName, initialDocumentKey }
   const [loading, setLoading] = useState(true);
   const [expandedSections, setExpandedSections] = useState({});
   const [pendingDates, setPendingDates] = useState({}); // Track pending date values per document
+  const [dateErrors, setDateErrors] = useState({}); // Track validation errors for date inputs per document
   const hasExpandedInitialSection = useRef(false); // Track if we've already expanded the initial section
   const [documentOrder, setDocumentOrder] = useState([]); // Custom order for document types
   const [draggedIndex, setDraggedIndex] = useState(null); // Index of document being dragged
@@ -324,6 +325,8 @@ const PropertyFileManagement = ({ propertyId, propertyName, initialDocumentKey }
   const handleUpload = async () => {
     if (!selectedFile || !selectedDocType) return;
 
+    if (!isNotApplicable && !expirationDate) return;
+
     setIsUploading(true);
     setUploadProgress(0);
 
@@ -464,6 +467,13 @@ const PropertyFileManagement = ({ propertyId, propertyName, initialDocumentKey }
   };
 
   const toggleDocumentNotApplicable = async (documentId, currentValue) => {
+    // Turning N/A on clears any date error; turning it off is allowed (date becomes required via UI)
+    setDateErrors(prev => {
+      const updated = { ...prev };
+      delete updated[documentId];
+      return updated;
+    });
+
     try {
       const newValue = !currentValue;
       const { error } = await supabase
@@ -626,6 +636,7 @@ const PropertyFileManagement = ({ propertyId, propertyName, initialDocumentKey }
               
               const hasExpiringSoon = documents.some(doc => isExpiringSoon(doc.expiration_date, doc.is_not_applicable));
               const hasExpired = documents.some(doc => isExpired(doc.expiration_date, doc.is_not_applicable));
+              const hasMissingRequired = documents.some(doc => !doc.is_not_applicable && !doc.expiration_date);
               
               return (
                 <div
@@ -679,6 +690,12 @@ const PropertyFileManagement = ({ propertyId, propertyName, initialDocumentKey }
                               <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-red-100 text-red-700 border border-red-200">
                                 <AlertCircle className="h-3.5 w-3.5" />
                                 <span>Expired</span>
+                              </div>
+                            )}
+                            {hasMissingRequired && (
+                              <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-orange-100 text-orange-700 border border-orange-200">
+                                <AlertCircle className="h-3.5 w-3.5" />
+                                <span>Action Required</span>
                               </div>
                             )}
                           </div>
@@ -746,7 +763,17 @@ const PropertyFileManagement = ({ propertyId, propertyName, initialDocumentKey }
                                     )}
                                   </div>
                                   
-                                  <div className="space-y-3 bg-gray-50 rounded-lg p-3 border border-gray-200">
+                                  <div className={`space-y-3 rounded-lg p-3 border ${
+                                    !doc.is_not_applicable && !doc.expiration_date
+                                      ? 'bg-red-50 border-red-200'
+                                      : 'bg-gray-50 border-gray-200'
+                                  }`}>
+                                    {!doc.is_not_applicable && !doc.expiration_date && (
+                                      <div className="flex items-center gap-1.5 text-xs text-red-600 font-medium">
+                                        <AlertCircle className="h-3.5 w-3.5 flex-shrink-0" />
+                                        <span>Required: select N/A or enter an expiration date</span>
+                                      </div>
+                                    )}
                                     <div className="flex items-center gap-2">
                                       <label className="flex items-center gap-2 text-sm cursor-pointer">
                                         <input
@@ -777,32 +804,48 @@ const PropertyFileManagement = ({ propertyId, propertyName, initialDocumentKey }
                                               }));
                                             }}
                                             onBlur={(e) => {
-                                              // Only save when the date picker closes (onBlur fires)
-                                              // When navigating months with arrows, the picker stays open so onBlur doesn't fire
-                                              // When clicking a specific date, the picker closes and onBlur fires immediately
                                               const documentId = doc.id;
                                               const newValue = e.target.value;
                                               const currentValue = doc.expiration_date || '';
-                                              
+
                                               // Clear pending date
                                               setPendingDates(prev => {
                                                 const updated = { ...prev };
                                                 delete updated[documentId];
                                                 return updated;
                                               });
-                                              
-                                              // Only update if the value actually changed
+
+                                              // Block clearing the date when N/A is not checked
+                                              if (!newValue && !doc.is_not_applicable) {
+                                                setDateErrors(prev => ({ ...prev, [documentId]: true }));
+                                                return;
+                                              }
+
+                                              // Clear any existing error and save
+                                              setDateErrors(prev => {
+                                                const updated = { ...prev };
+                                                delete updated[documentId];
+                                                return updated;
+                                              });
+
                                               if (newValue !== currentValue) {
                                                 updateExpirationDate(documentId, newValue || null);
                                               }
                                             }}
                                             className={`text-sm border-2 rounded-lg px-3 py-1.5 font-medium transition-all ${
+                                              dateErrors[doc.id] ? 'border-red-400 bg-red-50 text-red-700' :
                                               expired ? 'border-red-300 bg-red-50 text-red-700' : 
                                               expiringSoon ? 'border-amber-300 bg-amber-50 text-amber-700' : 
                                               'border-gray-300 bg-white hover:border-green-400 focus:border-green-500 focus:ring-2 focus:ring-green-500'
                                             }`}
                                           />
-                                          {expired && (
+                                          {dateErrors[doc.id] && (
+                                            <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-semibold bg-red-100 text-red-700 border border-red-200">
+                                              <AlertCircle className="h-3 w-3" />
+                                              Date required
+                                            </span>
+                                          )}
+                                          {!dateErrors[doc.id] && expired && (
                                             <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-semibold bg-red-100 text-red-700 border border-red-200">
                                               Expired
                                             </span>
@@ -999,6 +1042,11 @@ const PropertyFileManagement = ({ propertyId, propertyName, initialDocumentKey }
                   </div>
 
                   <div>
+                    <p className="text-sm font-medium text-gray-700 mb-3">
+                      Expiration Status <span className="text-red-500">*</span>
+                      <span className="text-xs text-gray-500 font-normal ml-1">(required — select one)</span>
+                    </p>
+
                     <div className="mb-3">
                       <label className="flex items-center gap-2 text-sm font-medium text-gray-700">
                         <input
@@ -1015,7 +1063,7 @@ const PropertyFileManagement = ({ propertyId, propertyName, initialDocumentKey }
                         <span>N/A (Not Applicable)</span>
                       </label>
                       <p className="text-xs text-gray-500 mt-1 ml-6">
-                        Check if expiration date is not applicable for this document
+                        Check if an expiration date does not apply to this document
                       </p>
                     </div>
                     
@@ -1023,17 +1071,24 @@ const PropertyFileManagement = ({ propertyId, propertyName, initialDocumentKey }
                       <>
                         <label className="block text-sm font-medium text-gray-700 mb-2">
                           <Calendar className="h-4 w-4 inline mr-1" />
-                          Expiration Date <span className="text-gray-400">(optional)</span>
+                          Expiration Date <span className="text-red-500">*</span>
                         </label>
                         <input
                           type="date"
                           value={expirationDate}
                           onChange={(e) => setExpirationDate(e.target.value)}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500"
+                          className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 ${
+                            selectedFile && !expirationDate
+                              ? 'border-red-400 bg-red-50'
+                              : 'border-gray-300'
+                          }`}
                         />
-                        <p className="text-xs text-gray-500 mt-1">
-                          Set when this document expires
-                        </p>
+                        {selectedFile && !expirationDate && (
+                          <p className="text-xs text-red-600 mt-1 flex items-center gap-1">
+                            <AlertCircle className="h-3.5 w-3.5" />
+                            Required: enter an expiration date or check N/A above
+                          </p>
+                        )}
                       </>
                     )}
                     {isNotApplicable && (
@@ -1057,7 +1112,7 @@ const PropertyFileManagement = ({ propertyId, propertyName, initialDocumentKey }
               </button>
               <button
                 onClick={handleUpload}
-                disabled={!selectedFile || isUploading}
+                disabled={!selectedFile || isUploading || (!isNotApplicable && !expirationDate)}
                 className="px-6 py-2.5 bg-gradient-to-r from-green-600 to-green-700 text-white rounded-xl hover:from-green-700 hover:to-green-800 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 font-semibold shadow-md hover:shadow-lg transform hover:scale-105 disabled:transform-none"
               >
                 {isUploading ? (
