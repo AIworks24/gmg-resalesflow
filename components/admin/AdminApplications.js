@@ -8,6 +8,21 @@ const formatPropertyAddress = (address, unitNumber) => {
   if (!unitNumber || unitNumber === 'N/A' || unitNumber.trim() === '') return address;
   return `${address} ${unitNumber}`;
 };
+
+// Returns the best settlement form record: prefers the most recent completed one,
+// falls back to the most recent form with data, then the most recent overall.
+// This is necessary because multiple empty records can exist alongside completed ones.
+const findBestSettlementForm = (forms, groupId = undefined) => {
+  const filtered = (forms || []).filter(f =>
+    f.form_type === 'settlement_form' &&
+    (groupId !== undefined ? f.property_group_id === groupId : !f.property_group_id)
+  );
+  const completed = filtered.filter(f => f.status === 'completed');
+  if (completed.length > 0) return completed[completed.length - 1];
+  const withData = filtered.filter(f => f.form_data && Object.keys(f.form_data).length > 0);
+  if (withData.length > 0) return withData[withData.length - 1];
+  return filtered[filtered.length - 1];
+};
 import {
   FileText,
   CheckCircle,
@@ -888,9 +903,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
       let formsCompleted = false;
       
       if (isSettlementApp) {
-        const settlementForm = application.property_owner_forms?.find(
-          form => form.form_type === 'settlement_form' && form.property_group_id === group.id
-        );
+        const settlementForm = findBestSettlementForm(application.property_owner_forms, group.id);
         const settlementFormStatus = settlementForm?.status || 'not_started';
         formsCompleted = settlementFormStatus === 'completed';
         
@@ -1067,7 +1080,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
     if (isSettlementApp) {
       // Settlement workflow - 3 tasks (Form + PDF + Email)
       // Check both form status AND completion timestamps (tasks can be completed via /api/complete-task)
-      const settlementForm = application.property_owner_forms?.find(form => form.form_type === 'settlement_form');
+      const settlementForm = findBestSettlementForm(application.property_owner_forms);
       const settlementFormStatus = settlementForm?.status || 'not_started';
       const settlementFormCompleted = !!application.settlement_form_completed_at || settlementFormStatus === 'completed';
       const hasPDF = !!application.pdf_url || !!application.pdf_completed_at;
@@ -1992,19 +2005,8 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
     
     if (isSettlementApp) {
       // Settlement application - for multi-community, check forms per property group
-      let settlementForm;
-      if (group?.id) {
-        // Multi-community: find settlement form for this specific property group
-        settlementForm = application.property_owner_forms?.find(
-          form => form.form_type === 'settlement_form' && form.property_group_id === group.id
-        );
-      } else {
-        // Single property: find settlement form at application level
-        settlementForm = application.property_owner_forms?.find(
-          form => form.form_type === 'settlement_form' && !form.property_group_id
-        );
-      }
-      
+      const settlementForm = findBestSettlementForm(application.property_owner_forms, group?.id);
+
       // Check settlement form status - use settlement_form_completed_at if available, otherwise check form status
       let settlementFormStatus = 'not_started';
       if (settlementForm?.status === 'completed') {
@@ -2396,8 +2398,15 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
         query = query.eq('property_group_id', group.id);
       }
       
-      let { data: formData, error: formError } = await query.single();
-      
+      // Prefer the most recent completed form; fall back to most recent by id.
+      // Using .maybeSingle() after ordering avoids false PGRST116 errors when multiple
+      // records exist, which previously caused new empty forms to be created on every view.
+      let { data: formData, error: formError } = await query
+        .order('completed_at', { ascending: false, nullsFirst: false })
+        .order('id', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
       // Special handling: If we found a form without property_group_id in a multi-community context,
       // treat it as "not found" and create a new form for this property group
       if (formData && (formType === 'inspection' || formType === 'settlement' || formType === 'resale') && group?.id && !formData.property_group_id) {
@@ -2761,19 +2770,8 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
     try {
       setGeneratingPDF(true);
 
-      // Get settlement form data - filter by property_group_id for multi-community
-      let settlementForm;
-      if (group?.id) {
-        // Multi-community: find settlement form for this specific property group
-        settlementForm = selectedApplication.property_owner_forms?.find(
-          form => form.form_type === 'settlement_form' && form.property_group_id === group.id
-        );
-      } else {
-        // Single property: find settlement form without property_group_id
-        settlementForm = selectedApplication.property_owner_forms?.find(
-          form => form.form_type === 'settlement_form' && !form.property_group_id
-        );
-      }
+      // Get settlement form data - prefer the most recent completed form
+      const settlementForm = findBestSettlementForm(selectedApplication.property_owner_forms, group?.id);
 
       if (!settlementForm) {
         showSnackbar('Settlement form not found', 'error');
@@ -6202,7 +6200,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
 
                         return (
                           <>
-                             <TaskCard step="1" status={taskStatuses.settlement} title="Settlement Form" description="Complete form with assessment details" completedAt={selectedApplication.settlement_form_completed_at || selectedApplication.property_owner_forms?.find(f => f.form_type === 'settlement_form' && !f.property_group_id)?.completed_at} useFormCompletionDateFormat>
+                             <TaskCard step="1" status={taskStatuses.settlement} title="Settlement Form" description="Complete form with assessment details" completedAt={selectedApplication.settlement_form_completed_at || findBestSettlementForm(selectedApplication.property_owner_forms)?.completed_at} useFormCompletionDateFormat>
                                 <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2">
                                    <button onClick={() => handleCompleteForm(selectedApplication.id, 'settlement')} disabled={loadingFormData || !!selectedApplication?.processing_locked} className="w-full sm:w-auto px-3 sm:px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 active:bg-gray-100 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed">
                                       {loadingFormData ? (
