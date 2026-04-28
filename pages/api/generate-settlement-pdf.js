@@ -52,26 +52,25 @@ export default async function handler(req, res) {
       .select(`
         *,
         hoa_properties(name, location),
-        property_owner_forms(id, form_type, form_data, property_group_id)
+        property_owner_forms(id, form_type, status, completed_at, form_data, property_group_id)
       `)
       .eq('id', applicationId)
       .single();
 
     if (appError) throw appError;
 
-    // Get settlement form from nested data - filter by property_group_id for multi-community
-    let settlementForm;
-    if (propertyGroupId) {
-      // Multi-community: find settlement form for this specific property group
-      settlementForm = application.property_owner_forms?.find(
-        (f) => f.form_type === 'settlement_form' && f.property_group_id === propertyGroupId
-      );
-    } else {
-      // Single property: find settlement form without property_group_id
-      settlementForm = application.property_owner_forms?.find(
-        (f) => f.form_type === 'settlement_form' && !f.property_group_id
-      );
-    }
+    // Get settlement form from nested data - prefer the most recent completed form.
+    // Multiple empty records may exist alongside completed ones; always pick the best one.
+    const allSettlementForms = (application.property_owner_forms || []).filter(f =>
+      f.form_type === 'settlement_form' &&
+      (propertyGroupId ? f.property_group_id === propertyGroupId : !f.property_group_id)
+    );
+    const completedForms = allSettlementForms.filter(f => f.status === 'completed');
+    const formsWithData = allSettlementForms.filter(f => f.form_data && Object.keys(f.form_data).length > 0);
+    const settlementForm =
+      completedForms[completedForms.length - 1] ||
+      formsWithData[formsWithData.length - 1] ||
+      allSettlementForms[allSettlementForms.length - 1];
 
     // Use form_data from database if available, otherwise use client formData
     const formData = settlementForm?.form_data || formDataFromClient || {};
