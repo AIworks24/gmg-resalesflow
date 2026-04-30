@@ -864,6 +864,25 @@ async function handleCorrectionPayment(session, stripe, supabase) {
 
   console.log(`[Webhook][Correction] Application ${app.id} unlocked. correctionType=${correctionType}`);
 
+  // For property corrections, ensure per-group forms exist (idempotent safety net).
+  // correct-primary-property.js creates them proactively, but this catches any edge case
+  // where the endpoint ran before our fix was deployed.
+  if (correctionType === 'additional_property') {
+    try {
+      const { createPropertyOwnerFormsForGroups } = require('../../../lib/groupingService');
+      const { data: correctionGroups } = await supabase
+        .from('application_property_groups')
+        .select('id, property_name')
+        .eq('application_id', app.id);
+      if (correctionGroups && correctionGroups.length > 0) {
+        await createPropertyOwnerFormsForGroups(app.id, correctionGroups);
+        console.log(`[Webhook][Correction] Per-group forms ensured for application ${app.id}`);
+      }
+    } catch (formErr) {
+      console.error(`[Webhook][Correction] Per-group form creation failed (non-fatal) for application ${app.id}:`, formErr);
+    }
+  }
+
   // Send receipt email (reuse existing sendInvoiceReceiptEmail)
   const impersonationMeta = app.impersonation_metadata;
   const shouldSendEmail   = !(impersonationMeta && impersonationMeta.send_emails === false);
@@ -1363,7 +1382,7 @@ async function autoAssignApplication(applicationId, supabase) {
 // Helper function to handle multi-community applications
 async function handleMultiCommunityApplication(applicationId, metadata) {
   const { createClient } = require('@supabase/supabase-js');
-  const { createPropertyGroups, generateDocumentsForAllGroups } = require('../../../lib/groupingService');
+  const { createPropertyGroups, generateDocumentsForAllGroups, createPropertyOwnerFormsForGroups } = require('../../../lib/groupingService');
   const { deleteCachePattern } = require('../../../lib/redis');
   
   const supabase = createClient(
@@ -1435,11 +1454,12 @@ async function handleMultiCommunityApplication(applicationId, metadata) {
       console.warn(`[MC] Failed to create notifications for application ${applicationId}:`, notifError);
     }
 
+    // Create property owner forms for each group BEFORE PDF generation so that
+    // admin workflow forms always exist even if PDF generation later fails/times out.
+    await createPropertyOwnerFormsForGroups(applicationId, groups);
+
     // Generate documents for all groups (slow - PDFs for each property)
     await generateDocumentsForAllGroups(applicationId, application);
-
-    // Create property owner forms for each group (for admin workflow)
-    await createPropertyOwnerFormsForGroups(applicationId, groups);
 
   } catch (error) {
     console.error('Error handling multi-community application:', error);
@@ -1448,6 +1468,18 @@ async function handleMultiCommunityApplication(applicationId, metadata) {
       await createPropertyOwnerForms(applicationId, metadata);
     } catch (fallbackError) {
       console.error('Fallback to single property flow also failed:', fallbackError);
+    }
+    // Also attempt per-group form creation in case groups were created before the error
+    try {
+      const { data: existingGroups } = await supabase
+        .from('application_property_groups')
+        .select('id, property_name')
+        .eq('application_id', applicationId);
+      if (existingGroups && existingGroups.length > 0) {
+        await createPropertyOwnerFormsForGroups(applicationId, existingGroups);
+      }
+    } catch (groupFormError) {
+      console.warn(`[MC] Failed to create per-group forms in fallback for application ${applicationId}:`, groupFormError);
     }
     // Ensure status is set even on failure so the app doesn't get stuck
     await supabase
@@ -1466,52 +1498,5 @@ async function handleMultiCommunityApplication(applicationId, metadata) {
   }
 }
 
-// Helper function to create property owner forms for each group
-async function createPropertyOwnerFormsForGroups(applicationId, groups) {
-  const { createClient } = require('@supabase/supabase-js');
-  const { getApplicationTypeData } = require('../../../lib/applicationTypes');
-  
-  const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL,
-    process.env.SUPABASE_SERVICE_ROLE_KEY
-  );
-
-  try {
-    // Get application details
-    const { data: application, error: appError } = await supabase
-      .from('applications')
-      .select('application_type')
-      .eq('id', applicationId)
-      .single();
-
-    if (appError) {
-      console.error('Error fetching application for group forms:', appError);
-      return;
-    }
-
-    // Get application type data to determine required forms
-    const appTypeData = await getApplicationTypeData(application.application_type);
-    const requiredForms = appTypeData.required_forms || [];
-
-    // Create forms for each group
-    for (const group of groups) {
-      for (const formType of requiredForms) {
-        await supabase
-          .from('property_owner_forms')
-          .insert({
-            application_id: applicationId,
-            form_type: formType,
-            property_group_id: group.id,  // Associate form with specific property group
-            status: 'not_started',
-            access_token: generateAccessToken(),
-            expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
-          });
-      }
-      console.log(`Created ${requiredForms.length} forms for group: ${group.property_name}`);
-    }
-
-    console.log(`Successfully created forms for ${groups.length} property groups`);
-  } catch (error) {
-    console.error('Error creating property owner forms for groups:', error);
-  }
-} 
+// createPropertyOwnerFormsForGroups lives in lib/groupingService.js (idempotent, shared with
+// correct-primary-property.js and handleCorrectionPayment). Imported via require() at call sites.
