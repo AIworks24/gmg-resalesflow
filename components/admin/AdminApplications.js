@@ -2407,23 +2407,50 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
         .limit(1)
         .maybeSingle();
 
-      // Special handling: If we found a form without property_group_id in a multi-community context,
-      // treat it as "not found" and create a new form for this property group
+      // If we found a form that belongs to no group in a per-group context, discard it —
+      // we need a group-scoped form instead.
       if (formData && (formType === 'inspection' || formType === 'settlement' || formType === 'resale') && group?.id && !formData.property_group_id) {
-        formError = { code: 'PGRST116' }; // Simulate "not found" to trigger form creation
         formData = null;
       }
 
-      // If no form exists, create it
+      // Normalize: maybeSingle() returns {data:null, error:null} for 0 rows (unlike single()
+      // which returned PGRST116). Treat null/null identically so the creation block below fires.
+      if (!formData && !formError) {
+        formError = { code: 'PGRST116' };
+      }
+
+      // If no form exists for this group, create one and seed it from any existing ungrouped
+      // form so the admin sees their previous work rather than a blank slate.
       if (formError && formError.code === 'PGRST116') {
+        // Look for an existing ungrouped form to pre-populate from
+        let seedFormData = null;
+        let seedResponseData = null;
+        if (group?.id) {
+          const { data: ungroupedForm } = await supabase
+            .from('property_owner_forms')
+            .select('form_data, response_data')
+            .eq('application_id', applicationId)
+            .eq('form_type', formTypeValue)
+            .is('property_group_id', null)
+            .order('id', { ascending: false })
+            .limit(1)
+            .maybeSingle();
+          if (ungroupedForm) {
+            seedFormData = ungroupedForm.form_data;
+            seedResponseData = ungroupedForm.response_data;
+          }
+        }
+
         const formDataToInsert = {
           application_id: applicationId,
           form_type: formTypeValue,
-          status: 'not_started',
+          status: seedFormData || seedResponseData ? 'in_progress' : 'not_started',
           access_token: crypto.randomUUID(),
           recipient_email: appData.hoa_properties?.property_owner_email || appData.submitter_email || 'admin@gmgva.com',
           expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
-          created_at: new Date().toISOString()
+          created_at: new Date().toISOString(),
+          ...(seedFormData && { form_data: seedFormData }),
+          ...(seedResponseData && { response_data: seedResponseData }),
         };
         
         // For inspection, settlement, and resale forms in multi-community apps, associate with property group

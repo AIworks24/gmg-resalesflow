@@ -32,13 +32,18 @@ export default async function handler(req, res) {
     }
 
     // Get search query parameter
-    const { q = '', limit = 10 } = req.query;
+    const { q = '', limit = 10, roles } = req.query;
     const searchTerm = (q || '').trim();
     const limitNum = Math.min(parseInt(limit) || 10, 20); // Max 20 results
 
     if (!searchTerm || searchTerm.length < 2) {
       return res.status(200).json({ users: [] });
     }
+
+    // Determine which roles to search
+    const allowedRoles = roles
+      ? (Array.isArray(roles) ? roles : roles.split(',')).map(r => r.trim()).filter(Boolean)
+      : ['admin', 'staff', 'accounting'];
 
     // Check if search term looks like a complete email address
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -48,7 +53,7 @@ export default async function handler(req, res) {
     let query = supabase
       .from('profiles')
       .select('id, email, first_name, last_name, role')
-      .in('role', ['admin', 'staff', 'accounting'])
+      .in('role', allowedRoles)
       .eq('active', true)
       .is('deleted_at', null);
 

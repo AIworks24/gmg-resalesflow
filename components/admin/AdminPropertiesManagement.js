@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef, forwardRef, useImperativeHandle } from 'react';
 import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
 import { useRouter } from 'next/router';
 import useSWR from 'swr';
@@ -32,7 +32,8 @@ import {
   ArrowUpDown,
   ArrowUp,
   ArrowDown,
-  Filter
+  Filter,
+  Tag
 } from 'lucide-react';
 import { 
   getLinkedProperties, 
@@ -62,6 +63,488 @@ const normalizeLocation = (location) => {
   }
   return '';
 };
+
+// ─── Per-user Builder pricing sub-panel ──────────────────────────────────────
+
+function formatDate(iso) {
+  if (!iso) return '';
+  return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+const EmailTagInput = forwardRef(function EmailTagInput({ tags, onAdd, onRemove, placeholder, searchRoles }, ref) {
+  const [input, setInput] = useState('');
+  const [suggestions, setSuggestions] = useState([]);
+  const [showDropdown, setShowDropdown] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(-1);
+  const inputRef = useRef(null);
+  const dropdownRef = useRef(null);
+  const searchTimeout = useRef(null);
+  const instanceId = useRef(`email-tag-${Math.random().toString(36).slice(2)}`);
+
+  useImperativeHandle(ref, () => ({
+    getPendingEmail: () => input.trim() || null,
+  }));
+
+  const commitEmail = (email) => {
+    const normalized = email.trim().toLowerCase();
+    if (!normalized) return;
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) return;
+    if (!tags.includes(normalized)) onAdd(normalized);
+    setInput('');
+    setSuggestions([]);
+    setShowDropdown(false);
+    setActiveIndex(-1);
+  };
+
+  const handleChange = (e) => {
+    const val = e.target.value;
+    // Commit on comma
+    if (val.endsWith(',')) {
+      commitEmail(val.slice(0, -1));
+      return;
+    }
+    setInput(val);
+    setActiveIndex(-1);
+
+    clearTimeout(searchTimeout.current);
+    if (val.trim().length < 2) {
+      setSuggestions([]);
+      setShowDropdown(false);
+      return;
+    }
+    searchTimeout.current = setTimeout(async () => {
+      try {
+        const rolesParam = searchRoles ? `&roles=${searchRoles}` : '';
+        const res = await fetch(`/api/admin/search-users-by-email?q=${encodeURIComponent(val.trim())}${rolesParam}`);
+        if (!res.ok) return;
+        const json = await res.json();
+        const filtered = (json.users || []).filter(u => !tags.includes(u.email));
+        setSuggestions(filtered);
+        setShowDropdown(filtered.length > 0);
+      } catch {}
+    }, 200);
+  };
+
+  const handleKeyDown = (e) => {
+    if (showDropdown && suggestions.length > 0) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); setActiveIndex(i => Math.min(i + 1, suggestions.length - 1)); return; }
+      if (e.key === 'ArrowUp')   { e.preventDefault(); setActiveIndex(i => Math.max(i - 1, -1)); return; }
+      if (e.key === 'Enter' && activeIndex >= 0) { e.preventDefault(); commitEmail(suggestions[activeIndex].email); return; }
+      if (e.key === 'Escape') { setShowDropdown(false); setActiveIndex(-1); return; }
+    }
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); commitEmail(input); }
+    else if (e.key === 'Backspace' && !input && tags.length > 0) { onRemove(tags[tags.length - 1]); }
+  };
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    const handler = (e) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target) &&
+          inputRef.current && !inputRef.current.contains(e.target)) {
+        setShowDropdown(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  return (
+    <div className="relative">
+      <div
+        className="flex flex-wrap gap-1 min-h-[36px] px-2 py-1 border border-gray-300 rounded focus-within:ring-2 focus-within:ring-blue-400 bg-white cursor-text"
+        onClick={() => inputRef.current?.focus()}
+      >
+        {tags.map((email) => (
+          <span key={email} className="inline-flex items-center gap-1 bg-blue-100 text-blue-800 text-xs px-2 py-0.5 rounded-full">
+            {email}
+            <button type="button" onClick={() => onRemove(email)} className="text-blue-500 hover:text-blue-700 leading-none">&times;</button>
+          </span>
+        ))}
+        <input
+          ref={inputRef}
+          id={instanceId.current}
+          type="text"
+          value={input}
+          onChange={handleChange}
+          onKeyDown={handleKeyDown}
+          onBlur={() => { setTimeout(() => { if (!dropdownRef.current?.matches(':hover')) { setShowDropdown(false); commitEmail(input); } }, 150); }}
+          placeholder={tags.length === 0 ? placeholder : ''}
+          className="flex-1 min-w-[140px] text-sm outline-none bg-transparent"
+          autoComplete="off"
+        />
+      </div>
+      {showDropdown && suggestions.length > 0 && (
+        <ul
+          ref={dropdownRef}
+          className="absolute z-50 left-0 right-0 mt-1 bg-white border border-gray-200 rounded shadow-lg max-h-48 overflow-y-auto text-sm"
+        >
+          {suggestions.map((u, i) => (
+            <li
+              key={u.id}
+              onMouseDown={(e) => { e.preventDefault(); commitEmail(u.email); }}
+              className={`px-3 py-2 cursor-pointer flex items-center gap-2 ${i === activeIndex ? 'bg-blue-50' : 'hover:bg-gray-50'}`}
+            >
+              <span className="font-medium text-gray-800 truncate">{u.email}</span>
+              {u.name && u.name !== u.email && <span className="text-gray-400 text-xs truncate">{u.name}</span>}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+});
+
+function PerUserBuilderPricingPanel({ propertyId, userRole, supabase }) {
+  const [offers, setOffers] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [success, setSuccess] = useState(false);
+  const [showForm, setShowForm] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  // Multi-email tag input for new offer
+  const [emailTags, setEmailTags] = useState([]);
+  const emailTagInputRef = useRef(null);
+
+  // Add-users-to-existing-offer state: keyed by offer id
+  const [addEmailsState, setAddEmailsState] = useState({}); // { [offerId]: string[] }
+  const [addingSaving, setAddingSaving] = useState({}); // { [offerId]: bool }
+  const [showAddUsers, setShowAddUsers] = useState({}); // { [offerId]: bool }
+
+  const [formState, setFormState] = useState({
+    override_price: '',
+    notes: '',
+  });
+
+  const loadOffers = useCallback(async () => {
+    if (!propertyId) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/admin/user-builder-pricing?propertyId=${propertyId}`, {
+        headers: { Authorization: `Bearer ${(await supabase.auth.getSession()).data.session?.access_token}` },
+      });
+      if (!res.ok) throw new Error('Failed to load offers');
+      setOffers(await res.json());
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [propertyId, supabase]);
+
+  useEffect(() => { loadOffers(); }, [loadOffers]);
+
+  const getToken = async () => (await supabase.auth.getSession()).data.session?.access_token;
+
+  const handleCreate = async (e) => {
+    e.preventDefault();
+    // Also capture any email typed but not yet committed via Enter
+    const pending = emailTagInputRef.current?.getPendingEmail();
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const allEmails = [...emailTags];
+    if (pending && emailRegex.test(pending) && !allEmails.includes(pending)) {
+      allEmails.push(pending);
+    }
+    if (allEmails.length === 0) { setError('Add at least one email.'); return; }
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await fetch('/api/admin/user-builder-pricing', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${await getToken()}` },
+        body: JSON.stringify({
+          propertyId,
+          emails: allEmails,
+          overridePrice: parseFloat(formState.override_price),
+          notes: formState.notes || null,
+        }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error || 'Failed to create offer');
+      setShowForm(false);
+      setEmailTags([]);
+      setFormState({ override_price: '', notes: '' });
+      setSuccess(true);
+      setTimeout(() => setSuccess(false), 4000);
+      loadOffers();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleAddUsers = async (offerId) => {
+    const emails = addEmailsState[offerId] || [];
+    if (emails.length === 0) return;
+    setAddingSaving(prev => ({ ...prev, [offerId]: true }));
+    setError(null);
+    try {
+      const res = await fetch('/api/admin/user-builder-pricing', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${await getToken()}` },
+        body: JSON.stringify({ id: offerId, addEmails: emails }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error || 'Failed to add users');
+      setAddEmailsState(prev => ({ ...prev, [offerId]: [] }));
+      setShowAddUsers(prev => ({ ...prev, [offerId]: false }));
+      loadOffers();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setAddingSaving(prev => ({ ...prev, [offerId]: false }));
+    }
+  };
+
+  const handleRemoveUser = async (offerId, userId) => {
+    if (!confirm('Remove this user from the offer?')) return;
+    setError(null);
+    try {
+      const res = await fetch('/api/admin/user-builder-pricing', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${await getToken()}` },
+        body: JSON.stringify({ id: offerId, removeUserIds: [userId] }),
+      });
+      if (!res.ok) {
+        const body = await res.json();
+        throw new Error(body.error || 'Failed to remove user');
+      }
+      loadOffers();
+    } catch (e) {
+      setError(e.message);
+    }
+  };
+
+  const handleDeactivate = async (id) => {
+    if (!confirm('Deactivate this offer? All listed users will revert to standard/property pricing.')) return;
+    setError(null);
+    try {
+      const res = await fetch(`/api/admin/user-builder-pricing?id=${id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${await getToken()}` },
+      });
+      if (!res.ok) throw new Error('Failed to deactivate');
+      loadOffers();
+    } catch (e) {
+      setError(e.message);
+    }
+  };
+
+  const handleReactivate = async (offer) => {
+    setError(null);
+    try {
+      const res = await fetch('/api/admin/user-builder-pricing', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${await getToken()}` },
+        body: JSON.stringify({ id: offer.id, active: true }),
+      });
+      if (!res.ok) throw new Error('Failed to reactivate');
+      loadOffers();
+    } catch (e) {
+      setError(e.message);
+    }
+  };
+
+  const canWrite = ['admin', 'accounting'].includes(userRole);
+
+  return (
+    <div className="border-t pt-4">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-md font-medium text-gray-900 flex items-center gap-2">
+          <Tag className="w-4 h-4 text-blue-600" />
+          Per-user Builder Pricing
+        </h3>
+        {canWrite && !showForm && (
+          <button
+            type="button"
+            onClick={() => setShowForm(true)}
+            className="text-xs px-2 py-1 bg-blue-50 text-blue-700 rounded hover:bg-blue-100 flex items-center gap-1"
+          >
+            <Plus className="w-3 h-3" /> Add offer
+          </button>
+        )}
+      </div>
+
+      {error && (
+        <p className="text-xs text-red-500 mb-2">{error}</p>
+      )}
+      {success && (
+        <p className="text-xs text-green-600 bg-green-50 border border-green-200 rounded px-2 py-1.5 mb-2">
+          Offer saved successfully.
+        </p>
+      )}
+
+      {/* Create form */}
+      {showForm && canWrite && (
+        <div className="bg-gray-50 rounded-lg p-4 mb-4 space-y-3 border border-blue-100">
+          {/* Multi-email tag input */}
+          <div>
+            <label className="block text-xs font-medium text-gray-700 mb-1">
+              Requester emails <span className="text-gray-400">(type email + Enter or comma to add multiple)</span>
+            </label>
+            <EmailTagInput
+              ref={emailTagInputRef}
+              tags={emailTags}
+              onAdd={(e) => setEmailTags(prev => [...prev, e])}
+              onRemove={(e) => setEmailTags(prev => prev.filter(x => x !== e))}
+              searchRoles="requester"
+              placeholder="requester@email.com"
+            />
+          </div>
+
+          {/* Price */}
+          <div className="flex items-center gap-2">
+            <label className="text-xs font-medium text-gray-700 whitespace-nowrap">Override price: $</label>
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              max="50000"
+              required
+              value={formState.override_price}
+              onChange={(e) => setFormState({ ...formState, override_price: e.target.value })}
+              className="w-28 px-2 py-1.5 border border-gray-300 rounded text-sm focus:ring-2 focus:ring-blue-400 outline-none"
+              placeholder="150.00"
+            />
+          </div>
+
+          {/* Notes */}
+          <div>
+            <label className="block text-xs font-medium text-gray-700 mb-1">Notes</label>
+            <input
+              type="text"
+              value={formState.notes}
+              onChange={(e) => setFormState({ ...formState, notes: e.target.value })}
+              className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm focus:ring-2 focus:ring-blue-400 outline-none"
+            />
+          </div>
+
+          <div className="flex gap-2 justify-end">
+            <button type="button" onClick={() => { setShowForm(false); setEmailTags([]); setError(null); }} className="text-xs px-3 py-1.5 border border-gray-300 rounded text-gray-600 hover:bg-gray-50">Cancel</button>
+            <button type="button" onClick={handleCreate} disabled={saving} className="text-xs px-3 py-1.5 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50">
+              {saving ? 'Saving…' : 'Save offer'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Offers list */}
+      {loading ? (
+        <p className="text-xs text-gray-400">Loading…</p>
+      ) : offers.length === 0 ? (
+        <p className="text-xs text-gray-400">No per-user offers configured for this property.</p>
+      ) : (
+        <div className="space-y-3">
+          {offers.map((offer) => {
+            const isActive = offer.active;
+            return (
+              <div key={offer.id} className={`rounded-lg border px-3 py-2 text-xs ${isActive ? 'border-green-200 bg-green-50' : 'border-gray-200 bg-gray-50 opacity-70'}`}>
+                {/* Header row */}
+                <div className="flex items-center justify-between mb-1">
+                  <div className="flex items-center gap-2">
+                    <span className="font-semibold text-gray-800">${Number(offer.override_price).toFixed(2)}</span>
+                    <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${isActive ? 'bg-green-100 text-green-700' : 'bg-gray-200 text-gray-500'}`}>
+                      {offer.active ? 'Active' : 'Inactive'}
+                    </span>
+                  </div>
+                  {canWrite && (
+                    <div className="flex items-center gap-2">
+                      {isActive && (
+                        <button type="button" onClick={() => handleDeactivate(offer.id)} className="text-red-400 hover:text-red-600">Deactivate</button>
+                      )}
+                      {!offer.active && (
+                        <button type="button" onClick={() => handleReactivate(offer)} className="text-blue-500 hover:text-blue-700">Reactivate</button>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Dates + redemptions */}
+                <div className="text-gray-500 flex flex-wrap gap-x-4 gap-y-0.5 mb-2">
+                  <span>From: {formatDate(offer.valid_from)}</span>
+                  {offer.redemption_count > 0 && (
+                    <span className="text-blue-600">{offer.redemption_count} redemption{offer.redemption_count !== 1 ? 's' : ''}</span>
+                  )}
+                </div>
+
+                {/* Users list */}
+                <div className="mb-2">
+                  <p className="text-gray-500 mb-1 font-medium">Requesters ({offer.users?.length || 0}):</p>
+                  {(offer.users || []).length === 0 ? (
+                    <p className="text-gray-400 italic">No users assigned.</p>
+                  ) : (
+                    <div className="flex flex-wrap gap-1">
+                      {offer.users.map((u) => (
+                        <span key={u.userId} className="inline-flex items-center gap-1 bg-white border border-gray-200 text-gray-700 px-2 py-0.5 rounded-full">
+                          {u.email || u.userId}
+                          {u.name && <span className="text-gray-400">({u.name})</span>}
+                          {canWrite && (
+                            <button type="button" onClick={() => handleRemoveUser(offer.id, u.userId)} className="text-gray-400 hover:text-red-500 leading-none ml-0.5">&times;</button>
+                          )}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Add more users to this offer */}
+                {canWrite && isActive && (
+                  <div>
+                    {!showAddUsers[offer.id] ? (
+                      <button
+                        type="button"
+                        onClick={() => setShowAddUsers(prev => ({ ...prev, [offer.id]: true }))}
+                        className="text-blue-500 hover:text-blue-700 text-xs"
+                      >
+                        + Add more users
+                      </button>
+                    ) : (
+                      <div className="mt-1 space-y-1">
+                        <EmailTagInput
+                          tags={addEmailsState[offer.id] || []}
+                          onAdd={(e) => setAddEmailsState(prev => ({ ...prev, [offer.id]: [...(prev[offer.id] || []), e] }))}
+                          onRemove={(e) => setAddEmailsState(prev => ({ ...prev, [offer.id]: (prev[offer.id] || []).filter(x => x !== e) }))}
+                          searchRoles="requester"
+                          placeholder="newuser@email.com"
+                        />
+                        <div className="flex gap-2 justify-end mt-1">
+                          <button
+                            type="button"
+                            onClick={() => { setShowAddUsers(prev => ({ ...prev, [offer.id]: false })); setAddEmailsState(prev => ({ ...prev, [offer.id]: [] })); }}
+                            className="text-xs px-2 py-1 border border-gray-300 rounded text-gray-600 hover:bg-gray-50"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            disabled={addingSaving[offer.id] || !(addEmailsState[offer.id]?.length)}
+                            onClick={() => handleAddUsers(offer.id)}
+                            className="text-xs px-2 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+                          >
+                            {addingSaving[offer.id] ? 'Adding…' : 'Add'}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Notes */}
+                {offer.notes && (
+                  <p className="mt-1 text-gray-400">Note: {offer.notes}</p>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Main component ───────────────────────────────────────────────────────────
 
 const AdminPropertiesManagement = () => {
   const { role: userRole } = useAdminAuthStore();
@@ -99,6 +582,9 @@ const AdminPropertiesManagement = () => {
   // Accounting users for settlement assignee dropdown
   const [accountingUsers, setAccountingUsers] = useState([]);
 
+  // Info packet domain input (transient — domains stored in formData)
+  const [newInfoPacketDomain, setNewInfoPacketDomain] = useState('');
+
   // Snackbar helper function
   const showSnackbar = (message, type = 'success') => {
     setSnackbar({ show: true, message, type });
@@ -126,6 +612,7 @@ const AdminPropertiesManagement = () => {
     allow_public_offering: false,
     allow_info_packet: false,
     info_packet_price: null,
+    info_packet_allowed_domains: [],
     force_price_enabled: false,
     force_price_value: null,
     multi_community_comment: '',
@@ -244,6 +731,7 @@ const AdminPropertiesManagement = () => {
     });
     setLinkedProperties([]);
     setOwnerNameFromGmg(false);
+    setNewInfoPacketDomain('');
     setShowModal(true);
   };
 
@@ -319,13 +807,14 @@ const AdminPropertiesManagement = () => {
       allow_public_offering: property.allow_public_offering || false,
       allow_info_packet: property.allow_info_packet || false,
       info_packet_price: property.info_packet_price ?? null,
+      info_packet_allowed_domains: property.info_packet_allowed_domains || [],
       force_price_enabled: property.force_price_enabled || false,
       force_price_value: property.force_price_value || null,
       multi_community_comment: property.multi_community_comment || '',
       settlement_assignee_email: property.settlement_assignee_email || null
     });
     setLinkedProperties(linked);
-    
+    setNewInfoPacketDomain('');
     setShowModal(true);
   };
 
@@ -371,6 +860,7 @@ const AdminPropertiesManagement = () => {
             allow_public_offering: formData.allow_public_offering || false,
             allow_info_packet: formData.allow_info_packet || false,
             info_packet_price: formData.allow_info_packet ? (formData.info_packet_price || null) : null,
+            info_packet_allowed_domains: formData.allow_info_packet ? (formData.info_packet_allowed_domains || []) : [],
             force_price_enabled: formData.force_price_enabled || false,
             force_price_value: formData.force_price_enabled ? (formData.force_price_value || null) : null,
             multi_community_comment: formData.multi_community_comment || null,
@@ -409,6 +899,7 @@ const AdminPropertiesManagement = () => {
             allow_public_offering: formData.allow_public_offering || false,
             allow_info_packet: formData.allow_info_packet || false,
             info_packet_price: formData.allow_info_packet ? (formData.info_packet_price || null) : null,
+            info_packet_allowed_domains: formData.allow_info_packet ? (formData.info_packet_allowed_domains || []) : [],
             force_price_enabled: formData.force_price_enabled || false,
             force_price_value: formData.force_price_enabled ? (formData.force_price_value || null) : null,
             multi_community_comment: formData.multi_community_comment || null,
@@ -1856,6 +2347,65 @@ const AdminPropertiesManagement = () => {
                           <span className="text-xs text-gray-500">Leave blank for system default ($200.00)</span>
                         </div>
                       </div>
+
+                      {/* Eligible email domains */}
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          Eligible Email Domains
+                        </label>
+                        <p className="text-xs text-gray-500 mb-2">
+                          Only builders with a matching email domain will see this option. Leave empty to hide from everyone.
+                        </p>
+                        <div className="flex flex-wrap gap-2 mb-2">
+                          {(formData.info_packet_allowed_domains || []).length === 0 && (
+                            <span className="text-xs text-gray-400 italic">No domains — option hidden from all builders.</span>
+                          )}
+                          {(formData.info_packet_allowed_domains || []).map(domain => (
+                            <span key={domain} className="inline-flex items-center gap-1 px-2.5 py-1 bg-blue-50 border border-blue-200 text-blue-800 text-xs rounded-full">
+                              @{domain}
+                              <button
+                                type="button"
+                                onClick={() => setFormData({...formData, info_packet_allowed_domains: formData.info_packet_allowed_domains.filter(d => d !== domain)})}
+                                className="text-blue-400 hover:text-red-600 transition-colors"
+                              >
+                                <X className="w-3 h-3" />
+                              </button>
+                            </span>
+                          ))}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm text-gray-500 select-none">@</span>
+                          <input
+                            type="text"
+                            value={newInfoPacketDomain}
+                            onChange={(e) => setNewInfoPacketDomain(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key !== 'Enter') return;
+                              e.preventDefault();
+                              const domain = newInfoPacketDomain.trim().toLowerCase().replace(/^@/, '');
+                              if (!domain || (formData.info_packet_allowed_domains || []).includes(domain)) return;
+                              setFormData({...formData, info_packet_allowed_domains: [...(formData.info_packet_allowed_domains || []), domain].sort()});
+                              setNewInfoPacketDomain('');
+                            }}
+                            placeholder="example.com"
+                            className="w-40 px-3 py-1.5 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const domain = newInfoPacketDomain.trim().toLowerCase().replace(/^@/, '');
+                              if (!domain || (formData.info_packet_allowed_domains || []).includes(domain)) return;
+                              setFormData({...formData, info_packet_allowed_domains: [...(formData.info_packet_allowed_domains || []), domain].sort()});
+                              setNewInfoPacketDomain('');
+                            }}
+                            disabled={!newInfoPacketDomain.trim()}
+                            className="inline-flex items-center gap-1 px-3 py-1.5 bg-blue-600 text-white text-sm rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                          >
+                            <Plus className="w-3.5 h-3.5" />
+                            Add
+                          </button>
+                        </div>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -1911,6 +2461,15 @@ const AdminPropertiesManagement = () => {
                       </div>
                     )}
                   </div>
+                )}
+
+                {/* Per-user Builder Pricing (edit mode only — needs a saved propertyId) */}
+                {modalMode === 'edit' && selectedProperty?.id && (
+                  <PerUserBuilderPricingPanel
+                    propertyId={selectedProperty.id}
+                    userRole={userRole}
+                    supabase={supabase}
+                  />
                 )}
 
                 {/* Special Requirements */}

@@ -341,12 +341,28 @@ export default async function handler(req, res) {
       })),
     ];
 
-    const { error: insertError } = await supabase
+    const { data: insertedGroups, error: insertError } = await supabase
       .from('application_property_groups')
-      .insert(newGroups);
+      .insert(newGroups)
+      .select();
 
     if (insertError) {
       return res.status(500).json({ error: 'Failed to create new property groups', detail: insertError.message, hint: insertError.hint });
+    }
+
+    // 3.5 Create per-group property owner forms immediately (idempotent).
+    // Covers both waived/free corrections (no webhook fires) and paid corrections
+    // (forms are available before the customer even pays). The Stripe webhook's
+    // handleCorrectionPayment also calls this as a safety net on payment completion.
+    if (newPrimary.is_multi_community && insertedGroups && insertedGroups.length > 0) {
+      const { createPropertyOwnerFormsForGroups } = require('../../../lib/groupingService');
+      try {
+        await createPropertyOwnerFormsForGroups(applicationId, insertedGroups);
+        console.log(`[correct-primary-property] Per-group forms created for application ${applicationId}`);
+      } catch (formErr) {
+        console.error('[correct-primary-property] Per-group form creation failed (non-fatal):', formErr);
+        // Non-fatal — the frontend loadFormData fallback will create forms on first admin click
+      }
     }
 
     // 4. If delta > 0 and createInvoice: create Stripe checkout and email customer
