@@ -753,7 +753,7 @@ const SubmitterInfoStep = React.memo(({ formData, handleInputChange, hoaProperti
   // Clear submitterType if it's not allowed for North Carolina properties
   React.useEffect(() => {
     if (isNorthCarolina && formData.submitterType) {
-      const allowedTypes = ['settlement', 'lender_questionnaire'];
+      const allowedTypes = ['settlement', 'lender_questionnaire', 'builder'];
       if (!allowedTypes.includes(formData.submitterType)) {
         handleInputChange('submitterType', '');
       }
@@ -788,11 +788,11 @@ const SubmitterInfoStep = React.memo(({ formData, handleInputChange, hoaProperti
             ];
 
             // Filter types based on property rules:
-            // - NC: only settlement and lender_questionnaire
+            // - NC: settlement, lender_questionnaire, and builder (for info packets)
             // - MC: lender_questionnaire is allowed; only the primary property will receive the questionnaire
             let availableTypes = allTypes;
             if (isNorthCarolina) {
-              availableTypes = allTypes.filter(type => type.value === 'settlement' || type.value === 'lender_questionnaire');
+              availableTypes = allTypes.filter(type => type.value === 'settlement' || type.value === 'lender_questionnaire' || type.value === 'builder');
             }
 
             return availableTypes.map((type) => {

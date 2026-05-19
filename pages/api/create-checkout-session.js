@@ -229,7 +229,8 @@ export default async function handler(req, res) {
       // Server-side domain eligibility check — must match client-side gate in SubmitterInfoStep
       const requesterEmail = identity.profile?.email || identity.session?.user?.email || '';
       const requesterDomain = requesterEmail.split('@')[1]?.toLowerCase() ?? '';
-      const propertyDomains = hoaProperty.info_packet_allowed_domains ?? [];
+      const primaryProperty = allProperties[0];
+      const propertyDomains = primaryProperty?.info_packet_allowed_domains ?? [];
       if (propertyDomains.length === 0 || !propertyDomains.includes(requesterDomain)) {
         return res.status(403).json({ error: 'Your account is not eligible to purchase an Info Packet.' });
       }
