@@ -58,10 +58,9 @@ export default async function handler(req, res) {
     //   charges  = money in (positive)
     //   refunds  = money returned (shown as positive amount, type = 'refund')
     const fetchCharges = stripe.balanceTransactions.list({
-      type:    'charge',
-      limit:   100,
+      type:  'charge',
+      limit: 100,
       ...(Object.keys(createdFilter).length ? { created: createdFilter } : {}),
-      expand:  ['data.source'],
     }).autoPagingToArray({ limit: MAX_TRANSACTIONS });
 
     const fetchRefunds = stripe.balanceTransactions.list({

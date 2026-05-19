@@ -4,8 +4,6 @@ import { useQuery } from '@tanstack/react-query';
 import {
   FileText,
   DollarSign,
-  Clock,
-  Download,
   Calendar,
   RefreshCw,
   Building,
@@ -16,7 +14,8 @@ import {
   TrendingUp,
   TrendingDown,
   Minus,
-  ShieldCheck,
+  AlertCircle,
+  Clock,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import useAdminAuthStore from '../../stores/adminAuthStore';
@@ -456,6 +455,9 @@ const AdminReports = () => {
   const isLoadingStripe     = stripeQuery.isLoading;
   const isRefreshing        = summaryQuery.isFetching || recentQuery.isFetching || comparisonQuery.isFetching || stripeQuery.isFetching;
   const recentApps          = recentQuery.data?.data || [];
+  const paidNotSubmitted    = recentApps.filter(
+    (app) => app.payment_status === 'completed' && !app.submitted_at
+  );
 
   // ── handlers ──────────────────────────────────────────────────────────────
 
@@ -466,35 +468,6 @@ const AdminReports = () => {
     stripeQuery.refetch();
   };
 
-  const downloadCsv = async (url, method, body, filename) => {
-    try {
-      const res = await fetch(url, {
-        method,
-        headers: method === 'POST' ? { 'Content-Type': 'application/json' } : undefined,
-        body:    body ? JSON.stringify(body) : undefined,
-      });
-      if (!res.ok) throw new Error('Export failed');
-      const blob    = await res.blob();
-      const objUrl  = URL.createObjectURL(blob);
-      const a       = document.createElement('a');
-      a.style.display = 'none';
-      a.href          = objUrl;
-      a.download      = filename;
-      document.body.appendChild(a);
-      a.click();
-      URL.revokeObjectURL(objUrl);
-      document.body.removeChild(a);
-    } catch (err) {
-      console.error('Export error:', err);
-      alert('Export failed. Please try again.');
-    }
-  };
-
-  const today = new Date().toISOString().slice(0, 10);
-  const handleExportApplications = () =>
-    downloadCsv('/api/admin/export-applications', 'POST', { dateRange }, `applications-${today}.csv`);
-  const handleExportProperties = () =>
-    downloadCsv('/api/admin/export-properties', 'GET', null, `properties-${today}.csv`);
 
   // ── render ────────────────────────────────────────────────────────────────
 
@@ -523,8 +496,8 @@ const AdminReports = () => {
           <div className="mb-6 border-b border-gray-200">
             <nav className="-mb-px flex space-x-8">
               {[
-                { id: 'reports',             label: 'Reports & Analytics' },
-                { id: 'expiring-documents',  label: 'Expiring Documents', badge: expiringDocuments.length },
+                { id: 'reports',               label: 'Reports & Analytics' },
+                { id: 'expiring-documents',    label: 'Expiring Documents', badge: expiringDocuments.length },
               ].map((tab) => (
                 <button
                   key={tab.id}
@@ -730,25 +703,16 @@ const AdminReports = () => {
                     </p>
                     {stripeData ? (
                       <div className="mt-1.5 flex flex-col gap-0.5">
-                        <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-600">
-                          <ShieldCheck className="w-3 h-3" />
-                          Stripe verified — live data
-                        </span>
                         {stripeData.refundedTotal > 0 && (
                           <span className="text-xs text-gray-400">
                             {formatCurrency(stripeData.refundedTotal)} refunded · net {formatCurrency(stripeData.netRevenue)}
                           </span>
                         )}
-                        {stripeData.stripeFees > 0 && (
-                          <span className="text-xs text-gray-400">
-                            {formatCurrency(stripeData.stripeFees)} in Stripe fees
-                          </span>
-                        )}
                       </div>
                     ) : (
-                      <p className="text-xs text-gray-400 mt-1">
-                        {isLoadingStripe ? 'Verifying with Stripe…' : 'Stripe-completed payments only'}
-                      </p>
+                      !isLoadingStripe && (
+                        <p className="text-xs text-gray-400 mt-1">Stripe-completed payments only</p>
+                      )
                     )}
                   </>
                 )}
@@ -756,12 +720,12 @@ const AdminReports = () => {
               <KpiCard
                 icon={Clock}
                 iconBg="bg-violet-50"
-                iconColor="text-violet-600"
+                iconColor="text-violet-500"
                 label="Avg. Turnaround"
                 loading={isLoadingSummary}
                 value={
                   summary?.avgTurnaroundDays != null
-                    ? `${summary.avgTurnaroundDays} days`
+                    ? `${summary.avgTurnaroundDays}d`
                     : '—'
                 }
                 subValue="Submitted → Completed"
@@ -956,45 +920,19 @@ const AdminReports = () => {
                   )}
                 </div>
 
-                {/* Export Data */}
-                <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 flex-1 relative overflow-hidden">
-                  <div className="absolute inset-0 bg-white/60 backdrop-blur-[1px] z-10 flex items-center justify-center">
-                    <span className="px-3 py-1 bg-gray-900 text-white text-xs font-medium rounded-full shadow-sm">
-                      Coming Soon
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2 mb-5 opacity-50">
-                    <Download className="w-5 h-5 text-gray-400" />
-                    <h2 className="text-base font-semibold text-gray-900">Export Data</h2>
-                  </div>
-                  <div className="flex flex-col gap-3 opacity-50 pointer-events-none">
-                    <button
-                      disabled
-                      className="flex items-center justify-center gap-2 w-full px-4 py-2.5 bg-emerald-600 text-white text-sm font-medium rounded-lg shadow-sm"
-                    >
-                      <Download className="w-4 h-4" />
-                      Export Applications
-                    </button>
-                    <button
-                      disabled
-                      className="flex items-center justify-center gap-2 w-full px-4 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-lg shadow-sm"
-                    >
-                      <Download className="w-4 h-4" />
-                      Export Properties
-                    </button>
-                    <p className="text-xs text-gray-500 text-center mt-2 leading-relaxed">
-                      Exports respect your current date filter and exclude test transactions.
-                    </p>
-                  </div>
-                </div>
-
               </div>
             </div>
 
             {/* Recent Applications table */}
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-              <div className="px-6 py-4 border-b border-gray-100 bg-gray-50/50">
+              <div className="px-6 py-4 border-b border-gray-100 bg-gray-50/50 flex items-center gap-3">
                 <h2 className="text-base font-semibold text-gray-900">Recent Applications</h2>
+                {paidNotSubmitted.length > 0 && (
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-100 text-amber-700 border border-amber-200">
+                    <AlertCircle className="w-3 h-3" />
+                    {paidNotSubmitted.length} not submitted
+                  </span>
+                )}
               </div>
 
               {recentQuery.isLoading ? (
@@ -1017,13 +955,22 @@ const AdminReports = () => {
                 </div>
               ) : (
                 <div className="overflow-x-auto">
-                  <table className="w-full">
+                  <table className="w-full table-fixed">
+                    <colgroup>
+                      <col style={{ width: "110px" }} />
+                      <col style={{ width: "220px" }} />
+                      <col style={{ width: "200px" }} />
+                      <col style={{ width: "130px" }} />
+                      <col style={{ width: "110px" }} />
+                      <col style={{ width: "130px" }} />
+                      <col style={{ width: "100px" }} />
+                    </colgroup>
                     <thead className="bg-gray-50/80 border-b border-gray-100">
                       <tr>
-                        {['Date', 'Property', 'Submitter', 'Status', 'Amount'].map((h) => (
+                        {['Date', 'Property', 'Submitter', 'Status', 'Payment', 'Submitted', 'Amount'].map((h) => (
                           <th
                             key={h}
-                            className="px-6 py-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider"
+                            className="px-4 py-4 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider"
                           >
                             {h}
                           </th>
@@ -1031,31 +978,64 @@ const AdminReports = () => {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-50">
-                      {recentApps.map((app) => (
-                        <tr key={app.id} className="hover:bg-blue-50/30 transition-colors">
-                          <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                            {formatDate(app.created_at)}
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap">
-                            <div className="text-sm font-semibold text-gray-900">{app.property_address}</div>
-                            {app.unit_number && (
-                              <div className="text-xs text-gray-500 mt-0.5">Unit {app.unit_number}</div>
-                            )}
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap">
-                            <div className="text-sm font-medium text-gray-900">{app.submitter_name}</div>
-                            <div className="text-xs text-gray-500 mt-0.5">{app.submitter_email}</div>
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap">
-                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusBadgeColor(app.status)}`}>
-                              {getStatusLabel(app.status)}
-                            </span>
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 tabular-nums">
-                            {formatCurrency(app.total_amount)}
-                          </td>
-                        </tr>
-                      ))}
+                      {recentApps.map((app) => {
+                        const flagged = app.payment_status === 'completed' && !app.submitted_at;
+                        return (
+                          <tr
+                            key={app.id}
+                            className={`transition-colors ${flagged ? 'bg-amber-50/50 hover:bg-amber-50' : 'hover:bg-blue-50/30'}`}
+                          >
+                            <td className="px-4 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                              {formatDate(app.created_at)}
+                            </td>
+                            <td className="px-4 py-4">
+                              <div className="text-sm font-semibold text-gray-900 truncate">{app.property_address}</div>
+                              {app.unit_number && (
+                                <div className="text-xs text-gray-500 mt-0.5">Unit {app.unit_number}</div>
+                              )}
+                            </td>
+                            <td className="px-4 py-4">
+                              <div className="text-sm font-medium text-gray-900 truncate">{app.submitter_name}</div>
+                              <div className="text-xs text-gray-500 mt-0.5 truncate">{app.submitter_email}</div>
+                            </td>
+                            <td className="px-4 py-4 whitespace-nowrap">
+                              <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusBadgeColor(app.status)}`}>
+                                {getStatusLabel(app.status)}
+                              </span>
+                            </td>
+                            <td className="px-4 py-4 whitespace-nowrap">
+                              {app.payment_status === 'completed' ? (
+                                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-700">
+                                  Paid
+                                </span>
+                              ) : app.payment_status === 'not_required' ? (
+                                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-500">
+                                  Not required
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-700">
+                                  {app.payment_status || 'Pending'}
+                                </span>
+                              )}
+                            </td>
+                            <td className="px-4 py-4 whitespace-nowrap">
+                              {app.submitted_at ? (
+                                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700">
+                                  {formatDate(app.submitted_at)}
+                                </span>
+                              ) : (
+                                <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold ${flagged ? 'bg-amber-100 text-amber-700 border border-amber-200' : 'bg-gray-100 text-gray-400'}`}>
+                                  {flagged && <AlertCircle className="w-3 h-3" />}
+                                  Not submitted
+                                </span>
+                              )}
+                            </td>
+                            <td className="px-4 py-4 whitespace-nowrap text-sm font-medium text-gray-900 tabular-nums">
+                              {formatCurrency(app.total_amount)}
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>

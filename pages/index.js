@@ -1615,7 +1615,6 @@ const PackagePaymentStep = ({
             payment_method: formData.paymentMethod,
             total_amount: totalAmount,
             status: 'pending_payment',
-            submitted_at: new Date().toISOString(), // Set submitted_at for payment flow
             updated_at: new Date().toISOString(),
             expected_completion_date: new Date(
               Date.now() +
@@ -1712,7 +1711,6 @@ const PackagePaymentStep = ({
             payment_method: formData.paymentMethod,
             total_amount: totalAmount,
             status: 'pending_payment',
-            submitted_at: new Date().toISOString(),
             expected_completion_date: new Date(
               Date.now() +
                 (formData.packageType === 'rush' ? 5 : 15) * 24 * 60 * 60 * 1000
@@ -5645,7 +5643,7 @@ export default function GMGResaleFlow() {
           .from('applications')
           .select('id')
           .eq('user_id', actingUserId)
-          .in('status', ['pending_payment', 'payment_completed'])
+          .in('status', ['pending_payment', 'payment_completed', 'payment_confirmed'])
           .eq('submitter_email', formData.submitterEmail)
           .eq('property_address', formData.propertyAddress)
           .order('created_at', { ascending: false })
@@ -5676,11 +5674,26 @@ export default function GMGResaleFlow() {
 
         // Update existing application to under_review status
         // This works for both pending_payment and payment_completed statuses
+        // Fetch package_type so we can recalculate the deadline from actual submission time
+        const { data: existingApp } = await supabase
+          .from('applications')
+          .select('package_type')
+          .eq('id', existingApplicationId)
+          .single();
+
+        const submittedAt = new Date();
+        const daysToAdd = existingApp?.package_type === 'rush' ? 5 : 15;
+        const msToAdd = daysToAdd * 24 * 60 * 60 * 1000;
+        const expectedCompletionDate = new Date(submittedAt.getTime() + msToAdd)
+          .toISOString()
+          .split('T')[0];
+
         const { data, error } = await supabase
           .from('applications')
           .update({
             status: 'under_review',
-            submitted_at: new Date().toISOString(),
+            submitted_at: submittedAt.toISOString(),
+            expected_completion_date: expectedCompletionDate,
           })
           .eq('id', existingApplicationId)
           .select()

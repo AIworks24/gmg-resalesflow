@@ -109,6 +109,14 @@ async function autoAssignApplication(applicationId, supabase) {
         return { success: false, error: assignError.message };
       }
 
+      // For MC settlement apps, assign each property group to its own settlement_assignee_email.
+      // Groups may not exist yet when this runs at submission time (paid apps — groups are created
+      // later by the Stripe webhook). The function is a no-op in that case and will be called
+      // again from handleMultiCommunityApplication once the groups are ready.
+      if (property.is_multi_community) {
+        await autoAssignSettlementMCGroups(applicationId, supabase);
+      }
+
       try {
         const { createNotifications } = await import('./notifications/create');
         await createNotifications(applicationId, supabase);
@@ -219,6 +227,54 @@ async function autoAssignApplication(applicationId, supabase) {
   }
 }
 
+/**
+ * For a multi-community settlement application, assigns each property group to the
+ * settlement_assignee_email configured on that group's hoa_property.
+ * Safe to call when groups don't exist yet — it simply returns without error.
+ */
+async function autoAssignSettlementMCGroups(applicationId, supabase) {
+  try {
+    const { data: groups } = await supabase
+      .from('application_property_groups')
+      .select('id, property_id, is_primary, property_name')
+      .eq('application_id', applicationId);
+
+    if (!groups || groups.length === 0) {
+      console.log(`[MC Settlement] No property groups found for application ${applicationId} — skipping group assignment`);
+      return;
+    }
+
+    console.log(`[MC Settlement] Assigning ${groups.length} property group(s) for application ${applicationId}`);
+
+    for (const group of groups) {
+      const { data: prop } = await supabase
+        .from('hoa_properties')
+        .select('settlement_assignee_email')
+        .eq('id', group.property_id)
+        .single();
+
+      const settlementEmail = prop?.settlement_assignee_email?.trim();
+      if (!settlementEmail) {
+        console.log(`[MC Settlement] No settlement_assignee_email for property ${group.property_id} (${group.property_name}), skipping`);
+        continue;
+      }
+
+      const { error } = await supabase
+        .from('application_property_groups')
+        .update({ assigned_to: settlementEmail, updated_at: new Date().toISOString() })
+        .eq('id', group.id);
+
+      if (error) {
+        console.warn(`[MC Settlement] Failed to assign group ${group.id} to ${settlementEmail}:`, error.message);
+      } else {
+        console.log(`[MC Settlement] Assigned group ${group.id} (${group.property_name}) to ${settlementEmail}`);
+      }
+    }
+  } catch (error) {
+    console.warn('[MC Settlement] Error in autoAssignSettlementMCGroups:', error.message);
+  }
+}
+
 // Export the function for use in other modules
-export { autoAssignApplication };
+export { autoAssignApplication, autoAssignSettlementMCGroups };
 
