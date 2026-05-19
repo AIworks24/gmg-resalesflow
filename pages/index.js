@@ -760,6 +760,13 @@ const SubmitterInfoStep = React.memo(({ formData, handleInputChange, hoaProperti
     }
   }, [isNorthCarolina, formData.submitterType, handleInputChange]);
 
+  // NC doesn't offer resale apps — default Info Packet to checked for NC builder applications
+  React.useEffect(() => {
+    if (isNorthCarolina && formData.submitterType === 'builder' && canShowInfoPacket && !formData.infoPacket) {
+      handleInputChange('infoPacket', true);
+    }
+  }, [isNorthCarolina, formData.submitterType, canShowInfoPacket, formData.infoPacket, handleInputChange]);
+
   return (
     <div className='space-y-4 sm:space-y-6'>
       <div className='text-center mb-4 sm:mb-6 md:mb-8'>
