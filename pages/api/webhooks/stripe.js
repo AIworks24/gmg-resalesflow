@@ -495,6 +495,16 @@ export default async function handler(req, res) {
           hasCheckoutSession = true;
         }
 
+        // Ensure submitted_at is set for paid apps — info packets and lender questionnaires
+        // don't set it elsewhere, so they'd otherwise sort to the bottom of the admin list.
+        if (updatedApplication?.id) {
+          await supabase
+            .from('applications')
+            .update({ submitted_at: new Date().toISOString() })
+            .eq('id', updatedApplication.id)
+            .is('submitted_at', null);
+        }
+
         // Handle multi-community applications
         const applicationId = paymentIntent.metadata?.applicationId || updatedApplication?.id;
 
