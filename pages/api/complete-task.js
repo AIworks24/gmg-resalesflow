@@ -143,10 +143,16 @@ export default async function handler(req, res) {
     const completionField = `${taskName}_completed_at`;
     console.log(`[complete-task] Standard update: field=${completionField}, appId=${applicationId}`);
 
+    // When the email task is manually marked done, also promote the application
+    // status to 'approved' so the requester's dashboard reflects completion —
+    // matching the behaviour of /api/send-approval-email and
+    // /api/send-lender-questionnaire-email.
+    const extraFields = taskName === 'email' ? { status: 'approved' } : {};
+
     // 1. Update the application
     const { data: updatedApp, error: updateError } = await supabase
       .from('applications')
-      .update({ [completionField]: now, updated_at: now, notes: notesWithAudit })
+      .update({ [completionField]: now, updated_at: now, notes: notesWithAudit, ...extraFields })
       .eq('id', applicationId)
       .select(`id, ${completionField}, updated_at`)
       .single();

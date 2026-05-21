@@ -697,7 +697,7 @@ export default async function handler(req, res) {
             .select('application_type, hoa_property_id')
             .eq('id', applicationId)
             .single();
-          
+
           // Resolve isMultiCommunity: metadata first, then DB (handles missing metadata)
           let resolvedIsMultiCommunity = isMultiCommunity;
           if (!resolvedIsMultiCommunity && appData?.hoa_property_id) {
@@ -711,15 +711,11 @@ export default async function handler(req, res) {
               console.log(`[Webhook] Application ${applicationId} resolved as MC from hoa_properties`);
             }
           }
-          
-          // Skip property owner forms for lender questionnaire (user uploads their own form)
+
+          // Skip property owner forms for lender questionnaire (user uploads their own form).
+          // Status stays payment_confirmed — the upload API sets under_review when the file arrives.
           if (appData?.application_type === 'lender_questionnaire') {
-            // Update status to under_review (file will be uploaded separately)
-            await supabase
-              .from('applications')
-              .update({ status: 'under_review' })
-              .eq('id', applicationId);
-            console.log(`Skipping property owner forms for lender questionnaire application ${applicationId}`);
+            console.log(`[Webhook] Lender questionnaire ${applicationId} — skipping property owner forms, awaiting requester file upload`);
           } else if (appData?.application_type === 'info_packet') {
             // Info Packet: auto-complete and send documents immediately — no staff review needed
             console.log(`[Webhook] Info Packet application ${applicationId} — auto-completing and sending documents`);

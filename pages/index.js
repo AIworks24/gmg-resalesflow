@@ -275,6 +275,16 @@ const calculateTotalDatabase = async (formData, hoaProperties, applicationType, 
       }
     }
     
+    // Info Packet pricing — use property's custom info_packet_price if set (mirrors calculateTotal)
+    if (applicationType === 'info_packet' && formData.hoaProperty && hoaProperties) {
+      const selectedProperty = hoaProperties.find(prop => prop.name === formData.hoaProperty);
+      const basePerAssoc = selectedProperty?.info_packet_price != null ? Number(selectedProperty.info_packet_price) : 200.0;
+      const rushPerAssoc = formData.packageType === 'rush' ? 70.66 : 0;
+      let total = basePerAssoc + rushPerAssoc;
+      if (formData.paymentMethod === 'credit_card' && total > 0) total += 9.95;
+      return Math.round(total * 100) / 100;
+    }
+
     // Single property pricing — check builder overrides (per-user first, then property force price)
     if (shouldApplyForcedPrice(formData.submitterType, formData.publicOffering, formData.infoPacket) && formData.hoaProperty && hoaProperties) {
       const selectedProperty = hoaProperties.find(prop => prop.name === formData.hoaProperty);
@@ -7287,7 +7297,7 @@ export default function GMGResaleFlow() {
             formData={formData}
             handleInputChange={handleInputChange}
             hoaProperties={hoaProperties}
-            userEmail={user?.email}
+            userEmail={isImpersonating && impersonatedUser?.email ? impersonatedUser.email : user?.email}
           />
         );
       case 3:

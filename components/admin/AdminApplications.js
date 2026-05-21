@@ -123,6 +123,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
   const [applicationAttachments, setApplicationAttachments] = useState([]);
   const [loadingApplicationAttachments, setLoadingApplicationAttachments] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [uploadingOriginalLQ, setUploadingOriginalLQ] = useState(false);
   const [propertyFiles, setPropertyFiles] = useState([]);
   const [loadingPropertyFiles, setLoadingPropertyFiles] = useState(false);
   const [snackbar, setSnackbar] = useState({ show: false, message: '', type: 'success' });
@@ -5372,54 +5373,106 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                                     )}
                                   </div>
                                 </div>
-                                <button
-                                  onClick={async () => {
-                                    /* ... existing download logic ... */
-                                    try {
-                                      if (!selectedApplication.lender_questionnaire_file_path) {
-                                        showSnackbar('No file available to download', 'error');
-                                        return;
-                                      }
-                                      const { data, error } = await supabase.storage
-                                        .from('bucket0')
-                                        .createSignedUrl(selectedApplication.lender_questionnaire_file_path, 3600);
-                                      
-                                      if (error) throw error;
-                                      if (data?.signedUrl) {
-                                        window.open(data.signedUrl, '_blank');
-                                        
-                                        // Track download
-                                        try {
-                                          const trackResponse = await fetch('/api/track-lender-questionnaire-download', {
-                                            method: 'POST',
-                                            headers: { 'Content-Type': 'application/json' },
-                                            body: JSON.stringify({
-                                              applicationId: selectedApplication.id,
-                                            }),
-                                          });
-                                          
-                                          if (trackResponse.ok) {
+                                <div className='flex flex-col sm:flex-row gap-2 items-stretch sm:items-center'>
+                                  {!selectedApplication.lender_questionnaire_file_path && (
+                                    <>
+                                      <input
+                                        type='file'
+                                        id={`lq-original-upload-${selectedApplication.id}`}
+                                        accept='.pdf,.doc,.docx'
+                                        className='hidden'
+                                        onChange={async (e) => {
+                                          const file = e.target.files?.[0];
+                                          if (!file) return;
+                                          setUploadingOriginalLQ(true);
+                                          try {
+                                            const formData = new FormData();
+                                            formData.append('file', file);
+                                            formData.append('applicationId', selectedApplication.id);
+                                            const response = await fetch('/api/admin/upload-lender-questionnaire-original', {
+                                              method: 'POST',
+                                              body: formData,
+                                            });
+                                            const result = await response.json();
+                                            if (!response.ok) throw new Error(result.error || 'Upload failed');
+                                            showSnackbar('Original file uploaded successfully', 'success');
                                             await refreshSelectedApplication(selectedApplication.id);
+                                          } catch (err) {
+                                            console.error('Error uploading original LQ file:', err);
+                                            showSnackbar(err.message || 'Failed to upload file', 'error');
+                                          } finally {
+                                            setUploadingOriginalLQ(false);
+                                            e.target.value = '';
                                           }
-                                        } catch (trackError) {
-                                          console.error('Error tracking download:', trackError);
+                                        }}
+                                      />
+                                      <label
+                                        htmlFor={`lq-original-upload-${selectedApplication.id}`}
+                                        className={`flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg font-medium text-sm cursor-pointer transition-all ${
+                                          uploadingOriginalLQ
+                                            ? 'bg-amber-50 border border-amber-300 text-amber-700 cursor-wait'
+                                            : 'bg-amber-50 border border-amber-400 text-amber-700 hover:bg-amber-100'
+                                        }`}
+                                      >
+                                        <Upload className='w-4 h-4' />
+                                        {uploadingOriginalLQ ? 'Uploading...' : 'Upload Original File'}
+                                      </label>
+                                    </>
+                                  )}
+                                  <button
+                                    onClick={async () => {
+                                      /* ... existing download logic ... */
+                                      try {
+                                        if (!selectedApplication.lender_questionnaire_file_path) {
+                                          showSnackbar('No file available to download', 'error');
+                                          return;
                                         }
+                                        const { data, error } = await supabase.storage
+                                          .from('bucket0')
+                                          .createSignedUrl(selectedApplication.lender_questionnaire_file_path, 3600);
+
+                                        if (error) throw error;
+                                        if (data?.signedUrl) {
+                                          window.open(data.signedUrl, '_blank');
+
+                                          // Track download
+                                          try {
+                                            const trackResponse = await fetch('/api/track-lender-questionnaire-download', {
+                                              method: 'POST',
+                                              headers: { 'Content-Type': 'application/json' },
+                                              body: JSON.stringify({
+                                                applicationId: selectedApplication.id,
+                                              }),
+                                            });
+
+                                            if (trackResponse.ok) {
+                                              await refreshSelectedApplication(selectedApplication.id);
+                                            }
+                                          } catch (trackError) {
+                                            console.error('Error tracking download:', trackError);
+                                          }
+                                        }
+                                      } catch (error) {
+                                        console.error('Error downloading file:', error);
+                                        showSnackbar('Failed to download file', 'error');
                                       }
-                                    } catch (error) {
-                                      console.error('Error downloading file:', error);
-                                      showSnackbar('Failed to download file', 'error');
-                                    }
-                                  }}
-                                  disabled={!selectedApplication.lender_questionnaire_file_path}
-                                  className='flex items-center justify-center gap-2 px-4 py-2.5 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 hover:text-gray-900 transition-all font-medium text-sm shadow-sm'
-                                >
-                                  <Download className='w-4 h-4' />
-                                  Download Form
-                                </button>
+                                    }}
+                                    disabled={!selectedApplication.lender_questionnaire_file_path}
+                                    className='flex items-center justify-center gap-2 px-4 py-2.5 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 hover:text-gray-900 transition-all font-medium text-sm shadow-sm disabled:opacity-50 disabled:cursor-not-allowed'
+                                  >
+                                    <Download className='w-4 h-4' />
+                                    Download Form
+                                  </button>
+                                </div>
                               </div>
                               {selectedApplication.lender_questionnaire_file_path && (
                                 <div className='mt-3 pl-14 text-xs text-gray-500'>
                                   File: {selectedApplication.lender_questionnaire_file_path.split('/').pop()}
+                                </div>
+                              )}
+                              {!selectedApplication.lender_questionnaire_file_path && (
+                                <div className='mt-3 pl-14 text-xs text-amber-600'>
+                                  No file uploaded by requester. Use &quot;Upload Original File&quot; to attach the emailed document.
                                 </div>
                               )}
                             </div>
