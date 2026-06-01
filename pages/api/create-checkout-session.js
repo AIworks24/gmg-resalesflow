@@ -725,25 +725,27 @@ export default async function handler(req, res) {
     // Calculate total transfer amount: $21 × number of property items
     const totalTransferAmountCents = TRANSFER_AMOUNT_PER_ITEM_CENTS * propertyItemCount;
     
+    // Always include applicationId in payment_intent metadata so the payment_intent.succeeded
+    // webhook can find the application directly — without relying on a Stripe API session
+    // fallback that can fail silently when the event fires before checkout.session.completed.
+    sessionData.payment_intent_data = {
+      metadata: { applicationId: String(applicationId) },
+    };
+
     if (totalAmountCents >= TRANSFER_THRESHOLD_CENTS) {
       const connectedAccountId = getConnectedAccountId(finalTestMode);
-      
+
       if (connectedAccountId) {
-        // Add transfer_data to payment_intent_data
-        sessionData.payment_intent_data = {
-          transfer_data: {
-            destination: connectedAccountId,
-            amount: totalTransferAmountCents, // $21 × propertyItemCount to connected account
-          },
+        sessionData.payment_intent_data.transfer_data = {
+          destination: connectedAccountId,
+          amount: totalTransferAmountCents, // $21 × propertyItemCount to connected account
         };
-        
+
         console.log(`[Stripe Connect] Transfer enabled: $${(totalTransferAmountCents / 100).toFixed(2)} ($${(TRANSFER_AMOUNT_PER_ITEM_CENTS / 100).toFixed(2)} × ${propertyItemCount} property items) to connected account ${connectedAccountId}`);
         console.log(`[Stripe Connect] Total amount: $${(totalAmountCents / 100).toFixed(2)}, Platform keeps: $${((totalAmountCents - totalTransferAmountCents) / 100).toFixed(2)}`);
       } else {
         console.warn(`[Stripe Connect] Transfer threshold met ($${(totalAmountCents / 100).toFixed(2)} >= $${(TRANSFER_THRESHOLD_CENTS / 100).toFixed(2)}), but connected account ID not configured`);
       }
-    } else {
-        // Transfer not needed (below threshold)
     }
     
     // Create checkout session - redirect back to application flow instead of success page
