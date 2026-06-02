@@ -113,12 +113,15 @@ export default async function handler(req, res) {
       throw updateError;
     }
 
-    // Calculate refund amount: total paid minus all CC convenience fees (non-refundable)
+    // total_amount stores the base cost (CC fees excluded). The actual Stripe charge is total_amount + CC fees.
     const CONVENIENCE_FEE_CENTS = 995; // $9.95 per property
     const isCreditCard = application.payment_method === 'credit_card';
     const numProperties = (application.application_property_groups || []).length || 1;
     const totalCCFees = isCreditCard ? (CONVENIENCE_FEE_CENTS * numProperties) / 100 : 0;
-    const refundAmount = application.total_amount > 0 ? application.total_amount - totalCCFees : 0;
+    // totalPaid = what the customer was actually charged (base + CC fees)
+    const totalPaid = application.total_amount > 0 ? application.total_amount + totalCCFees : 0;
+    // refundAmount = base amount only (CC fees are non-refundable and already excluded from total_amount)
+    const refundAmount = application.total_amount > 0 ? application.total_amount : 0;
 
     // Send email to requestor and resales@gmgva.com
     const submitterEmail = application.submitter_email;
@@ -349,7 +352,7 @@ export default async function handler(req, res) {
                       <tr>
                         <td style="padding: 12px 0; border-bottom: 1px solid #e5e7eb; font-size: 14px; color: #6b7280; text-align: left;"><strong style="color: #374151;">Total Paid:</strong></td>
                         <td style="padding: 12px 0; border-bottom: 1px solid #e5e7eb; font-size: 20px; color: #0f4734; text-align: right; font-weight: 700;">
-                          ${application.total_amount > 0 ? `$${application.total_amount.toFixed(2)}` : 'Free (Standard Processing)'}
+                          ${totalPaid > 0 ? `$${totalPaid.toFixed(2)}` : 'Free (Standard Processing)'}
                         </td>
                       </tr>
                       ${isCreditCard && application.total_amount > 0 ? `

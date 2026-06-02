@@ -249,12 +249,8 @@ const AdminDashboardMetrics = ({ userRole }) => {
           >
             <div className='flex items-center justify-between'>
               <div>
-                <p className='text-sm text-gray-600'>Total Applications</p>
-                <p className='text-3xl font-bold text-gray-900'>{metrics.totalApplications}</p>
-                <p className='text-sm text-gray-500 flex items-center gap-1'>
-                  <Calendar className='w-3 h-3' />
-                  {metrics.todaySubmissions} today
-                </p>
+                <p className='text-sm text-gray-600'>Total Applications Today</p>
+                <p className='text-3xl font-bold text-gray-900'>{metrics.todaySubmissions}</p>
               </div>
               <FileText className='w-12 h-12 text-blue-600 opacity-20' />
             </div>

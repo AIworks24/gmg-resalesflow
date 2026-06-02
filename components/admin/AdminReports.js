@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useCallback } from 'react';
 import { useRouter } from 'next/router';
 import { useQuery } from '@tanstack/react-query';
 import {
@@ -16,6 +16,8 @@ import {
   Minus,
   AlertCircle,
   Clock,
+  Download,
+  ChevronDown,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import useAdminAuthStore from '../../stores/adminAuthStore';
@@ -302,6 +304,163 @@ const getExpirationStatusLabel = (days) => {
   return `Expires in ${days} days`;
 };
 
+// ─── export reports tab ────────────────────────────────────────────────────
+
+function DownloadButton({ loading, onClick, icon, label, variant = 'secondary' }) {
+  const base = 'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all focus:outline-none focus:ring-2 focus:ring-offset-1 disabled:opacity-50 disabled:cursor-not-allowed';
+  const styles = {
+    primary:   `${base} bg-[#0f4734] text-white hover:bg-[#0d3d2e] focus:ring-[#0f4734]/40`,
+    secondary: `${base} bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 hover:border-gray-300 focus:ring-gray-200`,
+  };
+  return (
+    <button onClick={onClick} disabled={loading} className={styles[variant]}>
+      {loading
+        ? <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+        : <Download className="w-3.5 h-3.5" />}
+      {label}
+    </button>
+  );
+}
+
+function ReportCard({ title, description, reportKey, hasPdf, handleDownload, exportLoading, extra }) {
+  return (
+    <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5 flex flex-col sm:flex-row sm:items-start gap-4">
+      <div className="flex-1 min-w-0">
+        <h3 className="text-sm font-semibold text-gray-900">{title}</h3>
+        <p className="text-xs text-gray-500 mt-0.5">{description}</p>
+        {extra && <div className="mt-2">{extra}</div>}
+      </div>
+      <div className="flex items-center gap-2 flex-shrink-0">
+        <DownloadButton
+          loading={exportLoading[`${reportKey}-csv`]}
+          onClick={() => handleDownload(reportKey, 'csv')}
+          label="CSV"
+        />
+        {hasPdf && (
+          <DownloadButton
+            loading={exportLoading[`${reportKey}-pdf`]}
+            onClick={() => handleDownload(reportKey, 'pdf')}
+            label="PDF"
+            variant="primary"
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ExportReportsTab({
+  exportDateFilter, setExportDateFilter,
+  exportCustomRange, setExportCustomRange,
+  exportPeriodLabel,
+  exportExpiringDays, setExportExpiringDays,
+  exportLoading, handleDownload,
+}) {
+  return (
+    <div className="space-y-4">
+      {/* Date range control */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 px-5 py-4">
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-2">
+            <Calendar className="w-4 h-4 text-gray-400" />
+            <span className="text-sm font-medium text-gray-700">Date range:</span>
+          </div>
+          <div className="relative">
+            <select
+              value={exportDateFilter}
+              onChange={(e) => setExportDateFilter(e.target.value)}
+              className="pl-3 pr-8 py-1.5 bg-white border border-gray-200 rounded-lg text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 appearance-none"
+            >
+              <option value="today">Today</option>
+              <option value="week">This Week</option>
+              <option value="month">This Month</option>
+              <option value="quarter">This Quarter</option>
+              <option value="year">This Year</option>
+              <option value="all">All Time</option>
+              <option value="custom">Custom Range</option>
+            </select>
+            <ChevronDown className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400" />
+          </div>
+          {exportDateFilter === 'custom' && (
+            <div className="flex items-center gap-2">
+              <input
+                type="date"
+                value={exportCustomRange.startDate}
+                onChange={(e) => setExportCustomRange((p) => ({ ...p, startDate: e.target.value }))}
+                className="px-3 py-1.5 bg-white border border-gray-200 rounded-lg text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+              />
+              <span className="text-gray-400 text-sm">to</span>
+              <input
+                type="date"
+                value={exportCustomRange.endDate}
+                onChange={(e) => setExportCustomRange((p) => ({ ...p, endDate: e.target.value }))}
+                className="px-3 py-1.5 bg-white border border-gray-200 rounded-lg text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+              />
+            </div>
+          )}
+          <span className="ml-1 text-xs text-gray-400 font-medium bg-gray-50 border border-gray-200 rounded-md px-2.5 py-1">
+            {exportPeriodLabel}
+          </span>
+        </div>
+      </div>
+
+      {/* Report cards */}
+      <ReportCard
+        title="Revenue Report"
+        description="Completed payments · fee breakdown · per-community totals"
+        reportKey="revenue"
+        hasPdf
+        handleDownload={handleDownload}
+        exportLoading={exportLoading}
+      />
+
+      <ReportCard
+        title="Status Summary"
+        description="Application counts by status with revenue KPIs"
+        reportKey="status-summary"
+        hasPdf
+        handleDownload={handleDownload}
+        exportLoading={exportLoading}
+      />
+
+      <ReportCard
+        title="Applications (full export)"
+        description="All fields, all statuses — complete audit trail"
+        reportKey="applications"
+        hasPdf={false}
+        handleDownload={handleDownload}
+        exportLoading={exportLoading}
+      />
+
+      <ReportCard
+        title="Expiring Documents"
+        description="Urgency-coded: red = expired/≤7 days · orange = ≤30 days · green = beyond"
+        reportKey="expiring-documents"
+        hasPdf
+        handleDownload={handleDownload}
+        exportLoading={exportLoading}
+        extra={
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-gray-500">Window:</span>
+            <div className="relative">
+              <select
+                value={exportExpiringDays}
+                onChange={(e) => setExportExpiringDays(Number(e.target.value))}
+                className="pl-2.5 pr-7 py-1 bg-white border border-gray-200 rounded-md text-xs text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 appearance-none"
+              >
+                <option value={30}>30 days</option>
+                <option value={60}>60 days</option>
+                <option value={90}>90 days</option>
+              </select>
+              <ChevronDown className="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 w-3 h-3 text-gray-400" />
+            </div>
+          </div>
+        }
+      />
+    </div>
+  );
+}
+
 // ─── main component ────────────────────────────────────────────────────────
 
 const AdminReports = () => {
@@ -309,6 +468,12 @@ const AdminReports = () => {
   const [customDateRange, setCustomDateRange] = useState({ startDate: '', endDate: '' });
   const [activeTab, setActiveTab]           = useState('reports');
   const [expiringDays, setExpiringDays]     = useState(30);
+
+  // Export Reports tab state
+  const [exportDateFilter, setExportDateFilter]         = useState('month');
+  const [exportCustomRange, setExportCustomRange]       = useState({ startDate: '', endDate: '' });
+  const [exportExpiringDays, setExportExpiringDays]     = useState(30);
+  const [exportLoading, setExportLoading]               = useState({});
 
   const router      = useRouter();
   const { role }    = useAdminAuthStore();
@@ -459,6 +624,119 @@ const AdminReports = () => {
     (app) => app.payment_status === 'completed' && !app.submitted_at
   );
 
+  // ── export date range ─────────────────────────────────────────────────────
+
+  const exportDateRange = useMemo(() => {
+    const now   = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+    switch (exportDateFilter) {
+      case 'today':
+        return { start: today.toISOString(), end: new Date(today.getTime() + 86_400_000).toISOString() };
+      case 'week': {
+        const weekStart = new Date(today.getTime() - today.getDay() * 86_400_000);
+        return { start: weekStart.toISOString(), end: now.toISOString() };
+      }
+      case 'month': {
+        const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+        return { start: monthStart.toISOString(), end: now.toISOString() };
+      }
+      case 'quarter': {
+        const q      = Math.floor(now.getMonth() / 3);
+        const qStart = new Date(now.getFullYear(), q * 3, 1);
+        return { start: qStart.toISOString(), end: now.toISOString() };
+      }
+      case 'year': {
+        const yearStart = new Date(now.getFullYear(), 0, 1);
+        return { start: yearStart.toISOString(), end: now.toISOString() };
+      }
+      case 'custom':
+        if (exportCustomRange.startDate && exportCustomRange.endDate) {
+          return {
+            start: new Date(exportCustomRange.startDate).toISOString(),
+            end:   new Date(exportCustomRange.endDate + 'T23:59:59').toISOString(),
+          };
+        }
+        return null;
+      default:
+        return null;
+    }
+  }, [exportDateFilter, exportCustomRange]);
+
+  const exportPeriodLabel = useMemo(() => {
+    const labels = {
+      today:   'Today',
+      week:    'This Week',
+      month:   'This Month',
+      quarter: 'This Quarter',
+      year:    'This Year',
+      all:     'All Time',
+      custom:  exportCustomRange.startDate && exportCustomRange.endDate
+        ? `${exportCustomRange.startDate} – ${exportCustomRange.endDate}`
+        : 'Custom Range',
+    };
+    return labels[exportDateFilter] || 'This Month';
+  }, [exportDateFilter, exportCustomRange]);
+
+  // ── download handler ──────────────────────────────────────────────────────
+
+  const handleDownload = useCallback(async (reportKey, format, opts = {}) => {
+    setExportLoading((prev) => ({ ...prev, [`${reportKey}-${format}`]: true }));
+    try {
+      if (reportKey === 'applications') {
+        const body = exportDateRange
+          ? { dateRange: { start: exportDateRange.start, end: exportDateRange.end } }
+          : {};
+        const res  = await fetch('/api/admin/export-applications', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!res.ok) throw new Error(await res.text());
+        const blob = await res.blob();
+        triggerDownload(blob, `applications-export.csv`);
+        return;
+      }
+
+      const params = new URLSearchParams({ format });
+      if (reportKey === 'expiring-documents') {
+        params.set('days', opts.days ?? exportExpiringDays);
+      } else {
+        if (exportDateRange?.start) params.set('dateStart', exportDateRange.start);
+        if (exportDateRange?.end)   params.set('dateEnd',   exportDateRange.end);
+      }
+
+      const endpointMap = {
+        revenue:            '/api/admin/export-revenue',
+        'status-summary':   '/api/admin/export-status-summary',
+        turnaround:         '/api/admin/export-turnaround',
+        'expiring-documents': '/api/admin/export-expiring-documents',
+      };
+
+      const res = await fetch(`${endpointMap[reportKey]}?${params}`);
+      if (!res.ok) throw new Error(await res.text());
+      const blob = await res.blob();
+      const ext  = format === 'pdf' ? 'pdf' : 'csv';
+      triggerDownload(blob, `${reportKey}-export.${ext}`);
+    } catch (err) {
+      console.error(`Export ${reportKey} ${format} failed:`, err);
+      alert(`Export failed: ${err.message}`);
+    } finally {
+      setExportLoading((prev) => ({ ...prev, [`${reportKey}-${format}`]: false }));
+    }
+  }, [exportDateRange, exportExpiringDays]);
+
+  function triggerDownload(blob, filename) {
+    const url  = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href     = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }
+
   // ── handlers ──────────────────────────────────────────────────────────────
 
   const handleRefresh = () => {
@@ -491,14 +769,15 @@ const AdminReports = () => {
           </button>
         </div>
 
-        {/* Tabs — admin only */}
-        {role === 'admin' && (
+        {/* Tabs — admin + accounting */}
+        {(role === 'admin' || role === 'accounting') && (
           <div className="mb-6 border-b border-gray-200">
             <nav className="-mb-px flex space-x-8">
               {[
-                { id: 'reports',               label: 'Reports & Analytics' },
-                { id: 'expiring-documents',    label: 'Expiring Documents', badge: expiringDocuments.length },
-              ].map((tab) => (
+                { id: 'reports',            label: 'Reports & Analytics',                          show: true },
+                { id: 'expiring-documents', label: 'Expiring Documents', badge: expiringDocuments.length, show: role === 'admin' },
+                { id: 'export-reports',     label: 'Export Reports',                                show: true },
+              ].filter((t) => t.show).map((tab) => (
                 <button
                   key={tab.id}
                   onClick={() => {
@@ -530,22 +809,35 @@ const AdminReports = () => {
         {/* ─── EXPIRING DOCUMENTS TAB ─────────────────────────────────────── */}
         {activeTab === 'expiring-documents' && role === 'admin' && (
           <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-            <div className="px-6 py-4 border-b border-gray-100 bg-gray-50/50 flex items-center justify-between">
+            <div className="px-6 py-4 border-b border-gray-100 bg-gray-50/50 flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h2 className="text-lg font-semibold text-gray-900">Documents by Expiration</h2>
                 <p className="text-sm text-gray-500 mt-1">
                   Across all properties, ordered by expiration date (soonest first)
                 </p>
               </div>
-              <select
-                value={expiringDays}
-                onChange={(e) => setExpiringDays(Number(e.target.value))}
-                className="px-3 py-1.5 bg-white border border-gray-200 rounded-lg text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
-              >
-                <option value={30}>Next 30 days</option>
-                <option value={60}>Next 60 days</option>
-                <option value={90}>Next 90 days</option>
-              </select>
+              <div className="flex items-center gap-3">
+                <select
+                  value={expiringDays}
+                  onChange={(e) => setExpiringDays(Number(e.target.value))}
+                  className="px-3 py-1.5 bg-white border border-gray-200 rounded-lg text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                >
+                  <option value={30}>Next 30 days</option>
+                  <option value={60}>Next 60 days</option>
+                  <option value={90}>Next 90 days</option>
+                </select>
+                <DownloadButton
+                  loading={exportLoading[`expiring-documents-csv`]}
+                  onClick={() => handleDownload('expiring-documents', 'csv', { days: expiringDays })}
+                  label="CSV"
+                />
+                <DownloadButton
+                  loading={exportLoading[`expiring-documents-pdf`]}
+                  onClick={() => handleDownload('expiring-documents', 'pdf', { days: expiringDays })}
+                  label="PDF"
+                  variant="primary"
+                />
+              </div>
             </div>
 
             {isLoadingExpiring ? (
@@ -614,6 +906,21 @@ const AdminReports = () => {
               </div>
             )}
           </div>
+        )}
+
+        {/* ─── EXPORT REPORTS TAB ─────────────────────────────────────────── */}
+        {activeTab === 'export-reports' && (role === 'admin' || role === 'accounting') && (
+          <ExportReportsTab
+            exportDateFilter={exportDateFilter}
+            setExportDateFilter={setExportDateFilter}
+            exportCustomRange={exportCustomRange}
+            setExportCustomRange={setExportCustomRange}
+            exportPeriodLabel={exportPeriodLabel}
+            exportExpiringDays={exportExpiringDays}
+            setExportExpiringDays={setExportExpiringDays}
+            exportLoading={exportLoading}
+            handleDownload={handleDownload}
+          />
         )}
 
         {/* ─── REPORTS TAB ────────────────────────────────────────────────── */}
