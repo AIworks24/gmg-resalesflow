@@ -746,6 +746,36 @@ export default async function handler(req, res) {
                 .update({ status: 'completed', updated_at: new Date().toISOString() })
                 .eq('id', applicationId);
             }
+          } else if (appData?.application_type === 'public_offering') {
+            // Public Offering: auto-complete and send document immediately — no staff review needed
+            console.log(`[Webhook] Public Offering application ${applicationId} — auto-completing and sending document`);
+            try {
+              const baseUrl = process.env.NEXT_PUBLIC_SITE_URL || `https://${process.env.VERCEL_URL}` || 'http://localhost:3000';
+              const emailRes = await fetch(`${baseUrl}/api/send-public-offering-email`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': `Bearer ${process.env.INTERNAL_API_SECRET}`,
+                  ...(process.env.VERCEL_AUTOMATION_BYPASS_SECRET && {
+                    'x-vercel-protection-bypass': process.env.VERCEL_AUTOMATION_BYPASS_SECRET,
+                  }),
+                },
+                body: JSON.stringify({ applicationId }),
+              });
+              if (!emailRes.ok) {
+                const errText = await emailRes.text();
+                console.error(`[Webhook] Public Offering email send failed (${emailRes.status}):`, errText);
+              } else {
+                console.log(`[Webhook] Public Offering document sent for application ${applicationId}`);
+              }
+            } catch (emailErr) {
+              console.error('[Webhook] Public Offering email send threw:', emailErr);
+              // Don't fail the webhook — mark complete even if email fails; admin can resend
+              await supabase
+                .from('applications')
+                .update({ status: 'completed', updated_at: new Date().toISOString() })
+                .eq('id', applicationId);
+            }
           } else if (resolvedIsMultiCommunity) {
             await handleMultiCommunityApplication(applicationId, paymentIntent.metadata);
           } else {

@@ -746,6 +746,14 @@ const SubmitterInfoStep = React.memo(({ formData, handleInputChange, hoaProperti
     }
   }, [canShowPublicOffering, formData.publicOffering, handleInputChange]);
 
+  // Auto-check publicOffering when a PO-enabled property is selected with builder submitter type
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  React.useEffect(() => {
+    if (canShowPublicOffering && formData.submitterType === 'builder') {
+      handleInputChange('publicOffering', true);
+    }
+  }, [canShowPublicOffering, formData.submitterType]);
+
   // Clear infoPacket flag if property doesn't allow it
   React.useEffect(() => {
     if (formData.infoPacket && !canShowInfoPacket) {

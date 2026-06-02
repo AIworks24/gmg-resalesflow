@@ -90,6 +90,7 @@ export default function PaymentSuccess() {
   const resaleForm = application.property_owner_forms?.find(f => f.form_type === 'resale_certificate');
   const inspectionForm = application.property_owner_forms?.find(f => f.form_type === 'inspection_form');
   const isInfoPacket = application.application_type === 'info_packet';
+  const isPublicOffering = application.application_type === 'public_offering';
 
   // Parse buyer emails for display
   const buyerEmailList = application.buyer_email
@@ -110,6 +111,8 @@ export default function PaymentSuccess() {
           <p className="text-lg text-gray-600">
             {isInfoPacket
               ? 'Your Info Packet (Welcome Package) request has been submitted.'
+              : isPublicOffering
+              ? 'Your Public Offering Statement request has been submitted.'
               : 'Your resale certificate application has been submitted successfully.'
             }
           </p>
@@ -136,7 +139,7 @@ export default function PaymentSuccess() {
         {/* Application Details */}
         <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-5 mb-6">
           <h2 className="text-lg font-semibold text-gray-900 mb-3">
-            {isInfoPacket ? 'Info Packet Details' : 'Application Details'}
+            {isInfoPacket ? 'Info Packet Details' : isPublicOffering ? 'Submission Details' : 'Application Details'}
           </h2>
           <div className="grid md:grid-cols-2 gap-4">
             <div>
@@ -202,8 +205,33 @@ export default function PaymentSuccess() {
           </div>
         )}
 
-        {/* Next Steps — only for non-info-packet flows */}
-        {!isInfoPacket && (
+        {/* Public Offering Delivery Notice */}
+        {isPublicOffering && (
+          <div className="bg-blue-50 border border-blue-200 rounded-lg p-5 mb-6">
+            <div className="flex items-start">
+              <div className="bg-blue-100 p-2 rounded-full mr-3 flex-shrink-0">
+                <Mail className="h-5 w-5 text-blue-600" />
+              </div>
+              <div>
+                <h3 className="font-semibold text-blue-900 mb-2">Documents Are Being Sent Automatically</h3>
+                <p className="text-sm text-blue-800 mb-3">
+                  Your Public Offering Statement is being sent right now. No further action is required.
+                </p>
+                <ul className="text-sm text-blue-800 space-y-1">
+                  <li>
+                    <strong>Your document:</strong> Being sent to {application.submitter_email}
+                  </li>
+                </ul>
+                <p className="text-xs text-blue-700 mt-3">
+                  Download links are valid for 30 days. Please save the document for future reference.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Next Steps — only for standard resale certificate flows */}
+        {!isInfoPacket && !isPublicOffering && (
           <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-5 mb-6">
             <h2 className="text-lg font-semibold text-gray-900 mb-3">Next Steps</h2>
             <div className="space-y-3">
@@ -274,14 +302,6 @@ export default function PaymentSuccess() {
             <Home className="w-4 h-4" />
             Return to Home
           </button>
-          {!isInfoPacket && (
-            <button
-              onClick={() => window.print()}
-              className="w-full sm:w-auto bg-gray-600 text-white font-semibold px-6 py-3 rounded-xl hover:bg-gray-700 transition-colors"
-            >
-              Print Confirmation
-            </button>
-          )}
         </div>
         </div>
       </div>
