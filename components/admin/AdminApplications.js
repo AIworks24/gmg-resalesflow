@@ -1028,8 +1028,8 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
       };
     }
     
-    // Info Packet: auto-completes on payment — no admin tasks needed
-    if (application.application_type === 'info_packet') {
+    // Info Packet / Public Offering: auto-completes on payment — no admin tasks needed
+    if (application.application_type === 'info_packet' || application.application_type === 'public_offering') {
       if (application.status === 'completed' || !!application.email_completed_at) {
         return { step: 2, text: 'Completed', color: 'bg-green-100 text-green-800' };
       }
@@ -4785,7 +4785,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                 </div>
                 <div className='flex items-center gap-2'>
                   {/* Edit Details Button - Only show if user is admin */}
-                  {userRole === 'admin' && !isEditingDetails && selectedApplication?.application_type !== 'info_packet' && (
+                  {userRole === 'admin' && !isEditingDetails && selectedApplication?.application_type !== 'info_packet' && selectedApplication?.application_type !== 'public_offering' && (
                     <button
                       onClick={handleStartEditDetails}
                       className='px-4 py-2 bg-blue-50 border border-blue-300 rounded-lg text-blue-700 hover:bg-blue-100 font-semibold transition-all flex items-center gap-2 text-sm'
@@ -4795,7 +4795,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                     </button>
                   )}
                   {/* Save/Cancel Buttons when editing */}
-                  {userRole === 'admin' && isEditingDetails && selectedApplication?.application_type !== 'info_packet' && (
+                  {userRole === 'admin' && isEditingDetails && selectedApplication?.application_type !== 'info_packet' && selectedApplication?.application_type !== 'public_offering' && (
                     <>
                       <button
                         onClick={handleSaveDetails}
@@ -4824,8 +4824,8 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                       </button>
                     </>
                   )}
-                  {/* Restructure Application Button - admin only, excludes lender questionnaire and info_packet */}
-                  {userRole === 'admin' && !isEditingDetails && selectedApplication?.application_type !== 'lender_questionnaire' && selectedApplication?.application_type !== 'info_packet' && (
+                  {/* Restructure Application Button - admin only, excludes lender questionnaire, info_packet, and public_offering */}
+                  {userRole === 'admin' && !isEditingDetails && selectedApplication?.application_type !== 'lender_questionnaire' && selectedApplication?.application_type !== 'info_packet' && selectedApplication?.application_type !== 'public_offering' && (
                     <button
                       onClick={handleOpenCorrectPrimary}
                       className='px-4 py-2 bg-amber-50 border border-amber-300 rounded-lg text-amber-700 hover:bg-amber-100 font-semibold transition-all flex items-center gap-2 text-sm'
@@ -4835,8 +4835,8 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                       Restructure Application
                     </button>
                   )}
-                  {/* Reject Button - Only show if user is admin and application is not already rejected or info_packet */}
-                  {userRole === 'admin' && selectedApplication && selectedApplication.status !== 'rejected' && !isEditingDetails && selectedApplication?.application_type !== 'info_packet' && (
+                  {/* Reject Button - Only show if user is admin and application is not already rejected, info_packet, or public_offering */}
+                  {userRole === 'admin' && selectedApplication && selectedApplication.status !== 'rejected' && !isEditingDetails && selectedApplication?.application_type !== 'info_packet' && selectedApplication?.application_type !== 'public_offering' && (
                     <button
                       onClick={() => setShowRejectModal(true)}
                       className='px-4 py-2 bg-red-50 border border-red-300 rounded-lg text-red-700 hover:bg-red-100 font-semibold transition-all flex items-center gap-2 text-sm'
@@ -5799,6 +5799,78 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                   </div>
                 )}
 
+                {/* Public Offering Tasks (auto-completed on payment) */}
+                {selectedApplication.application_type === 'public_offering' && selectedApplication.status !== 'rejected' && (
+                  <div>
+                    <h3 className='text-lg font-bold text-gray-900 mb-4 flex items-center gap-2'>
+                      <CheckSquare className='w-5 h-5 text-gray-500' />
+                      Public Offering Tasks
+                    </h3>
+                    <div className='space-y-4'>
+                      {/* Auto-completed banner */}
+                      <div className='flex items-start gap-4 p-5 bg-green-50 border border-green-200 rounded-xl'>
+                        <div className='flex-shrink-0 flex items-center justify-center w-10 h-10 rounded-full bg-green-100 border-2 border-green-400 text-green-600'>
+                          <CheckCircle className='w-5 h-5' />
+                        </div>
+                        <div className='flex-1'>
+                          <h4 className='font-semibold text-green-900'>Document Sent Automatically</h4>
+                          <p className='text-sm text-green-700 mt-1'>
+                            The Public Offering Statement was delivered to the requester upon payment. No manual admin tasks required.
+                          </p>
+                          {selectedApplication.email_completed_at && (
+                            <p className='text-xs text-green-600 bg-green-100 px-2 py-1 rounded w-fit mt-2'>
+                              Sent: {new Date(selectedApplication.email_completed_at).toLocaleString()}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                      {/* Resend Documents task */}
+                      <div className='flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-5 bg-white border border-gray-200 rounded-xl shadow-sm'>
+                        <div className='flex items-start gap-4'>
+                          <div className='flex-shrink-0 flex items-center justify-center w-10 h-10 rounded-full border-2 border-blue-300 bg-blue-50 text-blue-600'>
+                            <Mail className='w-5 h-5' />
+                          </div>
+                          <div>
+                            <h4 className='font-semibold text-gray-900'>Resend Documents</h4>
+                            <p className='text-sm text-gray-500 mt-1'>Re-send the Public Offering Statement to the requester</p>
+                          </div>
+                        </div>
+                        <button
+                          onClick={async () => {
+                            try {
+                              setSendingEmail(true);
+                              const response = await fetch('/api/send-public-offering-email', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ applicationId: selectedApplication.id }),
+                              });
+                              if (!response.ok) {
+                                const err = await response.json();
+                                throw new Error(err.error || 'Failed to resend documents');
+                              }
+                              showSnackbar('Documents resent successfully', 'success');
+                              await refreshSelectedApplication(selectedApplication.id);
+                            } catch (error) {
+                              console.error('Error resending public offering:', error);
+                              showSnackbar(error.message || 'Failed to resend documents', 'error');
+                            } finally {
+                              setSendingEmail(false);
+                            }
+                          }}
+                          disabled={sendingEmail}
+                          className='flex items-center gap-2 px-4 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium shadow-sm disabled:opacity-50'
+                        >
+                          {sendingEmail ? (
+                            <><RefreshCw className='w-4 h-4 animate-spin' />Sending...</>
+                          ) : (
+                            <><Mail className='w-4 h-4' />Resend Documents</>
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 {/* Multi-Community Properties Section */}
                 {(() => {
                   // Don't show tasks if application is rejected
@@ -6253,7 +6325,8 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                   const isMultiCommunity = selectedApplication.hoa_properties?.is_multi_community && propertyGroups.length > 1;
                   const isLenderQuestionnaire = selectedApplication.application_type === 'lender_questionnaire';
                   const isInfoPacket = selectedApplication.application_type === 'info_packet';
-                  return !isMultiCommunity && !isLenderQuestionnaire && !isInfoPacket;
+                  const isPublicOffering = selectedApplication.application_type === 'public_offering';
+                  return !isMultiCommunity && !isLenderQuestionnaire && !isInfoPacket && !isPublicOffering;
                 })() && (
                   <div>
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">

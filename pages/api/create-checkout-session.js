@@ -169,16 +169,28 @@ export default async function handler(req, res) {
         line_items: lineItems,
         mode: 'payment',
         allow_promotion_codes: true,
-        success_url: `${req.headers.origin}/?payment_success=true&session_id={CHECKOUT_SESSION_ID}&app_id=${applicationId}`,
+        success_url: `${req.headers.origin}/payment/success?session_id={CHECKOUT_SESSION_ID}`,
         cancel_url: `${req.headers.origin}/?payment_cancelled=true&app_id=${applicationId}`,
         metadata: {
           applicationId: applicationId,
           packageType: 'standard',
           paymentMethod: paymentMethod,
           specialRequest: 'public_offering',
+          customerName: formData.submitterName || '',
+          customerEmail: formData.submitterEmail || '',
         },
         customer_email: formData.submitterEmail,
         billing_address_collection: 'required',
+      };
+
+      // Set payment_intent_data metadata so the webhook can identify the application
+      // directly from paymentIntent.metadata without needing a session fallback lookup.
+      publicOfferingSessionData.payment_intent_data = {
+        metadata: {
+          applicationId: applicationId,
+          specialRequest: 'public_offering',
+          customerName: formData.submitterName || '',
+        },
       };
 
       // Add Stripe Connect transfer for transactions >= $200
@@ -187,18 +199,16 @@ export default async function handler(req, res) {
       const TRANSFER_AMOUNT_PER_ITEM_CENTS = 2100; // $21.00 per property item
       const publicOfferingPropertyItemCount = 1; // Public offering is always 1 property item
       const totalTransferAmountCents = TRANSFER_AMOUNT_PER_ITEM_CENTS * publicOfferingPropertyItemCount;
-      
+
       if (publicOfferingTotalCents >= TRANSFER_THRESHOLD_CENTS) {
         const connectedAccountId = getConnectedAccountId(finalTestMode);
-        
+
         if (connectedAccountId) {
-          publicOfferingSessionData.payment_intent_data = {
-            transfer_data: {
-              destination: connectedAccountId,
-              amount: totalTransferAmountCents, // $21 × 1 property item to connected account
-            },
+          publicOfferingSessionData.payment_intent_data.transfer_data = {
+            destination: connectedAccountId,
+            amount: totalTransferAmountCents, // $21 × 1 property item to connected account
           };
-          
+
           console.log(`[Stripe Connect] Public Offering - Transfer enabled: $${(totalTransferAmountCents / 100).toFixed(2)} ($${(TRANSFER_AMOUNT_PER_ITEM_CENTS / 100).toFixed(2)} × ${publicOfferingPropertyItemCount} property item) to connected account ${connectedAccountId}`);
           console.log(`[Stripe Connect] Public Offering - Total amount: $${(publicOfferingTotalCents / 100).toFixed(2)}, Platform keeps: $${((publicOfferingTotalCents - totalTransferAmountCents) / 100).toFixed(2)}`);
         } else {

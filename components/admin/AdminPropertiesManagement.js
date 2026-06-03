@@ -585,12 +585,39 @@ const AdminPropertiesManagement = () => {
   // Info packet domain input (transient — domains stored in formData)
   const [newInfoPacketDomain, setNewInfoPacketDomain] = useState('');
 
+  // PO checkbox validation error (shown inline near the checkbox)
+  const [poDocError, setPoDocError] = useState('');
+
   // Snackbar helper function
   const showSnackbar = (message, type = 'success') => {
     setSnackbar({ show: true, message, type });
     setTimeout(() => {
       setSnackbar({ show: false, message: '', type: 'success' });
     }, 4000); // Auto-close after 4 seconds
+  };
+
+  const handlePoCheckboxChange = async (checked) => {
+    if (!checked) {
+      setPoDocError('');
+      setFormData(prev => ({ ...prev, allow_public_offering: false }));
+      return;
+    }
+    // Only validate document existence for existing properties
+    if (selectedProperty?.id) {
+      const { data: docs } = await supabase
+        .from('property_documents')
+        .select('id')
+        .eq('property_id', selectedProperty.id)
+        .eq('document_key', 'public_offering_statement')
+        .not('file_path', 'is', null)
+        .limit(1);
+      if (!docs || docs.length === 0) {
+        setPoDocError('No Public Offering Statement document has been uploaded for this property. Upload the document first before enabling this option.');
+        return;
+      }
+    }
+    setPoDocError('');
+    setFormData(prev => ({ ...prev, allow_public_offering: true }));
   };
 
   const [formData, setFormData] = useState({
@@ -826,6 +853,12 @@ const AdminPropertiesManagement = () => {
       const emailValidation = validateEmails(formData.property_owner_email);
       if (!emailValidation.valid) {
         showSnackbar(`Email validation error: ${emailValidation.errors.join(', ')}`, 'error');
+        return;
+      }
+
+      // Prevent saving if both PO and IP are enabled simultaneously
+      if (formData.allow_public_offering && formData.allow_info_packet) {
+        showSnackbar('A property cannot have both Public Offering and Info Packet enabled at the same time. Please disable one before saving.', 'error');
         return;
       }
       
@@ -2283,22 +2316,36 @@ const AdminPropertiesManagement = () => {
                       type="checkbox"
                       id="allow_public_offering"
                       checked={formData.allow_public_offering || false}
-                      onChange={(e) => setFormData({...formData, allow_public_offering: e.target.checked})}
+                      onChange={(e) => handlePoCheckboxChange(e.target.checked)}
                       className="w-4 h-4 text-green-600 border-gray-300 rounded focus:ring-green-500"
                     />
                     <label htmlFor="allow_public_offering" className="text-sm font-medium text-gray-700">
                       Allow Public Offering Statement Requests
                     </label>
                   </div>
-                  {formData.allow_public_offering && (
+                  {poDocError && (
+                    <div className="mt-2 p-3 bg-red-50 rounded-md flex items-start gap-2">
+                      <AlertTriangle className="w-4 h-4 text-red-600 mt-0.5 shrink-0" />
+                      <p className="text-sm text-red-700">{poDocError}</p>
+                    </div>
+                  )}
+                  {formData.allow_public_offering && formData.allow_info_packet && (
+                    <div className="mt-2 p-3 bg-red-50 rounded-md flex items-start gap-2">
+                      <AlertTriangle className="w-4 h-4 text-red-600 mt-0.5 shrink-0" />
+                      <p className="text-sm text-red-700">
+                        <span className="font-medium">Conflict:</span> A property cannot have both Public Offering and Info Packet enabled at the same time. Disable one before saving.
+                      </p>
+                    </div>
+                  )}
+                  {formData.allow_public_offering && !formData.allow_info_packet && (
                     <div className="mt-3 p-3 bg-amber-50 rounded-md">
                       <div className="flex items-start gap-2">
                         <AlertTriangle className="w-4 h-4 text-amber-600 mt-0.5" />
                         <div className="text-sm text-amber-800">
                           <p className="font-medium">Public Offering Statement Enabled</p>
                           <p className="text-amber-700">
-                            When enabled, users selecting "Builder/Developer" as their submitter type will see 
-                            the option to request a Public Offering Statement ($200 fixed fee). Only enable this 
+                            When enabled, users selecting "Builder/Developer" as their submitter type will see
+                            the option to request a Public Offering Statement ($200 fixed fee). Only enable this
                             for condo-type properties that have Public Offering Statement documents available.
                           </p>
                         </div>
