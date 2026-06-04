@@ -838,6 +838,10 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
         const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
         const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
         return { start: monthStart, end: monthEnd };
+      case 'recent': {
+        const recentStart = new Date(today.getTime() - 15 * 24 * 60 * 60 * 1000);
+        return { start: recentStart, end: new Date(now.getTime()) };
+      }
       case 'custom':
         if (customDateRange.startDate && customDateRange.endDate) {
           return {
