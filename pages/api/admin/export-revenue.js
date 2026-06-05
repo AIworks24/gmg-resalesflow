@@ -128,18 +128,18 @@ export default async function handler(req, res) {
     // ── CSV ──────────────────────────────────────────────────────────────────
     if (format === 'csv') {
       const headers = [
-        'Date', 'Application ID', 'Community', 'Application Type',
-        'Total', 'Restructured', 'Property Address',
+        'Date', 'Application ID', 'Community', 'Property Address', 'Application Type',
+        'Total', 'Restructured',
       ];
 
       const rows = apps.map((a) => [
         fmtDate(a.created_at),
         a.id,
         a.hoa_properties?.name || '',
+        a.property_address || '',
         appTypeLabel(a.application_type, a.package_type),
         a.total_amount || '0',
         restructureNote(a),
-        a.property_address || '',
       ]);
 
       const csv = [
@@ -179,9 +179,9 @@ export default async function handler(req, res) {
       { label: 'Date',             key: 'date',      width: 1.2 },
       { label: 'Application ID',   key: 'id',        width: 1.5 },
       { label: 'Community',        key: 'community', width: 2.5 },
+      { label: 'Property Address', key: 'address',   width: 1.8 },
       { label: 'Application Type', key: 'appType',   width: 3 },
       { label: 'Total',            key: 'total',     width: 1.2 },
-      { label: 'Property Address', key: 'address',   width: 1.8 },
     ];
 
     const detailRows = apps.map((a) => ({
