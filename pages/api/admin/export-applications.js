@@ -32,6 +32,18 @@ export default async function handler(req, res) {
       throw error;
     }
 
+    const getApplicationTypeLabel = (app) => {
+      if (app.impersonation_metadata) return 'Impersonated';
+      switch (app.application_type) {
+        case 'lender_questionnaire': return 'Lender Questionnaire';
+        case 'settlement_va':
+        case 'settlement_nc':       return 'Single or Multicommunity Settlement';
+        case 'public_offering':
+        case 'info_packet':         return 'Builder/Developer (Public Offering or Info Packet)';
+        default:                    return 'Single or Multicommunity Resale';
+      }
+    };
+
     // Generate CSV content
     const csvHeaders = [
       'ID',
@@ -39,7 +51,7 @@ export default async function handler(req, res) {
       'Property Address',
       'Unit Number',
       'HOA Property',
-      'Submitter Type',
+      'Application Type',
       'Submitter Name',
       'Submitter Email',
       'Submitter Phone',
@@ -52,9 +64,6 @@ export default async function handler(req, res) {
       'Sale Price',
       'Closing Date',
       'Package Type',
-      'Processing Fee',
-      'Rush Fee',
-      'Convenience Fee',
       'Total Amount',
       'Status',
       'Payment Status',
@@ -71,7 +80,7 @@ export default async function handler(req, res) {
       app.property_address || '',
       app.unit_number || '',
       app.hoa_properties?.name || '',
-      app.submitter_type || '',
+      getApplicationTypeLabel(app),
       app.submitter_name || '',
       app.submitter_email || '',
       app.submitter_phone || '',
@@ -84,9 +93,6 @@ export default async function handler(req, res) {
       app.sale_price || '',
       app.closing_date || '',
       app.package_type || '',
-      app.processing_fee || '',
-      app.rush_fee || '',
-      app.convenience_fee || '',
       app.total_amount || '',
       app.status || '',
       app.payment_status || '',

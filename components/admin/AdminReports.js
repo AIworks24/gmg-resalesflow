@@ -415,15 +415,6 @@ function ExportReportsTab({
       />
 
       <ReportCard
-        title="Status Summary"
-        description="Application counts by status with revenue KPIs"
-        reportKey="status-summary"
-        hasPdf
-        handleDownload={handleDownload}
-        exportLoading={exportLoading}
-      />
-
-      <ReportCard
         title="Applications (full export)"
         description="All fields, all statuses — complete audit trail"
         reportKey="applications"
@@ -708,7 +699,6 @@ const AdminReports = () => {
 
       const endpointMap = {
         revenue:            '/api/admin/export-revenue',
-        'status-summary':   '/api/admin/export-status-summary',
         turnaround:         '/api/admin/export-turnaround',
         'expiring-documents': '/api/admin/export-expiring-documents',
       };
