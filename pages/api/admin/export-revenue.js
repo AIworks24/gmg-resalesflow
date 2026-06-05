@@ -129,7 +129,7 @@ export default async function handler(req, res) {
     if (format === 'csv') {
       const headers = [
         'Date', 'Application ID', 'Community', 'Application Type',
-        'Total', 'Restructured', 'Submitter',
+        'Total', 'Restructured', 'Property Address',
       ];
 
       const rows = apps.map((a) => [
@@ -139,7 +139,7 @@ export default async function handler(req, res) {
         appTypeLabel(a.application_type, a.package_type),
         a.total_amount || '0',
         restructureNote(a),
-        a.submitter_name || '',
+        a.property_address || '',
       ]);
 
       const csv = [
@@ -181,7 +181,7 @@ export default async function handler(req, res) {
       { label: 'Community',        key: 'community', width: 2.5 },
       { label: 'Application Type', key: 'appType',   width: 3 },
       { label: 'Total',            key: 'total',     width: 1.2 },
-      { label: 'Submitter',        key: 'submitter', width: 1.8 },
+      { label: 'Property Address', key: 'address',   width: 1.8 },
     ];
 
     const detailRows = apps.map((a) => ({
@@ -190,7 +190,7 @@ export default async function handler(req, res) {
       community: a.hoa_properties?.name || '',
       appType:   appTypeLabel(a.application_type, a.package_type) + (restructureNote(a) ? ' ✦' : ''),
       total:     fmtAlways(a.total_amount),
-      submitter: a.submitter_name || '',
+      address:   a.property_address || '',
     }));
 
     // Restructured applications section
