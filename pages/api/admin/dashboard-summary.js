@@ -123,6 +123,11 @@ export default async function handler(req, res) {
     // Helper function to check if a regular (non-multi-community) application is fully completed
     // This matches the logic in getWorkflowStep to ensure consistency
     const isRegularApplicationCompleted = (app) => {
+      // Info Packet / Public Offering: auto-completes on payment — no admin tasks needed
+      if (app.application_type === 'info_packet' || app.application_type === 'public_offering') {
+        return app.status === 'completed' || !!app.email_completed_at;
+      }
+
       // Check if this is a lender questionnaire application
       const isLenderQuestionnaire = app.application_type === 'lender_questionnaire';
       
@@ -183,6 +188,15 @@ export default async function handler(req, res) {
       return isRegularApplicationCompleted(app);
     }).length;
     const pending = total - completed;
+
+    // Recently submitted (past 15 calendar days)
+    const fifteenDaysAgo = new Date();
+    fifteenDaysAgo.setDate(fifteenDaysAgo.getDate() - 15);
+    fifteenDaysAgo.setHours(0, 0, 0, 0);
+    const recentlySubmitted = applications.filter(app => {
+      const appDate = new Date(app.submitted_at || app.created_at);
+      return appDate >= fifteenDaysAgo;
+    }).length;
 
     // Today's submissions - calculate based on user's timezone
     // Get timezone from query parameter (defaults to UTC if not provided)
@@ -441,6 +455,7 @@ export default async function handler(req, res) {
     const summary = {
       metrics: {
         totalApplications: total,
+        recentlySubmitted,
         pendingApplications: pending,
         completedApplications: completed,
         urgentApplications: urgentCount,

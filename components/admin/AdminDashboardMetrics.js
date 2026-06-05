@@ -100,6 +100,7 @@ const AdminDashboardMetrics = ({ userRole }) => {
   // Extract data from SWR response with defaults
   const metrics = swrData?.metrics || {
     totalApplications: 0,
+    recentlySubmitted: 0,
     pendingApplications: 0,
     completedApplications: 0,
     urgentApplications: 0,
@@ -242,15 +243,19 @@ const AdminDashboardMetrics = ({ userRole }) => {
 
         {/* Key Metrics Cards */}
         <div className='grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8'>
-          {/* Total Applications */}
-          <div 
+          {/* Recently Submitted */}
+          <div
             className='bg-white p-6 rounded-lg shadow-md border cursor-pointer hover:shadow-lg transition-shadow'
-            onClick={() => navigateToApplications()}
+            onClick={() => navigateToApplications({ date: 'recent' })}
           >
             <div className='flex items-center justify-between'>
               <div>
-                <p className='text-sm text-gray-600'>Total Applications Today</p>
-                <p className='text-3xl font-bold text-gray-900'>{metrics.todaySubmissions}</p>
+                <p className='text-sm text-gray-600'>Recently Submitted</p>
+                <p className='text-3xl font-bold text-gray-900'>{metrics.recentlySubmitted}</p>
+                <p className='text-sm text-gray-500 flex items-center gap-1'>
+                  <Calendar className='w-3 h-3' />
+                  Past 15 days
+                </p>
               </div>
               <FileText className='w-12 h-12 text-blue-600 opacity-20' />
             </div>
