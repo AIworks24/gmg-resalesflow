@@ -79,7 +79,7 @@ export default async function handler(req, res) {
     .from('applications')
     .select(`
       id, submitter_email, submitter_name, property_address, hoa_property_id,
-      application_type,
+      application_type, buyer_email,
       hoa_properties(id, name)
     `)
     .eq('id', applicationId)
@@ -99,6 +99,10 @@ export default async function handler(req, res) {
     ? `for <strong>${application.property_address}</strong> in <strong>${hoaName}</strong>`
     : `for <strong>${hoaName}</strong>`;
 
+  const buyerEmails = application.buyer_email
+    ? application.buyer_email.split(',').map(e => e.trim()).filter(Boolean)
+    : [];
+
   try {
     await sendApprovalEmail({
       to: application.submitter_email,
@@ -108,7 +112,7 @@ export default async function handler(req, res) {
       pdfUrl: null,
       applicationId,
       downloadLinks,
-      cc: [],
+      cc: buyerEmails,
       customSubject: `Your Public Offering Statement for ${hoaName} is Ready`,
       customTitle: 'Your Public Offering Statement is Ready!',
       customMessage: `Your Public Offering Statement documents ${addressLine} are now available for download.`,

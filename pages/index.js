@@ -855,11 +855,6 @@ const SubmitterInfoStep = React.memo(({ formData, handleInputChange, hoaProperti
             </label>
           </div>
         )}
-        {formData.submitterType === 'builder' && formData.publicOffering && canShowPublicOffering && (
-          <div className='mt-2 text-xs sm:text-sm text-green-800 bg-green-50 border border-green-200 rounded p-3'>
-            Public Offering Statement selected — transaction details will be skipped. You will proceed directly to payment.
-          </div>
-        )}
         {formData.submitterType === 'builder' && canShowInfoPacket && (
           <div className='mt-4 sm:mt-6 p-3 sm:p-4 border border-blue-300 rounded-md bg-blue-50'>
             <label className='flex items-start gap-2 sm:gap-3 cursor-pointer'>
@@ -978,7 +973,7 @@ const SubmitterInfoStep = React.memo(({ formData, handleInputChange, hoaProperti
 });
 
 const TransactionDetailsStep = ({ formData, handleInputChange }) => {
-  const isInfoPacketFlow = formData.submitterType === 'builder' && formData.infoPacket;
+  const isInfoPacketFlow = formData.submitterType === 'builder' && (formData.infoPacket || formData.publicOffering);
 
   return (
     <div className='space-y-6'>
@@ -987,7 +982,9 @@ const TransactionDetailsStep = ({ formData, handleInputChange }) => {
         Transaction Details
       </h3>
       <p className='text-gray-600'>
-        {isInfoPacketFlow
+        {formData.publicOffering
+          ? 'Buyer information for Public Offering Statement delivery'
+          : isInfoPacketFlow
           ? 'Buyer information for Info Packet delivery'
           : 'Information about the buyer, seller, and sale details'}
       </p>
@@ -5231,25 +5228,13 @@ export default function GMGResaleFlow() {
       // Save draft before moving to next step
       await saveDraftApplication();
       
-      // Skip Transaction Details only for Public Offering Statement
-      const isSpecialBuilderFlow = formData.submitterType === 'builder' && formData.publicOffering;
-      if (currentStep === 2 && isSpecialBuilderFlow) {
-        setCurrentStep(4);
-      } else {
-        setCurrentStep(currentStep + 1);
-      }
+      setCurrentStep(currentStep + 1);
     }
   }, [currentStep, saveDraftApplication, formData.submitterType, formData.publicOffering, formData.infoPacket]);
 
   const prevStep = React.useCallback(() => {
     if (currentStep > 1) {
-      // Skip Transaction Details only when going back for Public Offering Statement flows
-      const isSpecialBuilderFlow = formData.submitterType === 'builder' && formData.publicOffering;
-      if (currentStep === 4 && isSpecialBuilderFlow) {
-        setCurrentStep(2);
-      } else {
-        setCurrentStep(currentStep - 1);
-      }
+      setCurrentStep(currentStep - 1);
     }
   }, [currentStep, formData.submitterType, formData.publicOffering, formData.infoPacket, applicationType]);
 
@@ -7272,7 +7257,7 @@ export default function GMGResaleFlow() {
         { number: 6, title: 'Review & Submit', icon: CheckCircle },
       ];
     }
-    if (applicationType === 'info_packet') {
+    if (applicationType === 'info_packet' || applicationType === 'public_offering') {
       return [
         { number: 1, title: 'HOA Selection', icon: Building2 },
         { number: 2, title: 'Submitter Info', icon: User },
@@ -7802,7 +7787,7 @@ export default function GMGResaleFlow() {
                         !formData.submitterEmail ||
                         (formData.submitterType === 'settlement' && !formData.closingDate))) ||
                     (currentStep === 3 &&
-                      ((formData.submitterType === 'builder' && formData.infoPacket)
+                      ((formData.submitterType === 'builder' && (formData.infoPacket || formData.publicOffering))
                         ? !(formData.buyerEmail || (Array.isArray(formData.buyerEmails) && formData.buyerEmails.length > 0))
                         : (!formData.sellerName || !formData.sellerEmail || !formData.sellerPhone)))
                   }
