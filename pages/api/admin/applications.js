@@ -111,8 +111,16 @@ export default async function handler(req, res) {
     }
 
     // Apply search filter
+    // Note: cannot filter on foreign table columns (hoa_properties.name) via .or() — PostgREST PGRST100
+    // For ID lookup, use exact match when search is a plain integer
     if (search) {
-      query = query.or(`property_address.ilike.%${search}%,submitter_name.ilike.%${search}%,hoa_properties.name.ilike.%${search}%,id::text.ilike.%${search}%`);
+      const searchNum = parseInt(search);
+      const isNumericId = !isNaN(searchNum) && String(searchNum) === search.trim();
+      if (isNumericId) {
+        query = query.or(`property_address.ilike.%${search}%,submitter_name.ilike.%${search}%,id.eq.${searchNum}`);
+      } else {
+        query = query.or(`property_address.ilike.%${search}%,submitter_name.ilike.%${search}%`);
+      }
     }
 
     // Apply date range filter

@@ -248,9 +248,17 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
     }
   }, [selectedApplication?.id]);
 
-  // Build dynamic API URL with sort, status, and urgency parameters
+  // Debounce search term for API calls (prevents a round-trip on every keystroke)
+  const [debouncedSearchTerm, setDebouncedSearchTerm] = useState('');
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearchTerm(searchTerm), 400);
+    return () => clearTimeout(timer);
+  }, [searchTerm]);
+
+  // Build dynamic API URL with sort, status, urgency, and search parameters
   // When urgency=overdue|near_deadline the API fetches all and filters so the list matches the dashboard metric
-  const apiUrl = `/api/admin/applications?status=${selectedStatus}&sortBy=${sortBy}&sortOrder=${sortOrder}${urgencyFilter !== 'all' ? `&urgency=${urgencyFilter}` : ''}`;
+  // When search is present the API queries the full table server-side, bypassing the 1000-record window
+  const apiUrl = `/api/admin/applications?status=${selectedStatus}&sortBy=${sortBy}&sortOrder=${sortOrder}${urgencyFilter !== 'all' ? `&urgency=${urgencyFilter}` : ''}${debouncedSearchTerm ? `&search=${encodeURIComponent(debouncedSearchTerm)}` : ''}`;
 
   // SWR fetcher function
   const fetcher = async (url) => {
@@ -274,6 +282,14 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
       dedupingInterval: 1000, // Reduced from 5s to 1s for faster real-time updates
     }
   );
+
+  // Keep a ref to the latest apiUrl so real-time handlers never use a stale closure value
+  const apiUrlRef = useRef(apiUrl);
+  useEffect(() => { apiUrlRef.current = apiUrl; }, [apiUrl]);
+
+  // Keep a ref to the latest mutate so real-time handlers always call the current SWR mutate
+  const mutateRef = useRef(mutate);
+  useEffect(() => { mutateRef.current = mutate; }, [mutate]);
 
   // Force refresh with cache bypass (for real-time updates)
   // Uses a version counter to prevent stale responses from overwriting fresh data
@@ -300,12 +316,14 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
 
   const executeRefresh = async () => {
     const version = ++refreshVersionRef.current;
-    const bypassUrl = `${apiUrl}${apiUrl.includes('?') ? '&' : '?'}bypassCache=true`;
+    // Read from refs so stale closures in real-time handlers always use the current URL and mutate
+    const currentUrl = apiUrlRef.current;
+    const bypassUrl = `${currentUrl}${currentUrl.includes('?') ? '&' : '?'}bypassCache=true`;
     try {
       const freshData = await fetcher(bypassUrl);
       // Only apply if this is still the latest request (prevents stale overtake)
       if (version === refreshVersionRef.current) {
-        mutate(freshData, { revalidate: false });
+        mutateRef.current(freshData, { revalidate: false });
       }
     } catch (error) {
       console.warn('Failed to force refresh with bypass:', error);
@@ -1588,10 +1606,10 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
       });
     }
 
-    // Apply search filter
-    if (searchTerm) {
-      const searchLower = searchTerm.toLowerCase();
-      const searchNum = searchTerm.trim();
+    // Apply search filter using debouncedSearchTerm so client and server-side filtering update together
+    if (debouncedSearchTerm) {
+      const searchLower = debouncedSearchTerm.toLowerCase();
+      const searchNum = debouncedSearchTerm.trim();
       filtered = filtered.filter(app =>
         app.property_address?.toLowerCase().includes(searchLower) ||
         app.submitter_name?.toLowerCase().includes(searchLower) ||
@@ -1679,7 +1697,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
     const paginated = filtered.slice(startIndex, startIndex + itemsPerPage);
 
     return { applications: paginated, totalCount: count };
-  }, [swrData, dateFilter, customDateRange, selectedStatus, selectedApplicationType, selectedPackageType, urgencyFilter, assigneeFilter, searchTerm, assignedToMe, userEmail, currentPage, itemsPerPage, userRole]);
+  }, [swrData, dateFilter, customDateRange, selectedStatus, selectedApplicationType, selectedPackageType, urgencyFilter, assigneeFilter, debouncedSearchTerm, assignedToMe, userEmail, currentPage, itemsPerPage, userRole]);
 
   // Filtered staff list for assignee dropdown search (by name or email)
   const filteredStaffForAssignee = useMemo(() => {
