@@ -3,6 +3,7 @@ import { useRouter } from 'next/router';
 import { CheckCircle, FileText, Clock, Mail, Home } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import ImpersonationBanner from '../../components/ImpersonationBanner';
+import posthog from '../../lib/posthog';
 
 // Helper function to format property address with unit number
 const formatPropertyAddress = (address, unitNumber) => {
@@ -44,6 +45,14 @@ export default function PaymentSuccess() {
 
       if (error) throw error;
       setApplication(data);
+
+      posthog.capture('payment_completed', {
+        application_id: data.id,
+        stripe_session_id: sessionId,
+        application_type: data.application_type,
+        package_type: data.package_type,
+        total_amount: data.total_amount,
+      });
     } catch (error) {
       console.error('Error loading application by session ID:', error);
     } finally {

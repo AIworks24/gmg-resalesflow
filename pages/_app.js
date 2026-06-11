@@ -4,6 +4,7 @@ import { AppProvider } from '../lib/AppContext'
 import QueryProvider from '../providers/QueryProvider'
 import { AdminAuthProvider } from '../providers/AdminAuthProvider'
 import { ApplicantAuthProvider } from '../providers/ApplicantAuthProvider'
+import PostHogProvider from '../providers/PostHogProvider'
 import ConnectionStatusIndicator from '../components/ConnectionStatusIndicator'
 
 function AppWithAuth({ Component, pageProps }) {
@@ -19,9 +20,11 @@ function AppWithAuth({ Component, pageProps }) {
   }
   
   return (
-    <ApplicantAuthProvider>
-      <Component {...pageProps} />
-    </ApplicantAuthProvider>
+    <PostHogProvider>
+      <ApplicantAuthProvider>
+        <Component {...pageProps} />
+      </ApplicantAuthProvider>
+    </PostHogProvider>
   )
 }
 

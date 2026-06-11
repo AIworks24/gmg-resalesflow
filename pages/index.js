@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import posthog from '../lib/posthog';
 import { useRouter } from 'next/router';
 import { supabase } from '../lib/supabase';
 import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
@@ -1839,6 +1840,13 @@ const PackagePaymentStep = ({
         if (!sessionId) {
           throw new Error('Failed to create checkout session');
         }
+
+        // Capture linking event so both sessions are correlatable in PostHog by application_id
+        posthog.capture('checkout_started', {
+          application_id: createdApplicationId,
+          stripe_session_id: sessionId,
+          ph_session_id: posthog.get_session_id?.(),
+        });
 
         // Redirect to Stripe Checkout
         const { error: redirectError } = await stripe.redirectToCheckout({
