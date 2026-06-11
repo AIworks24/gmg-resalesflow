@@ -113,15 +113,15 @@ export default async function handler(req, res) {
       throw updateError;
     }
 
-    // total_amount stores the base cost (CC fees excluded). The actual Stripe charge is total_amount + CC fees.
+    // total_amount stores the full Stripe charge (base cost + CC fees included).
     const CONVENIENCE_FEE_CENTS = 995; // $9.95 per property
     const isCreditCard = application.payment_method === 'credit_card';
     const numProperties = (application.application_property_groups || []).length || 1;
     const totalCCFees = isCreditCard ? (CONVENIENCE_FEE_CENTS * numProperties) / 100 : 0;
-    // totalPaid = what the customer was actually charged (base + CC fees)
-    const totalPaid = application.total_amount > 0 ? application.total_amount + totalCCFees : 0;
-    // refundAmount = base amount only (CC fees are non-refundable and already excluded from total_amount)
-    const refundAmount = application.total_amount > 0 ? application.total_amount : 0;
+    // totalPaid = what the customer was actually charged (total_amount already includes CC fees)
+    const totalPaid = application.total_amount > 0 ? application.total_amount : 0;
+    // refundAmount = total paid minus non-refundable CC fees
+    const refundAmount = application.total_amount > 0 ? application.total_amount - totalCCFees : 0;
 
     // Send email to requestor and resales@gmgva.com
     const submitterEmail = application.submitter_email;
