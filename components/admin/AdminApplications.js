@@ -280,6 +280,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
       refreshInterval: 0, // Disable auto-refresh (manual refresh only)
       revalidateOnFocus: false,
       dedupingInterval: 1000, // Reduced from 5s to 1s for faster real-time updates
+      keepPreviousData: true, // Keep showing old results while new search/filter results load
     }
   );
 
