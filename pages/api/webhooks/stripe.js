@@ -1284,18 +1284,20 @@ function generateAccessToken() {
 async function autoAssignApplication(applicationId, supabase) {
   try {
     console.log(`Attempting to auto-assign application ${applicationId} to property owner`);
-    
+
     // Get application with property information
     const { data: application, error: appError } = await supabase
       .from('applications')
       .select(`
         id,
         hoa_property_id,
+        application_type,
         hoa_properties (
           id,
           name,
           property_owner_email,
           default_assignee_email,
+          settlement_assignee_email,
           is_multi_community
         )
       `)
@@ -1325,11 +1327,49 @@ async function autoAssignApplication(applicationId, supabase) {
       return { success: false, error: 'No property owner email found' };
     }
 
-    // Parse emails (handles both single email string and comma-separated string)
     // Import parseEmails dynamically to avoid circular dependencies
     const { parseEmails } = await import('../../../lib/emailUtils');
+
+    // For settlement applications, use settlement_assignee_email if set;
+    // otherwise fall back to the first email in property_owner_email.
+    const isSettlement = application.application_type === 'settlement_va' ||
+                         application.application_type === 'settlement_nc';
+    if (isSettlement) {
+      let settlementEmail = property.settlement_assignee_email?.trim();
+
+      if (!settlementEmail) {
+        const ownerEmails = parseEmails(property.property_owner_email);
+        const firstOwner = ownerEmails[0]?.replace(/^owner\./, '').trim();
+        if (firstOwner) {
+          settlementEmail = firstOwner;
+          console.log(`[Stripe] Settlement: no settlement_assignee_email, falling back to first property owner: ${settlementEmail}`);
+        }
+      } else {
+        console.log(`[Stripe] Settlement: using settlement_assignee_email: ${settlementEmail}`);
+      }
+
+      if (!settlementEmail) {
+        console.log(`[Stripe] Settlement ${applicationId}: no assignee email found, leaving unassigned`);
+        return { success: false, error: 'No assignee email found for settlement application' };
+      }
+
+      const { error: assignError } = await supabase
+        .from('applications')
+        .update({ assigned_to: settlementEmail, updated_at: new Date().toISOString() })
+        .eq('id', applicationId);
+
+      if (assignError) {
+        console.error('[Stripe] Error assigning settlement application:', assignError);
+        return { success: false, error: assignError.message };
+      }
+
+      console.log(`[Stripe] Successfully auto-assigned settlement application ${applicationId} to ${settlementEmail}`);
+      return { success: true, assignedTo: settlementEmail };
+    }
+
+    // Parse emails (handles both single email string and comma-separated string)
     const ownerEmails = parseEmails(property.property_owner_email);
-    
+
     if (ownerEmails.length === 0) {
       console.log(`No valid property owner emails found for application ${applicationId}, skipping auto-assignment`);
       return { success: false, error: 'No valid property owner emails found' };
@@ -1396,7 +1436,7 @@ async function autoAssignApplication(applicationId, supabase) {
     // Assign the application to the property owner
     const { error: assignError } = await supabase
       .from('applications')
-      .update({ 
+      .update({
         assigned_to: ownerEmail,
         updated_at: new Date().toISOString()
       })
@@ -1477,6 +1517,20 @@ async function handleMultiCommunityApplication(applicationId, metadata) {
     // Purge any stale Redis cache
     await deleteCachePattern('admin:applications:*');
     console.log(`[MC] Application ${applicationId} now visible with ${groups.length} property groups`);
+
+    // Assign each property group to its settlement_assignee_email (or first property owner
+    // as fallback). Groups exist now, so the call is no longer a no-op.
+    const isSettlementApp = application.application_type === 'settlement_va' ||
+                            application.application_type === 'settlement_nc';
+    if (isSettlementApp) {
+      try {
+        const { autoAssignSettlementMCGroups } = await import('../auto-assign-application');
+        await autoAssignSettlementMCGroups(applicationId, supabase);
+        console.log(`[MC] Settlement group assignment complete for application ${applicationId}`);
+      } catch (assignError) {
+        console.warn(`[MC] Failed to assign settlement groups for application ${applicationId}:`, assignError);
+      }
+    }
 
     // Send notifications to ALL property owners (primary + secondary) BEFORE PDF generation.
     // Property groups now exist, so createNotifications can find all recipients.

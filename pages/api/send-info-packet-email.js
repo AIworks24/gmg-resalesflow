@@ -117,7 +117,7 @@ export default async function handler(req, res) {
     .from('applications')
     .select(`
       id, submitter_email, submitter_name, property_address, hoa_property_id, buyer_email,
-      buyer_name, application_type,
+      buyer_name, application_type, notes, email_completed_at,
       hoa_properties(id, name, is_multi_community)
     `)
     .eq('id', applicationId)
@@ -191,13 +191,20 @@ export default async function handler(req, res) {
       });
     }
 
-    // Mark application as completed and email sent
+    // Mark application as completed and email sent; log to process history
+    const isResend = !!application.email_completed_at;
+    const sentTo = primaryTo;
+    const auditVerb = isResend ? 'resent' : 'sent';
+    const auditNote = `[${new Date().toISOString()}] Info Packet documents ${auditVerb} to ${sentTo}.`;
+    const updatedNotes = application.notes ? `${application.notes}\n\n${auditNote}` : auditNote;
+
     await supabase
       .from('applications')
       .update({
         status: 'completed',
         email_completed_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
+        notes: updatedNotes,
       })
       .eq('id', applicationId);
 

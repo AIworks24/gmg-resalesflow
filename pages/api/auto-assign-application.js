@@ -92,12 +92,28 @@ async function autoAssignApplication(applicationId, supabase) {
       return { success: false, error: 'No property owner email found' };
     }
 
-    // For settlement applications, use settlement_assignee_email if set
+    // For settlement applications, use settlement_assignee_email if set;
+    // otherwise fall back to the first email in property_owner_email.
     const isSettlement = application.application_type === 'settlement_va' ||
                          application.application_type === 'settlement_nc';
-    if (isSettlement && property.settlement_assignee_email) {
-      const settlementEmail = property.settlement_assignee_email.trim();
-      console.log(`Settlement application detected, using settlement_assignee_email: ${settlementEmail}`);
+    if (isSettlement) {
+      let settlementEmail = property.settlement_assignee_email?.trim();
+
+      if (!settlementEmail) {
+        const ownerEmails = parseEmails(property.property_owner_email);
+        const firstOwner = ownerEmails[0]?.replace(/^owner\./, '').trim();
+        if (firstOwner) {
+          settlementEmail = firstOwner;
+          console.log(`Settlement application: no settlement_assignee_email, falling back to first property owner: ${settlementEmail}`);
+        }
+      } else {
+        console.log(`Settlement application detected, using settlement_assignee_email: ${settlementEmail}`);
+      }
+
+      if (!settlementEmail) {
+        console.log(`Settlement application ${applicationId}: no assignee email found, leaving unassigned`);
+        return { success: false, error: 'No assignee email found for settlement application' };
+      }
 
       const { error: assignError } = await supabase
         .from('applications')
@@ -249,14 +265,21 @@ async function autoAssignSettlementMCGroups(applicationId, supabase) {
     for (const group of groups) {
       const { data: prop } = await supabase
         .from('hoa_properties')
-        .select('settlement_assignee_email')
+        .select('settlement_assignee_email, property_owner_email')
         .eq('id', group.property_id)
         .single();
 
-      const settlementEmail = prop?.settlement_assignee_email?.trim();
+      let settlementEmail = prop?.settlement_assignee_email?.trim();
       if (!settlementEmail) {
-        console.log(`[MC Settlement] No settlement_assignee_email for property ${group.property_id} (${group.property_name}), skipping`);
-        continue;
+        const ownerEmails = parseEmails(prop?.property_owner_email || '');
+        const firstOwner = ownerEmails[0]?.replace(/^owner\./, '').trim();
+        if (firstOwner) {
+          settlementEmail = firstOwner;
+          console.log(`[MC Settlement] No settlement_assignee_email for property ${group.property_id} (${group.property_name}), falling back to first property owner: ${settlementEmail}`);
+        } else {
+          console.log(`[MC Settlement] No assignee email found for property ${group.property_id} (${group.property_name}), skipping`);
+          continue;
+        }
       }
 
       const { error } = await supabase

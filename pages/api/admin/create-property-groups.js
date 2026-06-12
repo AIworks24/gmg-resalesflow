@@ -78,6 +78,20 @@ export default async function handler(req, res) {
       linkedProperties
     );
 
+    // For settlement apps, assign each group to its settlement_assignee_email (or first property
+    // owner as fallback). Groups exist now so the call is no longer a no-op.
+    const isSettlement = application.application_type === 'settlement_va' ||
+                         application.application_type === 'settlement_nc';
+    if (isSettlement) {
+      try {
+        const { autoAssignSettlementMCGroups } = await import('../auto-assign-application');
+        await autoAssignSettlementMCGroups(applicationId, supabase);
+        console.log(`[CreateGroups] Settlement group assignment complete for application ${applicationId}`);
+      } catch (assignError) {
+        console.warn(`[CreateGroups] Failed to assign settlement groups for application ${applicationId}:`, assignError);
+      }
+    }
+
     // Notify all property owners (primary + secondary) now that groups exist.
     // createNotifications defers MC notifications until groups are present, so calling
     // it here ensures secondary owners are informed regardless of whether the Stripe

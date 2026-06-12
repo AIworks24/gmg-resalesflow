@@ -79,7 +79,7 @@ export default async function handler(req, res) {
     .from('applications')
     .select(`
       id, submitter_email, submitter_name, property_address, hoa_property_id,
-      application_type, buyer_email,
+      application_type, buyer_email, notes, email_completed_at,
       hoa_properties(id, name)
     `)
     .eq('id', applicationId)
@@ -118,12 +118,19 @@ export default async function handler(req, res) {
       customMessage: `Your Public Offering Statement documents ${addressLine} are now available for download.`,
     });
 
+    // Log to process history
+    const isResend = !!application.email_completed_at;
+    const auditVerb = isResend ? 'resent' : 'sent';
+    const auditNote = `[${new Date().toISOString()}] Public Offering Statement ${auditVerb} to ${application.submitter_email}.`;
+    const updatedNotes = application.notes ? `${application.notes}\n\n${auditNote}` : auditNote;
+
     await supabase
       .from('applications')
       .update({
         status: 'completed',
         email_completed_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
+        notes: updatedNotes,
       })
       .eq('id', applicationId);
 

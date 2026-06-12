@@ -997,9 +997,14 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
     return null;
   };
 
-  // Default assignee from property: default_assignee_email from settings, or first in property_owner_email list
-  const getDefaultPropertyAssigneeEmail = (group) => {
+  // Default assignee from property: for settlement apps use settlement_assignee_email;
+  // otherwise use default_assignee_email, or first in property_owner_email list.
+  const getDefaultPropertyAssigneeEmail = (group, applicationType) => {
     const hoa = group.hoa_properties;
+    const isSettlement = applicationType === 'settlement_va' || applicationType === 'settlement_nc';
+    if (isSettlement && hoa?.settlement_assignee_email) {
+      return hoa.settlement_assignee_email;
+    }
     const emails = parseEmails(hoa?.property_owner_email || group.property_owner_email);
     if (!emails.length) return null;
     if (hoa?.default_assignee_email && emails.some(e => e.toLowerCase() === hoa.default_assignee_email.toLowerCase())) {
@@ -1009,14 +1014,17 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
   };
 
   // Effective assignee display: staff if assigned_to set, else property owner default (reflects property settings)
-  const getEffectiveAssigneeDisplay = (group, staffList) => {
+  const getEffectiveAssigneeDisplay = (group, staffList, applicationType, showRole = false) => {
     if (group.assigned_to) {
       return getAssigneeDisplayName(group.assigned_to, staffList) ?? group.assigned_to;
     }
-    const defaultEmail = getDefaultPropertyAssigneeEmail(group);
+    const defaultEmail = getDefaultPropertyAssigneeEmail(group, applicationType);
     if (!defaultEmail) return null;
     const staff = staffList?.find(s => s.email?.toLowerCase() === defaultEmail.toLowerCase());
-    if (staff) return `${staff.first_name || ''} ${staff.last_name || ''}`.trim() || defaultEmail;
+    if (staff) {
+      const name = `${staff.first_name || ''} ${staff.last_name || ''}`.trim() || defaultEmail;
+      return showRole && staff.role ? `${name} (${staff.role})` : name;
+    }
     const name = group.hoa_properties?.property_owner_name;
     if (name && String(name).trim()) return name.trim();
     const local = String(defaultEmail).split('@')[0] || '';
@@ -2246,7 +2254,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
             form_data,
             property_id,
             updated_at,
-            hoa_properties(id, name, location, property_owner_email, property_owner_name, default_assignee_email)
+            hoa_properties(id, name, location, property_owner_email, property_owner_name, default_assignee_email, settlement_assignee_email)
           )
         `)
         .eq('id', application.id)
@@ -2551,7 +2559,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
           notifications(id, notification_type, status, sent_at),
           application_property_groups(id, property_id, property_name, property_location, property_owner_email, assigned_to, is_primary, status, inspection_status, inspection_completed_at,
             pdf_url, pdf_status, pdf_completed_at, email_status, email_completed_at, updated_at,
-            hoa_properties(id, name, location, property_owner_email, property_owner_name, default_assignee_email)
+            hoa_properties(id, name, location, property_owner_email, property_owner_name, default_assignee_email, settlement_assignee_email)
           )
         `)
         .eq('id', applicationId)
@@ -3196,7 +3204,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
     try {
       const { data, error } = await supabase
         .from('application_property_groups')
-        .select('id, property_id, property_name, property_location, property_owner_email, assigned_to, is_primary, status, inspection_status, inspection_completed_at, pdf_status, pdf_url, pdf_completed_at, email_status, email_completed_at, form_data, updated_at, hoa_properties(id, name, location, property_owner_email, property_owner_name, default_assignee_email)')
+        .select('id, property_id, property_name, property_location, property_owner_email, assigned_to, is_primary, status, inspection_status, inspection_completed_at, pdf_status, pdf_url, pdf_completed_at, email_status, email_completed_at, form_data, updated_at, hoa_properties(id, name, location, property_owner_email, property_owner_name, default_assignee_email, settlement_assignee_email)')
         .eq('application_id', applicationId)
         .order('is_primary', { ascending: false })
         .order('created_at', { ascending: true });
@@ -4319,7 +4327,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                     let name = null;
                     let title = null;
                     if (group) {
-                      name = getEffectiveAssigneeDisplay(group, staffMembers);
+                      name = getEffectiveAssigneeDisplay(group, staffMembers, app.application_type);
                       title = group.property_owner_email || group.hoa_properties?.property_owner_email;
                     } else if (app.assigned_to) {
                       name = getAssigneeDisplayName(app.assigned_to, staffMembers) ?? '—';
@@ -4516,7 +4524,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
 
               const renderAssigneeMobile = (group) => {
                 if (group) {
-                  const display = getEffectiveAssigneeDisplay(group, staffMembers);
+                  const display = getEffectiveAssigneeDisplay(group, staffMembers, app.application_type);
                   return display ? <span className='text-sm font-medium text-gray-900'>{display}</span> : <span className='text-gray-400'>Unassigned</span>;
                 }
                 return app.assigned_to ? (getAssigneeDisplayName(app.assigned_to, staffMembers) ?? '—') : <span className='text-gray-400'>Unassigned</span>;
@@ -4807,7 +4815,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                 </div>
                 <div className='flex items-center gap-2'>
                   {/* Edit Details Button - Only show if user is admin */}
-                  {userRole === 'admin' && !isEditingDetails && selectedApplication?.application_type !== 'info_packet' && selectedApplication?.application_type !== 'public_offering' && (
+                  {userRole === 'admin' && !isEditingDetails && (
                     <button
                       onClick={handleStartEditDetails}
                       className='px-4 py-2 bg-blue-50 border border-blue-300 rounded-lg text-blue-700 hover:bg-blue-100 font-semibold transition-all flex items-center gap-2 text-sm'
@@ -4817,7 +4825,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                     </button>
                   )}
                   {/* Save/Cancel Buttons when editing */}
-                  {userRole === 'admin' && isEditingDetails && selectedApplication?.application_type !== 'info_packet' && selectedApplication?.application_type !== 'public_offering' && (
+                  {userRole === 'admin' && isEditingDetails && (
                     <>
                       <button
                         onClick={handleSaveDetails}
@@ -5026,7 +5034,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                       </div>
                       <div>
                         <label className='text-xs font-medium text-gray-500 uppercase tracking-wider block mb-1'>Buyer</label>
-                        {isEditingDetails ? (
+                        {isEditingDetails && selectedApplication?.application_type !== 'public_offering' ? (
                           <input
                             type='text'
                             value={editedDetails.buyer_name}
@@ -5084,7 +5092,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                         {!isEditingDetails && selectedApplication.seller_email && (
                           <div className='text-xs text-gray-500 mt-0.5'>{selectedApplication.seller_email}</div>
                         )}
-                        {isEditingDetails && (
+                        {isEditingDetails && selectedApplication?.application_type !== 'info_packet' && selectedApplication?.application_type !== 'public_offering' && (
                           <div className='mt-2'>
                             <label className='text-xs font-medium text-gray-500 uppercase tracking-wider block mb-1'>Seller Email</label>
                             <input
@@ -5099,7 +5107,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                       </div>
                       <div>
                         <label className='text-xs font-medium text-gray-500 uppercase tracking-wider block mb-1'>Sale Price</label>
-                        {isEditingDetails ? (
+                        {isEditingDetails && !['info_packet', 'public_offering'].includes(selectedApplication?.application_type) ? (
                           <div className='relative'>
                             <span className='absolute left-3 top-1/2 transform -translate-y-1/2 text-sm text-gray-500'>$</span>
                             <input
@@ -5118,7 +5126,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                       </div>
                       <div>
                         <label className='text-xs font-medium text-gray-500 uppercase tracking-wider block mb-1'>Closing Date</label>
-                        {isEditingDetails ? (
+                        {isEditingDetails && !['info_packet', 'public_offering'].includes(selectedApplication?.application_type) ? (
                           <input
                             type='date'
                             value={editedDetails.closing_date}
@@ -5993,7 +6001,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                                       <label className='text-xs font-medium text-gray-500'>Assigned to</label>
                                       <div className='relative'>
                                         <select
-                                          value={group.assigned_to || (getDefaultPropertyAssigneeEmail(group) ? '__property_owner__' : '')}
+                                          value={group.assigned_to || (getDefaultPropertyAssigneeEmail(group, selectedApplication?.application_type) ? '__property_owner__' : '')}
                                           onChange={(e) => {
                                             const v = e.target.value;
                                             handleAssignPropertyGroup(group.id, v === '__property_owner__' ? null : (v || null));
@@ -6001,8 +6009,8 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                                           disabled={assigningPropertyGroup === group.id}
                                           className='min-w-[12rem] pl-3 pr-8 py-1.5 text-xs bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 appearance-none'
                                         >
-                                          {getDefaultPropertyAssigneeEmail(group) ? (
-                                            <option value="__property_owner__">{getEffectiveAssigneeDisplay(group, staffMembers) || 'Property owner'}</option>
+                                          {getDefaultPropertyAssigneeEmail(group, selectedApplication?.application_type) ? (
+                                            <option value="__property_owner__">{getEffectiveAssigneeDisplay(group, staffMembers, selectedApplication?.application_type, true) || 'Property owner'}</option>
                                           ) : (
                                             <option value="">Unassigned</option>
                                           )}
