@@ -112,15 +112,26 @@ export default async function handler(req, res) {
 
     // Apply search filter
     // Note: cannot filter on foreign table columns (hoa_properties.name) via .or() — PostgREST PGRST100
-    // For ID lookup, use exact match when search is a plain integer
+    // Workaround: run a preliminary query to fetch IDs matching community name, then include via id.in.(...)
     if (search) {
       const searchNum = parseInt(search);
       const isNumericId = !isNaN(searchNum) && String(searchNum) === search.trim();
-      if (isNumericId) {
-        query = query.or(`property_address.ilike.%${search}%,submitter_name.ilike.%${search}%,id.eq.${searchNum}`);
-      } else {
-        query = query.or(`property_address.ilike.%${search}%,submitter_name.ilike.%${search}%`);
-      }
+
+      // Fetch IDs of applications whose community name matches the search term
+      const { data: communityMatches } = await supabase
+        .from('applications')
+        .select('id, hoa_properties!inner(name)')
+        .filter('hoa_properties.name', 'ilike', `%${search}%`)
+        .is('deleted_at', null)
+        .neq('status', 'draft')
+        .neq('status', 'pending_payment');
+      const communityIds = communityMatches?.map(a => a.id) || [];
+
+      let orFilter = `property_address.ilike.%${search}%,submitter_name.ilike.%${search}%`;
+      if (isNumericId) orFilter += `,id.eq.${searchNum}`;
+      if (communityIds.length > 0) orFilter += `,id.in.(${communityIds.join(',')})`;
+
+      query = query.or(orFilter);
     }
 
     // Apply date range filter
