@@ -489,7 +489,43 @@ export default async function handler(req, res) {
         // Don't fail the checkout if auto-assignment fails
       }
 
-      return res.status(200).json({ 
+      // Send submission email for free applications (e.g., settlement_va standard)
+      try {
+        const protocol = req.headers['x-forwarded-proto'] || 'http';
+        const baseUrl = process.env.NEXT_PUBLIC_SITE_URL || `${protocol}://${req.headers.host}`;
+        const emailRes = await fetch(`${baseUrl}/api/send-email`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(process.env.VERCEL_AUTOMATION_BYPASS_SECRET && {
+              'x-vercel-protection-bypass': process.env.VERCEL_AUTOMATION_BYPASS_SECRET,
+            }),
+          },
+          body: JSON.stringify({
+            emailType: 'application_submission',
+            applicationId,
+            customerName: formData.submitterName,
+            customerEmail: formData.submitterEmail,
+            propertyAddress: formData.propertyAddress,
+            packageType,
+            totalAmount: 0,
+            hoaName: hoaProperty?.name || formData.hoaProperty,
+            submitterType: formData.submitterType,
+            applicationType,
+          }),
+        });
+        if (!emailRes.ok) {
+          const errText = await emailRes.text();
+          console.warn(`[Checkout] Submission email failed for free application ${applicationId} (${emailRes.status}):`, errText);
+        } else {
+          console.log(`[Checkout] Submission email sent for free application ${applicationId}`);
+        }
+      } catch (emailErr) {
+        console.error('[Checkout] Error sending submission email for free application:', emailErr);
+        // Don't fail the checkout response if email sending fails
+      }
+
+      return res.status(200).json({
         sessionId: null, 
         isFree: true,
         message: 'Application processed successfully - no payment required' 
@@ -694,7 +730,9 @@ export default async function handler(req, res) {
       // Disable Stripe promo codes when a per-user override is already applied to prevent double-discounting.
       // Allow promo codes for all other flows (property force price or catalog pricing).
       allow_promotion_codes: !hasUserOverride,
-      success_url: `${req.headers.origin}/?payment_success=true&session_id={CHECKOUT_SESSION_ID}&app_id=${applicationId}${testParam}`,
+      success_url: applicationType === 'lender_questionnaire'
+        ? `${req.headers.origin}/?payment_success=true&session_id={CHECKOUT_SESSION_ID}&app_id=${applicationId}${testParam}`
+        : `${req.headers.origin}/payment/success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${req.headers.origin}/?payment_cancelled=true&app_id=${applicationId}${testParam}`,
       metadata: {
         applicationId: applicationId,

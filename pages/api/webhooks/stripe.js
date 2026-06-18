@@ -116,12 +116,12 @@ export default async function handler(req, res) {
           updateData.stripe_payment_intent_id = session.payment_intent;
         }
         
-        // Idempotency guard: skip if already processed (prevents duplicate emails on Stripe retries)
-        const { data: updatedApp } = await supabase
-          .from('applications')
-          .update(updateData)
-          .eq('stripe_session_id', session.id)
-          .neq('payment_status', 'completed')
+          // Idempotency guard: skip if already processed (prevents duplicate emails on Stripe retries)
+          const { data: updatedApp } = await supabase
+            .from('applications')
+            .update(updateData)
+            .eq('stripe_session_id', session.id)
+            .neq('payment_status', 'completed')
           .select('id, application_type, impersonation_metadata')
           .single();
 
@@ -386,15 +386,15 @@ export default async function handler(req, res) {
         // For multi-community apps, record payment metadata but DON'T change status yet.
         // The status update is deferred until AFTER property groups are created, so the
         // application only appears in the admin dashboard once the tree view data is ready.
-        const paymentUpdateData = {
-          payment_completed_at: new Date().toISOString(),
-          stripe_payment_intent_id: paymentIntent.id
-        };
-        if (!isMultiCommunity) {
-          paymentUpdateData.status = 'payment_confirmed';
-        }
-        
-        // Correct the total amount based on actual payment
+          const paymentUpdateData = {
+            payment_completed_at: new Date().toISOString(),
+            stripe_payment_intent_id: paymentIntent.id
+          };
+          if (!isMultiCommunity) {
+            paymentUpdateData.status = 'payment_confirmed';
+          }
+          
+          // Correct the total amount based on actual payment
         if (paymentIntent.amount_total) {
           paymentUpdateData.total_amount = paymentIntent.amount_total / 100; // Convert from cents
         }
@@ -778,8 +778,10 @@ export default async function handler(req, res) {
             }
           } else if (resolvedIsMultiCommunity) {
             await handleMultiCommunityApplication(applicationId, paymentIntent.metadata);
+            await autoSubmitApplication(applicationId, supabase);
           } else {
             await createPropertyOwnerForms(applicationId, paymentIntent.metadata);
+            await autoSubmitApplication(applicationId, supabase);
           }
         }
         break;
@@ -1590,3 +1592,105 @@ async function handleMultiCommunityApplication(applicationId, metadata) {
 
 // createPropertyOwnerFormsForGroups lives in lib/groupingService.js (idempotent, shared with
 // correct-primary-property.js and handleCorrectionPayment). Imported via require() at call sites.
+
+// ─── Auto-Submit Handler ──────────────────────────────────────────────────────
+// Called after property owner forms are created for single_property and
+// multi_community applications. Transitions status → under_review, sets
+// submitted_at + expected_completion_date, triggers auto-assign, and sends
+// the application submission email.
+//
+// NOT called for lender_questionnaire (upload API handles submission),
+// info_packet, or public_offering (their own handlers above auto-complete them).
+async function autoSubmitApplication(applicationId, supabase) {
+  try {
+    const { data: app, error } = await supabase
+      .from('applications')
+      .select('id, submitter_name, submitter_email, property_address, package_type, application_type, total_amount, submitter_type, buyer_name, submitted_at, impersonation_metadata, hoa_properties(name)')
+      .eq('id', applicationId)
+      .single();
+
+    if (error || !app) {
+      console.error(`[AutoSubmit] Could not fetch application ${applicationId}:`, error);
+      return;
+    }
+
+    const daysToAdd = app.package_type === 'rush' ? 5 : 15;
+    const completionDate = new Date(Date.now() + daysToAdd * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+
+    const updatePayload = {
+      status: 'under_review',
+      expected_completion_date: completionDate,
+      updated_at: new Date().toISOString(),
+    };
+    if (!app.submitted_at) {
+      updatePayload.submitted_at = new Date().toISOString();
+    }
+
+    const { error: updateError } = await supabase
+      .from('applications')
+      .update(updatePayload)
+      .eq('id', applicationId);
+
+    if (updateError) {
+      console.error(`[AutoSubmit] Failed to update application ${applicationId}:`, updateError);
+      return;
+    }
+
+    console.log(`[AutoSubmit] Application ${applicationId} auto-submitted → under_review (${daysToAdd}-day deadline: ${completionDate})`);
+
+    try {
+      const assignResult = await autoAssignApplication(applicationId, supabase);
+      if (assignResult?.success) {
+        console.log(`[AutoSubmit] Auto-assigned application ${applicationId} to ${assignResult.assignedTo}`);
+      } else {
+        console.warn(`[AutoSubmit] Auto-assign failed for application ${applicationId}:`, assignResult?.error);
+      }
+    } catch (assignErr) {
+      console.error('[AutoSubmit] Error during auto-assign:', assignErr);
+    }
+
+    // Skip submission email for impersonation sessions where emails are disabled
+    if (app.impersonation_metadata?.send_emails === false) {
+      console.log(`[AutoSubmit] Skipping submission email for impersonated application ${applicationId}`);
+      return;
+    }
+
+    try {
+      const baseUrl = process.env.NEXT_PUBLIC_SITE_URL || `https://${process.env.VERCEL_URL}` || 'http://localhost:3000';
+      const emailRes = await fetch(`${baseUrl}/api/send-email`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(process.env.VERCEL_AUTOMATION_BYPASS_SECRET && {
+            'x-vercel-protection-bypass': process.env.VERCEL_AUTOMATION_BYPASS_SECRET,
+          }),
+        },
+        body: JSON.stringify({
+          emailType: 'application_submission',
+          applicationId: app.id,
+          customerName: app.submitter_name,
+          customerEmail: app.submitter_email,
+          propertyAddress: app.property_address,
+          packageType: app.package_type,
+          totalAmount: app.total_amount,
+          hoaName: app.hoa_properties?.name,
+          submitterType: app.submitter_type,
+          applicationType: app.application_type,
+          buyerName: app.buyer_name,
+        }),
+      });
+
+      if (!emailRes.ok) {
+        const errText = await emailRes.text();
+        console.error(`[AutoSubmit] Submission email failed (${emailRes.status}):`, errText);
+      } else {
+        console.log(`[AutoSubmit] Submission email sent for application ${applicationId}`);
+      }
+    } catch (emailErr) {
+      console.error('[AutoSubmit] Error sending submission email:', emailErr);
+      // Don't fail — the application is already under_review
+    }
+  } catch (err) {
+    console.error(`[AutoSubmit] Unexpected error for application ${applicationId}:`, err);
+  }
+}

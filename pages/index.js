@@ -755,6 +755,13 @@ const SubmitterInfoStep = React.memo(({ formData, handleInputChange, hoaProperti
     }
   }, [canShowPublicOffering, formData.submitterType]);
 
+  // Clear publicOffering when user switches away from builder
+  React.useEffect(() => {
+    if (formData.submitterType !== 'builder' && formData.publicOffering) {
+      handleInputChange('publicOffering', false);
+    }
+  }, [formData.submitterType, formData.publicOffering, handleInputChange]);
+
   // Clear infoPacket flag if property doesn't allow it
   React.useEffect(() => {
     if (formData.infoPacket && !canShowInfoPacket) {
@@ -1411,8 +1418,8 @@ const PackagePaymentStep = ({
             package_type: formData.packageType,
             payment_method: formData.paymentMethod,
             total_amount: totalAmount,
-            status: 'pending_payment', // Will be finalized in Review step
-            payment_status: 'not_required', // Free transaction
+            status: 'under_review',
+            payment_status: 'not_required',
             submitted_at: new Date().toISOString(),
             updated_at: new Date().toISOString(),
             expected_completion_date: new Date(
@@ -1464,8 +1471,8 @@ const PackagePaymentStep = ({
             package_type: formData.packageType,
             payment_method: formData.paymentMethod,
             total_amount: totalAmount,
-            status: 'pending_payment', // Will be finalized in Review step
-            payment_status: 'not_required', // Free transaction
+            status: 'under_review',
+            payment_status: 'not_required',
             submitted_at: new Date().toISOString(),
             expected_completion_date: new Date(
               Date.now() +
@@ -1593,15 +1600,10 @@ const PackagePaymentStep = ({
           // Don't fail the submission if email fails
         }
 
-        // For free transactions, advance to Review step instead of immediately submitting
-        // Application is already created with status 'pending_payment' and payment_status 'not_required'
-        // User will review and finalize submission on Review step
-        
-        // Advance to Review step for free transactions
-        setCurrentStep(5);
+        // Free application is now fully submitted — redirect to the success page
         setIsProcessing(false);
-        
-        return; // Exit early for free transactions - user will review and submit on step 5
+        window.location.replace(`/payment/success?app_id=${createdApplicationId}`);
+        return;
       }
 
       if (formData.paymentMethod === 'credit_card') {
@@ -5078,25 +5080,23 @@ export default function GMGResaleFlow() {
     }
 
     if (paymentSuccess === 'true' && sessionId && appId) {
-      // Load the application and check if it's a lender questionnaire
+      // Load the application to check its type
       loadDraftApplication(appId).then((applicationData) => {
         if (!applicationData) {
           console.error('No application data returned from loadDraftApplication');
           return;
         }
-        
-        // Payment success - processing application
-        
-        // Check if this is a lender questionnaire application
-        // Check both application_type from database and submitter_type as fallback
-        const isLenderQuestionnaire = 
+
+        const isLenderQuestionnaire =
           applicationData.application_type === 'lender_questionnaire' ||
           applicationData.submitter_type === 'lender_questionnaire';
-        
+
         if (isLenderQuestionnaire) {
-          setCurrentStep(5); // Go to lender questionnaire upload step (step 5)
+          // Lender questionnaire still needs the upload step
+          setCurrentStep(5);
         } else {
-          setCurrentStep(5); // Go to review step (step 5 for non-lender questionnaire)
+          // Standard resale: redirect to the enhanced thank you page
+          window.location.replace(`/payment/success?session_id=${sessionId}`);
         }
       }).catch((error) => {
         console.error('Error in payment success handler:', error);
@@ -5486,9 +5486,11 @@ export default function GMGResaleFlow() {
 
   // Prefetch MC pricing so PackagePaymentStep receives it ready-to-use on mount.
   // Fires as soon as property + submitterType are known (steps 1–2), well before step 4.
+  // applicationType is computed synchronously here to avoid the one-render lag from async state.
   useEffect(() => {
+    let cancelled = false;
     const prefetchMcPricing = async () => {
-      if (!formData.hoaProperty || !hoaProperties || applicationType === 'lender_questionnaire') {
+      if (!formData.hoaProperty || !hoaProperties) {
         setPrefetchedMcPricing(null);
         return;
       }
@@ -5497,20 +5499,35 @@ export default function GMGResaleFlow() {
         setPrefetchedMcPricing(null);
         return;
       }
+      const currentAppType = determineApplicationType(
+        formData.submitterType,
+        selectedProperty,
+        formData.publicOffering,
+        formData.infoPacket
+      );
+      if (currentAppType === 'lender_questionnaire') {
+        setPrefetchedMcPricing(null);
+        return;
+      }
       try {
         const linked = await getLinkedProperties(selectedProperty.id);
         const [standardPricing, rushPricing] = await Promise.all([
-          calculateMultiCommunityPricing(selectedProperty.id, 'standard', applicationType, null, formData.submitterType, formData.publicOffering, user?.id),
-          calculateMultiCommunityPricing(selectedProperty.id, 'rush', applicationType, null, formData.submitterType, formData.publicOffering, user?.id),
+          calculateMultiCommunityPricing(selectedProperty.id, 'standard', currentAppType, null, formData.submitterType, formData.publicOffering, user?.id),
+          calculateMultiCommunityPricing(selectedProperty.id, 'rush', currentAppType, null, formData.submitterType, formData.publicOffering, user?.id),
         ]);
-        setPrefetchedMcPricing({ linkedProperties: linked, standardPricing, rushPricing });
+        if (!cancelled) {
+          setPrefetchedMcPricing({ linkedProperties: linked, standardPricing, rushPricing });
+        }
       } catch (err) {
         console.error('[prefetchMcPricing] error:', err);
-        setPrefetchedMcPricing(null);
+        if (!cancelled) setPrefetchedMcPricing(null);
       }
     };
     prefetchMcPricing();
-  }, [formData.hoaProperty, formData.submitterType, formData.publicOffering, formData.infoPacket, hoaProperties, applicationType, user]);
+    return () => { cancelled = true; };
+  // applicationType intentionally omitted — computed synchronously above to avoid stale-state race
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [formData.hoaProperty, formData.submitterType, formData.publicOffering, formData.infoPacket, hoaProperties, user]);
 
   // Add this function to your application submission process
   // This should be called after an application is successfully created

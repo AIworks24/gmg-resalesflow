@@ -4,7 +4,7 @@
   "private": true,
   "description": "Goodman Management Group - Resale Certificate System",
   "scripts": {
-    "dev": "cross-env NODE_ENV=development next dev",
+    "dev": "cross-env NODE_ENV=development next dev -p 3000",
     "build:dev": "cross-env NODE_ENV=development next build",
     "build": "cross-env NODE_ENV=production next build",
     "start:dev": "cross-env NODE_ENV=development next start",
@@ -16,7 +16,7 @@
     "supabase:status": "supabase status",
     "supabase:reset": "supabase db reset",
     "supabase:credentials": "node scripts/get-local-supabase-credentials.js",
-    "stripe:listen": "stripe listen --forward-to localhost:3000/api/webhooks/stripe"
+    "stripe:listen": "set -a; [ -f .env.local ] && . ./.env.local; set +a; stripe listen --api-key \"$STRIPE_SECRET_KEY_TEST\" --forward-to localhost:3000/api/webhooks/stripe"
   },
   "dependencies": {
     "@azure/identity": "^4.13.0",
