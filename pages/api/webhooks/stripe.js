@@ -116,12 +116,16 @@ export default async function handler(req, res) {
           updateData.stripe_payment_intent_id = session.payment_intent;
         }
         
-          // Idempotency guard: skip if already processed (prevents duplicate emails on Stripe retries)
+          // Idempotency guard: skip if already processed (prevents duplicate emails on Stripe retries).
+          // Also guard on status=pending_payment to avoid overwriting a later status that
+          // payment_intent.succeeded may have already advanced (race condition where both
+          // webhook events fire and payment_intent.succeeded completes first).
           const { data: updatedApp } = await supabase
             .from('applications')
             .update(updateData)
             .eq('stripe_session_id', session.id)
             .neq('payment_status', 'completed')
+            .eq('status', 'pending_payment')
           .select('id, application_type, impersonation_metadata')
           .single();
 
@@ -1225,10 +1229,10 @@ async function createPropertyOwnerForms(applicationId, metadata) {
   );
 
   try {
-    // Get application details including application_type
+    // Get application details including application_type and recipient email for forms
     const { data: application, error: appError } = await supabase
       .from('applications')
-      .select('application_type, submitter_type')
+      .select('application_type, submitter_type, hoa_properties(property_owner_email)')
       .eq('id', applicationId)
       .single();
 
@@ -1236,6 +1240,8 @@ async function createPropertyOwnerForms(applicationId, metadata) {
       console.error('Error fetching application:', appError);
       return;
     }
+
+    const recipientEmail = application.hoa_properties?.property_owner_email || '';
 
     // Get application type data to determine required forms
     const appTypeData = await getApplicationTypeData(application.application_type);
@@ -1264,6 +1270,7 @@ async function createPropertyOwnerForms(applicationId, metadata) {
           application_id: applicationId,
           form_type: formType,
           status: 'not_started',
+          recipient_email: recipientEmail,
           access_token: generateAccessToken(),
           expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() // 30 days
         });
