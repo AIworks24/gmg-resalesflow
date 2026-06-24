@@ -213,7 +213,21 @@ const calculateTotal = (formData, stripePrices, hoaProperties) => {
       }
     }
   }
-  
+
+  // Builder on NC property with no specific builder options → NC settlement pricing ($450/$550)
+  if (formData.submitterType === 'builder' && !formData.publicOffering && !formData.infoPacket) {
+    const selectedProp = hoaProperties?.find(prop => prop.name === formData.hoaProperty);
+    if (selectedProp?.location) {
+      const location = selectedProp.location.toUpperCase();
+      if (location.includes('NC') || location.includes('NORTH CAROLINA')) {
+        const isRush = formData.packageType === 'rush';
+        let total = isRush ? 550.00 : 450.00;
+        if (formData.paymentMethod === 'credit_card') total += 9.95;
+        return Math.round(total * 100) / 100;
+      }
+    }
+  }
+
   // Regular pricing for non-settlement submitters
   const basePrice = 317.95;
   
@@ -786,12 +800,13 @@ const SubmitterInfoStep = React.memo(({ formData, handleInputChange, hoaProperti
     }
   }, [isNorthCarolina, formData.submitterType, handleInputChange]);
 
-  // NC doesn't offer resale apps — default Info Packet to checked for NC builder applications
+  // Default Info Packet to checked when property allows it and user's email domain is eligible
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   React.useEffect(() => {
-    if (isNorthCarolina && formData.submitterType === 'builder' && canShowInfoPacket && !formData.infoPacket) {
+    if (formData.submitterType === 'builder' && canShowInfoPacket) {
       handleInputChange('infoPacket', true);
     }
-  }, [isNorthCarolina, formData.submitterType, canShowInfoPacket, formData.infoPacket, handleInputChange]);
+  }, [canShowInfoPacket, formData.submitterType]);
 
   return (
     <div className='space-y-4 sm:space-y-6'>
@@ -1137,6 +1152,14 @@ const PackagePaymentStep = ({
 }) => {
   // Get sendEmails flag from store
   const { sendEmails } = useImpersonationStore();
+
+  const isNorthCarolina = React.useMemo(() => {
+    const prop = hoaProperties?.find(p => p.name === formData.hoaProperty);
+    if (!prop?.location) return false;
+    const loc = prop.location.toUpperCase();
+    return loc.includes('NC') || loc.includes('NORTH CAROLINA');
+  }, [formData.hoaProperty, hoaProperties]);
+
   const [isProcessing, setIsProcessing] = useState(false);
   const [paymentError, setPaymentError] = useState(null);
   const [multiCommunityPricing, setMultiCommunityPricing] = useState(() => {
@@ -2072,11 +2095,12 @@ const PackagePaymentStep = ({
                     return 'Statement of Unpaid Assessments';
                   }
                   return 'Dues Request - Escrow Instructions'; // Default fallback
-                })() : 
+                })() :
+                 formData.submitterType === 'builder' && !formData.publicOffering && !formData.infoPacket && isNorthCarolina ? 'Statement of Unpaid Assessments' :
                  formData.submitterType === 'lender_questionnaire' ? 'Standard' : 'Standard Processing'}
               </h4>
               <p className='text-sm text-gray-600'>
-                {formData.submitterType === 'settlement' ? '14 calendar days' : 
+                {formData.submitterType === 'settlement' || (formData.submitterType === 'builder' && !formData.publicOffering && !formData.infoPacket && isNorthCarolina) ? '14 calendar days' :
                  formData.submitterType === 'lender_questionnaire' ? '10 Calendar Days' : '15 calendar days'}
               </p>
             </div>
@@ -2193,6 +2217,22 @@ const PackagePaymentStep = ({
                   }
                 })()}
               </>
+            ) : formData.submitterType === 'builder' && !formData.publicOffering && !formData.infoPacket && isNorthCarolina ? (
+              <>
+                <li>Standard Processing</li>
+                <li>Statement of Unpaid Assessments</li>
+                <li>Current assessment verification</li>
+                <li>Settlement documentation</li>
+                <li>Direct submission to accounting</li>
+                <li>Includes a copy of all property documents</li>
+              </>
+            ) : formData.publicOffering ? (
+              <>
+                <li>Public Offering Statement</li>
+                <li>HOA Documents Package</li>
+                <li>Compliance Review</li>
+                <li>Digital & Print Delivery</li>
+              </>
             ) : (
               <>
                 {formData.submitterType !== 'lender_questionnaire' && <li>Complete Resale Certificate</li>}
@@ -2224,7 +2264,7 @@ const PackagePaymentStep = ({
                     return 'Rush Statement of Unpaid Assessments';
                   }
                   return 'Rush Dues Request - Escrow Instructions'; // Default fallback
-                })() : 'Rush Processing'}
+                })() : formData.submitterType === 'builder' && !formData.publicOffering && !formData.infoPacket && isNorthCarolina ? 'Rush Statement of Unpaid Assessments' : 'Rush Processing'}
                 <span className='ml-2 px-2 py-1 bg-orange-100 text-orange-800 text-xs rounded'>
                   PRIORITY
                 </span>
@@ -2259,6 +2299,11 @@ const PackagePaymentStep = ({
                   } else if (formData.submitterType === 'builder' && formData.infoPacket) {
                     const prop = hoaProperties?.find(p => p.name === formData.hoaProperty);
                     basePrice = prop?.info_packet_price ? Number(prop.info_packet_price).toFixed(2) : '200.00';
+                  } else if (formData.submitterType === 'builder' && !formData.publicOffering && !formData.infoPacket && selectedProperty?.location) {
+                    const builderLocation = selectedProperty.location.toUpperCase();
+                    if (builderLocation.includes('NC') || builderLocation.includes('NORTH CAROLINA')) {
+                      basePrice = '450.00';
+                    }
                   } else if (formData.submitterType === 'settlement') {
                     if (selectedProperty?.location) {
                       const location = selectedProperty.location.toUpperCase();
@@ -2288,6 +2333,17 @@ const PackagePaymentStep = ({
                           const pricing = getPricing('settlement_va', true);
                           return (pricing.rushFee / 100).toFixed(2); // $70.66
                         } else if (location.includes('NC') || location.includes('NORTH CAROLINA')) {
+                          const pricing = getPricing('settlement_nc', true);
+                          return (pricing.rushFee / 100).toFixed(2); // $100.00
+                        }
+                      }
+                    }
+                    // NC builder with no specific options → NC settlement rush fee
+                    if (formData.submitterType === 'builder' && !formData.publicOffering && !formData.infoPacket) {
+                      const selectedProp = hoaProperties?.find(prop => prop.name === formData.hoaProperty);
+                      if (selectedProp?.location) {
+                        const location = selectedProp.location.toUpperCase();
+                        if (location.includes('NC') || location.includes('NORTH CAROLINA')) {
                           const pricing = getPricing('settlement_nc', true);
                           return (pricing.rushFee / 100).toFixed(2); // $100.00
                         }
@@ -2370,6 +2426,21 @@ const PackagePaymentStep = ({
                   }
                   return null;
                 })()}
+              </>
+            ) : formData.submitterType === 'builder' && !formData.publicOffering && !formData.infoPacket && isNorthCarolina ? (
+              <>
+                <li>Rush Processing</li>
+                <li>Priority queue processing</li>
+                <li>Expedited accounting review</li>
+                <li>5-day completion guarantee</li>
+                <li>Includes a copy of all property documents</li>
+              </>
+            ) : formData.publicOffering ? (
+              <>
+                <li>Everything in Standard</li>
+                <li>Priority queue processing</li>
+                <li>Expedited review</li>
+                <li>5-day completion guarantee</li>
               </>
             ) : (
               <>
@@ -2526,6 +2597,15 @@ const PackagePaymentStep = ({
                       const prop = hoaProperties?.find(p => p.name === formData.hoaProperty);
                       return prop?.info_packet_price ? Number(prop.info_packet_price).toFixed(2) : '200.00';
                     }
+                    if (formData.submitterType === 'builder' && !formData.publicOffering && !formData.infoPacket) {
+                      const selectedProp = hoaProperties?.find(prop => prop.name === formData.hoaProperty);
+                      if (selectedProp?.location) {
+                        const location = selectedProp.location.toUpperCase();
+                        if (location.includes('NC') || location.includes('NORTH CAROLINA')) {
+                          return '450.00';
+                        }
+                      }
+                    }
                     if (formData.submitterType === 'settlement') {
                       if (selectedProperty?.location) {
                         const location = selectedProperty.location.toUpperCase();
@@ -2562,6 +2642,17 @@ const PackagePaymentStep = ({
                             const pricing = getPricing('settlement_va', true);
                             return (pricing.rushFee / 100).toFixed(2); // $70.66
                           } else if (location.includes('NC') || location.includes('NORTH CAROLINA')) {
+                            const pricing = getPricing('settlement_nc', true);
+                            return (pricing.rushFee / 100).toFixed(2); // $100.00
+                          }
+                        }
+                      }
+                      // NC builder with no specific options → NC settlement rush fee
+                      if (formData.submitterType === 'builder' && !formData.publicOffering && !formData.infoPacket) {
+                        const selectedProp = hoaProperties?.find(prop => prop.name === formData.hoaProperty);
+                        if (selectedProp?.location) {
+                          const location = selectedProp.location.toUpperCase();
+                          if (location.includes('NC') || location.includes('NORTH CAROLINA')) {
                             const pricing = getPricing('settlement_nc', true);
                             return (pricing.rushFee / 100).toFixed(2); // $100.00
                           }
