@@ -39,6 +39,7 @@ export default async function handler(req, res) {
       .eq('payment_status', 'completed')
       .eq('status', 'pending_payment')
       .is('deleted_at', null)
+      .neq('is_test_transaction', true)
       .gte('payment_completed_at', thirtyDaysAgo)
       .order('payment_completed_at', { ascending: true });
 
