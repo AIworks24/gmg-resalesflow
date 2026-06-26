@@ -104,28 +104,24 @@ export default async function handler(req, res) {
           break;
         }
 
-        // Update application status - keep as pending_payment to allow user to continue the flow
+        // Mark payment as completed and record timestamps.
+        // Does NOT touch status — status progression is owned by payment_intent.succeeded.
         const updateData = {
-          status: 'pending_payment',
           payment_completed_at: new Date().toISOString(),
           payment_status: 'completed'
         };
-        
+
         // Store the payment intent ID if available
         if (session.payment_intent) {
           updateData.stripe_payment_intent_id = session.payment_intent;
         }
-        
-          // Idempotency guard: skip if already processed (prevents duplicate emails on Stripe retries).
-          // Also guard on status=pending_payment to avoid overwriting a later status that
-          // payment_intent.succeeded may have already advanced (race condition where both
-          // webhook events fire and payment_intent.succeeded completes first).
+
+          // Idempotency guard: skip if already processed (prevents duplicate emails on Stripe retries)
           const { data: updatedApp } = await supabase
             .from('applications')
             .update(updateData)
             .eq('stripe_session_id', session.id)
             .neq('payment_status', 'completed')
-            .eq('status', 'pending_payment')
           .select('id, application_type, impersonation_metadata')
           .single();
 
@@ -392,7 +388,8 @@ export default async function handler(req, res) {
         // application only appears in the admin dashboard once the tree view data is ready.
           const paymentUpdateData = {
             payment_completed_at: new Date().toISOString(),
-            stripe_payment_intent_id: paymentIntent.id
+            stripe_payment_intent_id: paymentIntent.id,
+            payment_status: 'completed'
           };
           if (!isMultiCommunity) {
             paymentUpdateData.status = 'payment_confirmed';
