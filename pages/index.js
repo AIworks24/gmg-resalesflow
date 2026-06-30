@@ -11,6 +11,7 @@ import { useApplicantAuth } from '../providers/ApplicantAuthProvider';
 import useApplicantAuthStore from '../stores/applicantAuthStore';
 import useImpersonationStore from '../stores/impersonationStore';
 import { fetchWithImpersonation } from '../lib/apiWithImpersonation';
+import { isPdf, uploadLqPdfDirect, parseUploadError, LQ_SERVER_UPLOAD_MAX_BYTES } from '../lib/lenderQuestionnaireUpload';
 import ImpersonationBanner from '../components/ImpersonationBanner';
 import useRequireVerifiedEmail from '../hooks/useRequireVerifiedEmail';
 import MultiEmailInput from '../components/common/MultiEmailInput';
@@ -3710,13 +3711,14 @@ const LenderQuestionnaireUploadStep = ({ formData, applicationId, setCurrentStep
     setUploadSuccess(false);
 
     try {
-      const formData = new FormData();
-      formData.append('file', selectedFile);
-      formData.append('applicationId', applicationId);
+      // PDFs upload directly to storage (bypassing the ~4.5MB serverless body
+      // limit); DOC/DOCX still go through the server for conversion to PDF.
+      const willConvert = !isPdf(selectedFile.name);
 
-      // Check if file needs conversion
-      const fileExt = '.' + selectedFile.name.split('.').pop().toLowerCase();
-      const willConvert = fileExt !== '.pdf';
+      // Block large DOC/DOCX up front so the user gets a clear message, not a 413
+      if (willConvert && selectedFile.size > LQ_SERVER_UPLOAD_MAX_BYTES) {
+        throw new Error('Word documents must be under 4MB. Please upload a PDF instead — PDFs of any size are supported.');
+      }
 
       // Simulate upload progress (faster for PDF, slower for conversion)
       const progressInterval = setInterval(() => {
@@ -3741,18 +3743,37 @@ const LenderQuestionnaireUploadStep = ({ formData, applicationId, setCurrentStep
         }, 1000);
       }
 
-      const response = await fetchWithImpersonation('/api/upload-lender-questionnaire', {
-        method: 'POST',
-        body: formData,
-      });
+      let response;
+      if (willConvert) {
+        // DOC/DOCX: send through the server for conversion to PDF
+        const formData = new FormData();
+        formData.append('file', selectedFile);
+        formData.append('applicationId', applicationId);
+        response = await fetchWithImpersonation('/api/upload-lender-questionnaire', {
+          method: 'POST',
+          body: formData,
+        });
+      } else {
+        // PDF: upload directly to storage, then record the path via JSON
+        const filePath = await uploadLqPdfDirect(supabase, {
+          applicationId,
+          kind: '',
+          file: selectedFile,
+          upsert: false,
+        });
+        response = await fetchWithImpersonation('/api/upload-lender-questionnaire', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ applicationId, filePath }),
+        });
+      }
 
       clearInterval(progressInterval);
       setUploadProgress(100);
       setIsConverting(false);
 
       if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to upload file');
+        throw new Error(await parseUploadError(response));
       }
 
       const data = await response.json();

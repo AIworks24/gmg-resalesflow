@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
 import useSWR from 'swr';
+import { isPdf, uploadLqPdfDirect, parseUploadError, LQ_SERVER_UPLOAD_MAX_BYTES } from '../../lib/lenderQuestionnaireUpload';
 
 // Helper function to format property address with unit number
 const formatPropertyAddress = (address, unitNumber) => {
@@ -5417,15 +5418,38 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                                           if (!file) return;
                                           setUploadingOriginalLQ(true);
                                           try {
-                                            const formData = new FormData();
-                                            formData.append('file', file);
-                                            formData.append('applicationId', selectedApplication.id);
-                                            const response = await fetch('/api/admin/upload-lender-questionnaire-original', {
-                                              method: 'POST',
-                                              body: formData,
-                                            });
-                                            const result = await response.json();
-                                            if (!response.ok) throw new Error(result.error || 'Upload failed');
+                                            let response;
+
+                                            if (isPdf(file.name)) {
+                                              // PDF: upload directly to storage (bypasses the ~4.5MB
+                                              // serverless body limit), then record the path via JSON.
+                                              const filePath = await uploadLqPdfDirect(supabase, {
+                                                applicationId: selectedApplication.id,
+                                                kind: 'original_admin',
+                                                file,
+                                                upsert: false,
+                                              });
+                                              response = await fetch('/api/admin/upload-lender-questionnaire-original', {
+                                                method: 'POST',
+                                                headers: { 'Content-Type': 'application/json' },
+                                                body: JSON.stringify({ applicationId: selectedApplication.id, filePath }),
+                                              });
+                                            } else {
+                                              // DOC/DOCX: must be converted server-side. Block large files
+                                              // up front so the user gets a clear message instead of a 413.
+                                              if (file.size > LQ_SERVER_UPLOAD_MAX_BYTES) {
+                                                throw new Error('Word documents must be under 4MB. Please upload a PDF instead — PDFs of any size are supported.');
+                                              }
+                                              const formData = new FormData();
+                                              formData.append('file', file);
+                                              formData.append('applicationId', selectedApplication.id);
+                                              response = await fetch('/api/admin/upload-lender-questionnaire-original', {
+                                                method: 'POST',
+                                                body: formData,
+                                              });
+                                            }
+
+                                            if (!response.ok) throw new Error(await parseUploadError(response));
                                             showSnackbar('Original file uploaded successfully', 'success');
                                             await refreshSelectedApplication(selectedApplication.id);
                                           } catch (err) {
@@ -5625,18 +5649,38 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
 
                                           try {
                                             setUploading(true);
-                                            const formData = new FormData();
-                                            formData.append('file', file);
-                                            formData.append('applicationId', selectedApplication.id);
+                                            let response;
 
-                                            const response = await fetch('/api/upload-lender-questionnaire-completed', {
-                                              method: 'POST',
-                                              body: formData,
-                                            });
+                                            if (isPdf(file.name)) {
+                                              // PDF: upload directly to storage (bypasses the ~4.5MB
+                                              // serverless body limit), then record the path via JSON.
+                                              const filePath = await uploadLqPdfDirect(supabase, {
+                                                applicationId: selectedApplication.id,
+                                                kind: 'completed',
+                                                file,
+                                              });
+                                              response = await fetch('/api/upload-lender-questionnaire-completed', {
+                                                method: 'POST',
+                                                headers: { 'Content-Type': 'application/json' },
+                                                body: JSON.stringify({ applicationId: selectedApplication.id, filePath }),
+                                              });
+                                            } else {
+                                              // DOC/DOCX: must be converted server-side. Block large files
+                                              // up front so the user gets a clear message instead of a 413.
+                                              if (file.size > LQ_SERVER_UPLOAD_MAX_BYTES) {
+                                                throw new Error('Word documents must be under 4MB. Please upload a PDF instead — PDFs of any size are supported.');
+                                              }
+                                              const formData = new FormData();
+                                              formData.append('file', file);
+                                              formData.append('applicationId', selectedApplication.id);
+                                              response = await fetch('/api/upload-lender-questionnaire-completed', {
+                                                method: 'POST',
+                                                body: formData,
+                                              });
+                                            }
 
                                             if (!response.ok) {
-                                              const error = await response.json();
-                                              throw new Error(error.error || 'Failed to upload file');
+                                              throw new Error(await parseUploadError(response));
                                             }
 
                                             showSnackbar('Completed form uploaded successfully', 'success');

@@ -1,8 +1,10 @@
 import { createClient } from '@supabase/supabase-js';
 import formidable from 'formidable';
 import fs from 'fs';
+import { isJsonRequest, readJsonBody } from '../../lib/readJsonBody';
 
-// Disable body parsing, we'll handle it with formidable
+// Disable body parsing, we'll handle it with formidable (multipart) or read the
+// raw JSON body ourselves (direct-to-storage mode).
 export const config = {
   api: {
     bodyParser: false,
@@ -14,13 +16,59 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
+// Records the completed file path on the application. Shared by both upload
+// modes so the database side-effects stay identical.
+async function finalize(res, applicationId, filePath, wasConverted) {
+  const { error: updateError } = await supabase
+    .from('applications')
+    .update({
+      lender_questionnaire_completed_file_path: filePath,
+      lender_questionnaire_completed_uploaded_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', applicationId);
+
+  if (updateError) {
+    console.error('Error updating application:', updateError);
+    return res.status(500).json({ error: 'Failed to update application: ' + updateError.message });
+  }
+
+  return res.status(200).json({
+    success: true,
+    message: wasConverted
+      ? 'Completed lender questionnaire uploaded and converted to PDF successfully'
+      : 'Completed lender questionnaire uploaded successfully',
+    filePath,
+    wasConverted,
+  });
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
   try {
-    // Parse form data
+    // JSON mode: the PDF was uploaded directly to storage by the browser and we
+    // only need to record its path. The tiny JSON body never hits the ~4.5MB
+    // serverless body limit that breaks large multipart uploads.
+    if (isJsonRequest(req)) {
+      const body = await readJsonBody(req);
+      const applicationId = body.applicationId;
+      const filePath = body.filePath;
+
+      if (!applicationId) {
+        return res.status(400).json({ error: 'No application ID provided' });
+      }
+      if (!filePath || !filePath.startsWith(`lender_questionnaires/${applicationId}/`)) {
+        return res.status(400).json({ error: 'Invalid file path' });
+      }
+
+      return await finalize(res, applicationId, filePath, false);
+    }
+
+    // Multipart mode: file streamed through the function (DOC/DOCX needing
+    // server-side conversion to PDF).
     const form = formidable({
       maxFileSize: 10 * 1024 * 1024, // 10MB
       keepExtensions: true,
@@ -42,12 +90,14 @@ export default async function handler(req, res) {
     const allowedTypes = ['.pdf', '.doc', '.docx'];
     const fileExt = '.' + file.originalFilename.split('.').pop().toLowerCase();
     if (!allowedTypes.includes(fileExt)) {
+      fs.unlinkSync(file.filepath);
       return res.status(400).json({ error: 'Invalid file type. Only PDF, DOC, and DOCX files are allowed.' });
     }
 
     // Validate file size (10MB max)
     const stats = fs.statSync(file.filepath);
     if (stats.size > 10 * 1024 * 1024) {
+      fs.unlinkSync(file.filepath);
       return res.status(400).json({ error: 'File size exceeds 10MB limit.' });
     }
 
@@ -61,7 +111,7 @@ export default async function handler(req, res) {
     // Convert non-PDF files to PDF
     let fileData;
     let wasConverted = false;
-    
+
     if (fileExt === '.pdf') {
       // Read PDF file directly
       fileData = fs.readFileSync(file.filepath);
@@ -77,8 +127,8 @@ export default async function handler(req, res) {
         console.error('Error converting file to PDF:', conversionError);
         // Clean up temporary file
         fs.unlinkSync(file.filepath);
-        return res.status(500).json({ 
-          error: `Failed to convert ${fileExt} to PDF: ${conversionError.message}. Please try converting the file to PDF first.` 
+        return res.status(500).json({
+          error: `Failed to convert ${fileExt} to PDF: ${conversionError.message}. Please try converting the file to PDF first.`,
         });
       }
     } else {
@@ -88,7 +138,7 @@ export default async function handler(req, res) {
     }
 
     // Upload to Supabase storage (always as PDF after conversion)
-    const { data: uploadData, error: uploadError } = await supabase.storage
+    const { error: uploadError } = await supabase.storage
       .from('bucket0')
       .upload(filePath, fileData, {
         contentType: 'application/pdf', // Always PDF after conversion
@@ -97,45 +147,16 @@ export default async function handler(req, res) {
 
     if (uploadError) {
       console.error('Error uploading file:', uploadError);
+      fs.unlinkSync(file.filepath);
       return res.status(500).json({ error: 'Failed to upload file: ' + uploadError.message });
-    }
-
-    // Update application record with completed file path
-    const { error: updateError } = await supabase
-      .from('applications')
-      .update({
-        lender_questionnaire_completed_file_path: filePath,
-        lender_questionnaire_completed_uploaded_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', applicationId);
-
-    if (updateError) {
-      console.error('Error updating application:', updateError);
-      // Try to delete the uploaded file if database update fails
-      await supabase.storage.from('bucket0').remove([filePath]);
-      return res.status(500).json({ error: 'Failed to update application: ' + updateError.message });
     }
 
     // Clean up temporary file
     fs.unlinkSync(file.filepath);
 
-    return res.status(200).json({
-      success: true,
-      message: wasConverted 
-        ? 'Completed lender questionnaire uploaded and converted to PDF successfully' 
-        : 'Completed lender questionnaire uploaded successfully',
-      filePath: filePath,
-      wasConverted: wasConverted,
-    });
+    return await finalize(res, applicationId, filePath, wasConverted);
   } catch (error) {
     console.error('Error in upload-lender-questionnaire-completed:', error);
     return res.status(500).json({ error: error.message || 'Internal server error' });
   }
 }
-
-
-
-
-
-
