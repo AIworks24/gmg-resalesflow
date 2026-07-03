@@ -559,6 +559,54 @@ const AdminReports = () => {
     retry: (count, err) => err?.status >= 500 && count < 2,
   });
 
+  // ── processing jobs (admin only) ─────────────────────────────────────────
+
+  const jobsQuery = useQuery({
+    queryKey: ['reports-jobs'],
+    queryFn: async ({ signal }) => {
+      const res = await fetch('/api/admin/reports/jobs?limit=200', { signal });
+      if (!res.ok) throw new Error('Failed to load processing jobs');
+      return res.json();
+    },
+    enabled: role === 'admin',
+    placeholderData: (prev) => prev,
+    staleTime: 10 * 1000,
+    refetchInterval: activeTab === 'processing-jobs' ? 15000 : false,
+    retry: (count, err) => err?.status >= 500 && count < 2,
+  });
+
+  const jobsSummary = jobsQuery.data?.summary || {};
+  const failedJobCount = (jobsSummary.failed || 0) + (jobsSummary.dead_letter || 0);
+
+  const jobStatusBadge = (s) => ({
+    pending:     'bg-gray-100 text-gray-700',
+    processing:  'bg-blue-100 text-blue-800',
+    succeeded:   'bg-green-100 text-green-800',
+    failed:      'bg-amber-100 text-amber-800',
+    dead_letter: 'bg-red-100 text-red-800',
+  }[s] || 'bg-gray-100 text-gray-700');
+
+  const stepStatusBadge = (s) => ({
+    pending:   'bg-gray-100 text-gray-600',
+    succeeded: 'bg-green-100 text-green-700',
+    failed:    'bg-red-100 text-red-700',
+    skipped:   'bg-gray-100 text-gray-500',
+  }[s] || 'bg-gray-100 text-gray-600');
+
+  const [retryingJobId, setRetryingJobId] = useState(null);
+  const handleRetryJob = async (jobId) => {
+    setRetryingJobId(jobId);
+    try {
+      const res = await fetch(`/api/admin/jobs/${jobId}/retry`, { method: 'POST' });
+      if (!res.ok) throw new Error('Retry failed');
+      setTimeout(() => jobsQuery.refetch(), 1500);
+    } catch (err) {
+      console.error('[Reports] retry job failed:', err);
+    } finally {
+      setRetryingJobId(null);
+    }
+  };
+
   // ── recent applications (table only, limit 20) ───────────────────────────
 
   const recentFilters = useMemo(() => ({
@@ -765,6 +813,7 @@ const AdminReports = () => {
             <nav className="-mb-px flex space-x-8">
               {[
                 { id: 'reports',            label: 'Reports & Analytics',                          show: true },
+                { id: 'processing-jobs',    label: 'Processing Jobs',   badge: failedJobCount,           show: role === 'admin' },
                 { id: 'expiring-documents', label: 'Expiring Documents', badge: expiringDocuments.length, show: role === 'admin' },
                 { id: 'export-reports',     label: 'Export Reports',                                show: true },
               ].filter((t) => t.show).map((tab) => (
@@ -793,6 +842,107 @@ const AdminReports = () => {
                 </button>
               ))}
             </nav>
+          </div>
+        )}
+
+        {/* ─── PROCESSING JOBS TAB ────────────────────────────────────────── */}
+        {activeTab === 'processing-jobs' && role === 'admin' && (
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+            <div className="px-6 py-4 border-b border-gray-100 bg-gray-50/50 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-semibold text-gray-900">Application Processing Jobs</h2>
+                <p className="text-sm text-gray-500 mt-1">
+                  Post-payment processing per application (receipt, forms, notifications, delivery). Auto-refreshes every 15s.
+                </p>
+              </div>
+              <div className="flex items-center gap-2 text-xs">
+                {['succeeded', 'processing', 'pending', 'failed', 'dead_letter'].map((s) => (
+                  <span key={s} className={`px-2 py-1 rounded-full font-medium ${jobStatusBadge(s)}`}>
+                    {s.replace('_', ' ')}: {jobsSummary[s] || 0}
+                  </span>
+                ))}
+                <button
+                  onClick={() => jobsQuery.refetch()}
+                  className="ml-2 px-3 py-1 rounded-md border border-gray-300 text-gray-600 hover:bg-gray-50 font-medium"
+                >
+                  Refresh
+                </button>
+              </div>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="min-w-full text-sm">
+                <thead className="bg-gray-50/80">
+                  <tr className="text-left text-gray-500">
+                    <th className="px-4 py-3 font-medium">Application</th>
+                    <th className="px-4 py-3 font-medium">Type</th>
+                    <th className="px-4 py-3 font-medium">Job</th>
+                    <th className="px-4 py-3 font-medium">Steps</th>
+                    <th className="px-4 py-3 font-medium">Attempts</th>
+                    <th className="px-4 py-3 font-medium">Last Error</th>
+                    <th className="px-4 py-3 font-medium">Created</th>
+                    <th className="px-4 py-3 font-medium"></th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-50">
+                  {jobsQuery.isLoading && (
+                    <tr><td colSpan={8} className="px-4 py-8 text-center text-gray-400">Loading…</td></tr>
+                  )}
+                  {!jobsQuery.isLoading && (jobsQuery.data?.jobs || []).length === 0 && (
+                    <tr><td colSpan={8} className="px-4 py-8 text-center text-gray-400">No processing jobs yet.</td></tr>
+                  )}
+                  {(jobsQuery.data?.jobs || []).map((job) => (
+                    <tr key={job.id} className="align-top hover:bg-gray-50/50">
+                      <td className="px-4 py-3 whitespace-nowrap">
+                        <div className="font-medium text-gray-900">#{job.application_id}</div>
+                        <div className="text-gray-400 text-xs">{job.application?.submitter_email || ''}</div>
+                      </td>
+                      <td className="px-4 py-3 whitespace-nowrap text-gray-600">{job.application?.application_type || '—'}</td>
+                      <td className="px-4 py-3 whitespace-nowrap">
+                        <span className={`px-2 py-1 rounded-full text-xs font-medium ${jobStatusBadge(job.status)}`}>
+                          {job.status.replace('_', ' ')}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex flex-wrap gap-1">
+                          {(job.steps || []).map((s) => (
+                            <span
+                              key={s.id}
+                              title={s.error || `${s.step_key}: ${s.status}`}
+                              className={`px-2 py-0.5 rounded text-xs font-medium ${stepStatusBadge(s.status)}`}
+                            >
+                              {s.step_key}
+                            </span>
+                          ))}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 whitespace-nowrap text-gray-600">{job.attempts}/{job.max_attempts}</td>
+                      <td className="px-4 py-3 max-w-xs">
+                        {job.last_error ? (
+                          <span className="text-xs text-red-600 break-words line-clamp-3">{job.last_error}</span>
+                        ) : (
+                          <span className="text-gray-300">—</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 whitespace-nowrap text-gray-400 text-xs">
+                        {job.created_at ? new Date(job.created_at).toLocaleString() : ''}
+                      </td>
+                      <td className="px-4 py-3 whitespace-nowrap">
+                        {(job.status === 'failed' || job.status === 'dead_letter') && (
+                          <button
+                            onClick={() => handleRetryJob(job.id)}
+                            disabled={retryingJobId === job.id}
+                            className="px-3 py-1 rounded-md bg-blue-600 text-white text-xs font-medium hover:bg-blue-700 disabled:opacity-50"
+                          >
+                            {retryingJobId === job.id ? 'Retrying…' : 'Retry'}
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         )}
 

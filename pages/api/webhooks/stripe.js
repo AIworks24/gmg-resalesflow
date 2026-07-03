@@ -2,6 +2,7 @@ import { getServerStripe, getWebhookSecret } from '../../../lib/stripe';
 import { getTestModeFromRequest } from '../../../lib/stripeMode';
 import { sendEmail, sendInvoiceReceiptEmail, sendPaymentConfirmationEmail } from '../../../lib/emailService';
 import { parseEmails } from '../../../lib/emailUtils';
+import { enqueueJob } from '../../../lib/processing/enqueue';
 
 // Helper function to get raw body for webhook signature verification
 function getRawBody(req) {
@@ -218,143 +219,21 @@ export default async function handler(req, res) {
           }
         }
 
-        // Get receipt and send receipt email
+        // Durable post-payment processing is enqueued as a job (receipt, forms,
+        // notifications, auto-submit, document delivery). The per-payment idempotency
+        // key means this event and payment_intent.succeeded — plus any Stripe redelivery —
+        // collapse to exactly one job, so the receipt can never race or be sent twice.
         if (updatedApp) {
-          try {
-            // Get receipt from payment intent (Stripe automatically generates receipts)
-            let receiptUrl = null;
-            let receiptNumber = null;
-            let paymentMethod = null;
-            let lineItems = [];
-            
-            if (session.payment_intent) {
-              try {
-                const paymentIntent = await stripe.paymentIntents.retrieve(session.payment_intent);
-                // Get the charge to access receipt and payment method
-                if (paymentIntent.latest_charge) {
-                  const charge = await stripe.charges.retrieve(paymentIntent.latest_charge);
-                  receiptUrl = charge.receipt_url;
-                  receiptNumber = charge.receipt_number;
-                  
-                  // Get payment method details
-                  if (charge.payment_method_details?.card) {
-                    const card = charge.payment_method_details.card;
-                    const brand = card.brand?.toUpperCase() || 'CARD';
-                    const last4 = card.last4 || '****';
-                    paymentMethod = `${brand} - ${last4}`;
-                    console.log(`[Webhook] Payment method retrieved: ${paymentMethod}`);
-                  } else {
-                    console.warn('[Webhook] No payment method details found in charge');
-                  }
-                }
-              } catch (receiptError) {
-                console.warn('[Webhook] Could not retrieve receipt URL:', receiptError.message);
-              }
-            }
-
-            // Get line items from checkout session
-            try {
-              const sessionLineItems = await stripe.checkout.sessions.listLineItems(session.id, {
-                expand: ['data.price.product']
-              });
-              
-              if (sessionLineItems?.data && sessionLineItems.data.length > 0) {
-                lineItems = sessionLineItems.data.map(item => {
-                  // Get product name - prioritize product name over description
-                  let itemName = null;
-                  let itemDescription = null;
-                  
-                  // First try to get product name and description (if product is expanded)
-                  if (item.price?.product) {
-                    const product = typeof item.price.product === 'string' 
-                      ? null 
-                      : item.price.product;
-                    if (product) {
-                      itemName = product.name || null;
-                      // Product description contains property address/name
-                      itemDescription = product.description || null;
-                    }
-                  }
-                  
-                  // Fallback to line item description if product description not available
-                  if (!itemDescription) {
-                    itemDescription = item.description || null;
-                  }
-                  
-                  // Fallback to description if product name not available
-                  if (!itemName) {
-                    itemName = item.description || null;
-                  }
-                  
-                  // Final fallback
-                  if (!itemName) {
-                    itemName = 'Service';
-                  }
-                  
-                  return {
-                    name: itemName,
-                    description: itemDescription, // Include description which contains property address
-                    amount: (item.amount_total / 100).toFixed(2),
-                    quantity: item.quantity || 1
-                  };
-                });
-                
-                console.log(`[Webhook] Retrieved ${lineItems.length} line items for session ${session.id}`);
-              } else {
-                console.warn(`[Webhook] No line items found for session ${session.id}`);
-              }
-            } catch (lineItemsError) {
-              console.warn('[Webhook] Could not retrieve line items:', lineItemsError.message);
-            }
-
-            // Check if this was created during impersonation and if emails should be sent
-            const impersonationMeta = updatedApp.impersonation_metadata;
-            const isImpersonated = !!impersonationMeta;
-            const shouldSendEmails = impersonationMeta?.send_emails !== false; // Default to true if not specified
-            
-            if (isImpersonated && !shouldSendEmails) {
-              console.log(`[Webhook] Skipping receipt email - impersonation mode with send_emails disabled for application ${updatedApp.id}`);
-            } else {
-              // Send receipt email
-              const recipientEmail = session.customer_email || session.metadata.customerEmail;
-              
-              console.log(`[Webhook] Sending receipt email with paymentMethod: ${paymentMethod}, lineItems count: ${lineItems.length}`);
-              
-              await sendInvoiceReceiptEmail({
-                to: recipientEmail,
-                applicationId: updatedApp.id,
-                customerName: session.metadata.customerName || 'Customer',
-                propertyAddress: session.metadata.propertyAddress || '',
-                packageType: session.metadata.packageType || 'standard',
-                totalAmount: (session.amount_total / 100).toFixed(2),
-                invoiceNumber: receiptNumber || `PAY-${updatedApp.id}`, // Use receipt number or generate one
-                invoicePdfUrl: receiptUrl, // Use Stripe receipt URL
-                hostedInvoiceUrl: receiptUrl, // Same URL for hosted view
-                stripeChargeId: session.payment_intent,
-                invoiceDate: new Date().toISOString(),
-                applicationType: updatedApp.application_type || 'single_property', // Pass application type for dynamic content
-                paymentMethod: paymentMethod, // Payment method (e.g., "VISA - 8008")
-                lineItems: lineItems, // Itemized breakdown
-              });
-            }
-          } catch (receiptError) {
-            console.error('[Webhook] Failed to get receipt or send receipt email:', receiptError);
-            // Fallback to payment confirmation email
-            try {
-              await sendPaymentConfirmationEmail({
-                to: session.customer_email || session.metadata.customerEmail,
-                applicationId: updatedApp.id,
-                customerName: session.metadata.customerName,
-                propertyAddress: session.metadata.propertyAddress,
-                packageType: session.metadata.packageType,
-                totalAmount: (session.amount_total / 100).toFixed(2),
-                stripeChargeId: session.payment_intent,
-              });
-            } catch (emailError) {
-              console.error('[Webhook] Failed to send payment confirmation email (fallback):', emailError);
-              // Don't fail the webhook if email fails
-            }
-          }
+          await enqueueAndKick(supabase, {
+            applicationId: updatedApp.id,
+            paymentIntentId: session.payment_intent,
+            sessionId: session.id,
+            amountTotal: session.amount_total,
+            customerEmail: session.customer_email || session.metadata?.customerEmail,
+            metaIsMultiCommunity: session.metadata?.isMultiCommunity === 'true',
+            testMode: correctTestMode,
+            event,
+          });
         }
         break;
 
@@ -418,30 +297,47 @@ export default async function handler(req, res) {
           `)
           .single();
 
-        // If update by stripe_payment_intent_id failed, try to update by applicationId from metadata
+        // If update by stripe_payment_intent_id failed, try to update by applicationId from metadata.
+        // SECURITY: integer application ids are NOT unique across databases (test vs live). A
+        // test-mode event that reaches this deployment (e.g. a local/staging test checkout whose
+        // webhook fans out to prod) can carry a metadata.applicationId that collides with an
+        // unrelated live row. So we SELECT the candidate first and only mutate it if its Stripe
+        // mode matches this event's mode — never trust the bare integer id.
         if (!updatedApplication && paymentIntent.metadata?.applicationId) {
           console.log(`[Webhook] Could not find application by stripe_payment_intent_id ${paymentIntent.id}, trying by applicationId from metadata: ${paymentIntent.metadata.applicationId}`);
 
-          const { data: fallbackApplication } = await supabase
+          const { data: candidate } = await supabase
             .from('applications')
-            .update(paymentUpdateData)
+            .select('id, stripe_session_id, is_test_transaction')
             .eq('id', paymentIntent.metadata.applicationId)
-            .select(`
-              id,
-              submitter_email,
-              submitter_name,
-              property_address,
-              package_type,
-              total_amount,
-              application_type,
-              impersonation_metadata,
-              payment_status
-            `)
             .single();
 
-          if (fallbackApplication) {
-            updatedApplication = fallbackApplication;
-            console.log(`[Webhook] Successfully updated application ${fallbackApplication.id} using applicationId from metadata`);
+          if (candidate && appMatchesEventMode(candidate, correctTestMode)) {
+            const { data: fallbackApplication } = await supabase
+              .from('applications')
+              .update(paymentUpdateData)
+              .eq('id', candidate.id)
+              .select(`
+                id,
+                submitter_email,
+                submitter_name,
+                property_address,
+                package_type,
+                total_amount,
+                application_type,
+                impersonation_metadata,
+                payment_status
+              `)
+              .single();
+
+            if (fallbackApplication) {
+              updatedApplication = fallbackApplication;
+              console.log(`[Webhook] Successfully updated application ${fallbackApplication.id} using applicationId from metadata`);
+            } else {
+              console.error(`[Webhook] Could not find application by applicationId ${paymentIntent.metadata.applicationId} either`);
+            }
+          } else if (candidate) {
+            console.warn(`[Webhook] Ignoring applicationId fallback for ${paymentIntent.metadata.applicationId}: event mode (test=${correctTestMode}) != application mode — likely a cross-environment id collision. Skipping.`);
           } else {
             console.error(`[Webhook] Could not find application by applicationId ${paymentIntent.metadata.applicationId} either`);
           }
@@ -506,284 +402,23 @@ export default async function handler(req, res) {
             .is('submitted_at', null);
         }
 
-        // Handle multi-community applications
-        const applicationId = paymentIntent.metadata?.applicationId || updatedApplication?.id;
-
-        // Get receipt and send receipt email
-        if (updatedApplication && updatedApplication.submitter_email) {
-          try {
-            // Get receipt from charge (Stripe automatically generates receipts)
-            let receiptUrl = null;
-            let receiptNumber = null;
-            let paymentMethod = null;
-            let lineItems = [];
-            
-            if (paymentIntent.latest_charge) {
-              try {
-                const charge = await stripe.charges.retrieve(paymentIntent.latest_charge);
-                receiptUrl = charge.receipt_url;
-                receiptNumber = charge.receipt_number;
-                
-                // Get payment method details
-                if (charge.payment_method_details?.card) {
-                  const card = charge.payment_method_details.card;
-                  const brand = card.brand?.toUpperCase() || 'CARD';
-                  const last4 = card.last4 || '****';
-                  paymentMethod = `${brand} - ${last4}`;
-                  console.log(`[Webhook] Payment method retrieved: ${paymentMethod}`);
-                } else {
-                  console.warn('[Webhook] No payment method details found in charge');
-                }
-              } catch (receiptError) {
-                console.warn('[Webhook] Could not retrieve receipt URL:', receiptError.message);
-              }
-            }
-
-            // Try to get line items from checkout session if available
-            // PaymentIntent might have been created via CheckoutSession
-            try {
-              // Search for checkout sessions with this payment intent
-              const sessions = await stripe.checkout.sessions.list({
-                payment_intent: paymentIntent.id,
-                limit: 1
-              });
-              
-              if (sessions.data.length > 0) {
-                const sessionLineItems = await stripe.checkout.sessions.listLineItems(sessions.data[0].id, {
-                  expand: ['data.price.product']
-                });
-                
-                if (sessionLineItems?.data && sessionLineItems.data.length > 0) {
-                  lineItems = sessionLineItems.data.map(item => {
-                    // Get product name - prioritize product name over description
-                    let itemName = null;
-                    let itemDescription = null;
-                    
-                    // First try to get product name and description (if product is expanded)
-                    if (item.price?.product) {
-                      const product = typeof item.price.product === 'string' 
-                        ? null 
-                        : item.price.product;
-                      if (product) {
-                        itemName = product.name || null;
-                        // Product description contains property address/name
-                        itemDescription = product.description || null;
-                      }
-                    }
-                    
-                    // Fallback to line item description if product description not available
-                    if (!itemDescription) {
-                      itemDescription = item.description || null;
-                    }
-                    
-                    // Fallback to description if product name not available
-                    if (!itemName) {
-                      itemName = item.description || null;
-                    }
-                    
-                    // Final fallback
-                    if (!itemName) {
-                      itemName = 'Service';
-                    }
-                    
-                    return {
-                      name: itemName,
-                      description: itemDescription, // Include description which contains property address
-                      amount: (item.amount_total / 100).toFixed(2),
-                      quantity: item.quantity || 1
-                    };
-                  });
-                  
-                  console.log(`[Webhook] Retrieved ${lineItems.length} line items for payment intent ${paymentIntent.id}`);
-                } else {
-                  console.warn(`[Webhook] No line items found for payment intent ${paymentIntent.id}`);
-                }
-              }
-            } catch (lineItemsError) {
-              console.warn('[Webhook] Could not retrieve line items:', lineItemsError.message);
-              // If we can't get line items, we'll construct a basic one from metadata
-              // This is a fallback for PaymentIntents created directly (not via CheckoutSession)
-            }
-
-            // Check if this was created during impersonation and if emails should be sent
-            const impersonationMeta = updatedApplication.impersonation_metadata;
-            const isImpersonated = !!impersonationMeta;
-            const shouldSendEmails = impersonationMeta?.send_emails !== false; // Default to true if not specified
-            
-            if (isImpersonated && !shouldSendEmails) {
-              console.log(`[Webhook] Skipping receipt email - impersonation mode with send_emails disabled for application ${updatedApplication.id}`);
-            } else if (hasCheckoutSession) {
-              console.log(`[Webhook] Skipping receipt email in payment_intent.succeeded — already sent by checkout.session.completed for application ${updatedApplication.id}`);
-            } else {
-              // Send receipt email
-              console.log(`[Webhook] Sending receipt email with paymentMethod: ${paymentMethod}, lineItems count: ${lineItems.length}`);
-              
-              await sendInvoiceReceiptEmail({
-                to: updatedApplication.submitter_email,
-                applicationId: updatedApplication.id,
-                customerName: updatedApplication.submitter_name || paymentIntent.metadata.customerName || 'Customer',
-                propertyAddress: updatedApplication.property_address || paymentIntent.metadata.propertyAddress || 'Unknown',
-                packageType: updatedApplication.package_type || paymentIntent.metadata.packageType || 'standard',
-                totalAmount: (updatedApplication.total_amount || (paymentIntent.amount_total / 100)).toFixed(2),
-                invoiceNumber: receiptNumber || `PAY-${updatedApplication.id}`, // Use receipt number or generate one
-                invoicePdfUrl: receiptUrl, // Use Stripe receipt URL
-                hostedInvoiceUrl: receiptUrl, // Same URL for hosted view
-                stripeChargeId: paymentIntent.id,
-                invoiceDate: new Date().toISOString(),
-                applicationType: updatedApplication.application_type || 'single_property', // Pass application type for dynamic content
-                paymentMethod: paymentMethod, // Payment method (e.g., "VISA - 8008")
-                lineItems: lineItems, // Itemized breakdown
-              });
-            }
-          } catch (emailError) {
-            console.error('[Webhook] Failed to send receipt email:', emailError);
-            // Don't fail the webhook if email fails
-          }
+        // Enqueue durable post-payment processing. Same per-payment idempotency key as
+        // checkout.session.completed, so whichever event arrives first creates the single
+        // job and the other is ignored — no double processing, no lost receipt, and this
+        // handler can no longer 500 (which previously caused Stripe retry storms for MC).
+        if (updatedApplication?.id) {
+          await enqueueAndKick(supabase, {
+            applicationId: updatedApplication.id,
+            paymentIntentId: paymentIntent.id,
+            sessionId: null,
+            amountTotal: paymentIntent.amount_total || paymentIntent.amount,
+            customerEmail: updatedApplication.submitter_email,
+            metaIsMultiCommunity: paymentIntent.metadata?.isMultiCommunity === 'true',
+            testMode: correctTestMode,
+            event,
+          });
         } else {
-          console.warn(`[Webhook] Cannot send receipt email - missing submitter_email for application ${applicationId}`);
-        }
-        
-        if (applicationId) {
-          // Note: Auto-assignment now happens at submission time, not at payment time
-          // This ensures applications are assigned immediately when submitted, not after payment
-          // We still check here in case an application wasn't assigned at submission
-          let needsNotifications = false;
-          
-          const { data: appCheck } = await supabase
-            .from('applications')
-            .select('assigned_to, submitted_at')
-            .eq('id', applicationId)
-            .single();
-          
-          if (appCheck && !appCheck.assigned_to && appCheck.submitted_at) {
-            // Application was submitted but not assigned - assign it now
-            console.log(`[Webhook] Application ${applicationId} was submitted but not assigned, attempting auto-assignment`);
-            const assignResult = await autoAssignApplication(applicationId, supabase);
-            if (assignResult && assignResult.success) {
-              console.log(`[Webhook] Successfully auto-assigned application ${applicationId} to ${assignResult.assignedTo}`);
-              // Since we just assigned it here, notifications were created by auto-assign
-              needsNotifications = false;
-            } else {
-              console.warn(`[Webhook] Failed to auto-assign application ${applicationId}:`, assignResult?.error || 'Unknown error');
-              // Auto-assign failed, so we need to create notifications manually
-              needsNotifications = true;
-            }
-          } else {
-            // Application was already assigned at submission time
-            // Notifications were already created by the submission flow, don't duplicate them
-            console.log(`[Webhook] Application ${applicationId} was already assigned at submission (assigned_to: ${appCheck?.assigned_to}), skipping notification creation`);
-            needsNotifications = false;
-          }
-
-          // Only create notifications if needed (fallback for failed auto-assign)
-          if (needsNotifications) {
-            try {
-              console.log(`[Webhook] Creating notifications for application ${applicationId} (fallback after failed auto-assign)`);
-              const { createNotifications } = await import('../notifications/create');
-              const notificationResult = await createNotifications(applicationId, supabase);
-              if (notificationResult.success) {
-                console.log(`[Webhook] Fallback notifications created: ${notificationResult.notificationsCreated} notifications, ${notificationResult.emailsQueued || 0} emails queued`);
-              } else {
-                console.warn(`[Webhook] Failed to create fallback notifications:`, notificationResult.error);
-              }
-            } catch (notificationError) {
-              console.error('[Webhook] Error creating fallback notifications:', notificationError);
-              // Don't fail the webhook if notification creation fails
-            }
-          }
-          
-          // Check if this is a lender questionnaire application
-          const { data: appData } = await supabase
-            .from('applications')
-            .select('application_type, hoa_property_id')
-            .eq('id', applicationId)
-            .single();
-
-          // Resolve isMultiCommunity: metadata first, then DB (handles missing metadata)
-          let resolvedIsMultiCommunity = isMultiCommunity;
-          if (!resolvedIsMultiCommunity && appData?.hoa_property_id) {
-            const { data: prop } = await supabase
-              .from('hoa_properties')
-              .select('is_multi_community')
-              .eq('id', appData.hoa_property_id)
-              .single();
-            if (prop?.is_multi_community) {
-              resolvedIsMultiCommunity = true;
-              console.log(`[Webhook] Application ${applicationId} resolved as MC from hoa_properties`);
-            }
-          }
-
-          // Skip property owner forms for lender questionnaire (user uploads their own form).
-          // Status stays payment_confirmed — the upload API sets under_review when the file arrives.
-          if (appData?.application_type === 'lender_questionnaire') {
-            console.log(`[Webhook] Lender questionnaire ${applicationId} — skipping property owner forms, awaiting requester file upload`);
-          } else if (appData?.application_type === 'info_packet') {
-            // Info Packet: auto-complete and send documents immediately — no staff review needed
-            console.log(`[Webhook] Info Packet application ${applicationId} — auto-completing and sending documents`);
-            try {
-              const baseUrl = process.env.NEXT_PUBLIC_SITE_URL || `https://${process.env.VERCEL_URL}` || 'http://localhost:3000';
-              const emailRes = await fetch(`${baseUrl}/api/send-info-packet-email`, {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                  'Authorization': `Bearer ${process.env.INTERNAL_API_SECRET}`,
-                  ...(process.env.VERCEL_AUTOMATION_BYPASS_SECRET && {
-                    'x-vercel-protection-bypass': process.env.VERCEL_AUTOMATION_BYPASS_SECRET,
-                  }),
-                },
-                body: JSON.stringify({ applicationId }),
-              });
-              if (!emailRes.ok) {
-                const errText = await emailRes.text();
-                console.error(`[Webhook] Info Packet email send failed (${emailRes.status}):`, errText);
-              } else {
-                console.log(`[Webhook] Info Packet documents sent for application ${applicationId}`);
-              }
-            } catch (emailErr) {
-              console.error('[Webhook] Info Packet email send threw:', emailErr);
-              // Don't fail the webhook — mark complete even if email fails; admin can resend
-              await supabase
-                .from('applications')
-                .update({ status: 'completed', updated_at: new Date().toISOString() })
-                .eq('id', applicationId);
-            }
-          } else if (appData?.application_type === 'public_offering') {
-            // Public Offering: auto-complete and send document immediately — no staff review needed
-            console.log(`[Webhook] Public Offering application ${applicationId} — auto-completing and sending document`);
-            try {
-              const baseUrl = process.env.NEXT_PUBLIC_SITE_URL || `https://${process.env.VERCEL_URL}` || 'http://localhost:3000';
-              const emailRes = await fetch(`${baseUrl}/api/send-public-offering-email`, {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                  'Authorization': `Bearer ${process.env.INTERNAL_API_SECRET}`,
-                  ...(process.env.VERCEL_AUTOMATION_BYPASS_SECRET && {
-                    'x-vercel-protection-bypass': process.env.VERCEL_AUTOMATION_BYPASS_SECRET,
-                  }),
-                },
-                body: JSON.stringify({ applicationId }),
-              });
-              if (!emailRes.ok) {
-                const errText = await emailRes.text();
-                console.error(`[Webhook] Public Offering email send failed (${emailRes.status}):`, errText);
-              } else {
-                console.log(`[Webhook] Public Offering document sent for application ${applicationId}`);
-              }
-            } catch (emailErr) {
-              console.error('[Webhook] Public Offering email send threw:', emailErr);
-              // Don't fail the webhook — mark complete even if email fails; admin can resend
-              await supabase
-                .from('applications')
-                .update({ status: 'completed', updated_at: new Date().toISOString() })
-                .eq('id', applicationId);
-            }
-          } else if (resolvedIsMultiCommunity) {
-            await handleMultiCommunityApplication(applicationId, paymentIntent.metadata);
-            await autoSubmitApplication(applicationId, supabase);
-          } else {
-            await createPropertyOwnerForms(applicationId, paymentIntent.metadata);
-            await autoSubmitApplication(applicationId, supabase);
-          }
+          console.warn(`[Webhook] payment_intent.succeeded: no application resolved for payment intent ${paymentIntent.id}`);
         }
         break;
 
@@ -1215,486 +850,89 @@ async function handleCorrectionPayment(session, stripe, supabase) {
   }
 }
 
-// Helper function to create property owner forms using data-driven approach
-async function createPropertyOwnerForms(applicationId, metadata) {
-  const { createClient } = require('@supabase/supabase-js');
-  const { getApplicationTypeData } = require('../../../lib/applicationTypes');
-  
-  const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL,
-    process.env.SUPABASE_SERVICE_ROLE_KEY
-  );
 
+// ─── Cross-environment mode guard ────────────────────────────────────────────
+// Integer application ids are not unique across databases (test vs live), so a raw-id
+// lookup can match the wrong row when a test-mode webhook reaches this deployment. This
+// verifies a candidate application belongs to the same Stripe mode as the event before we
+// mutate or process it. A Stripe checkout session id embeds mode (cs_test_ / cs_live_) and
+// is the most reliable signal; fall back to the is_test_transaction flag when the row has
+// no session id yet.
+function appMatchesEventMode(app, eventIsTestMode) {
+  const appIsTest = app?.stripe_session_id
+    ? app.stripe_session_id.startsWith('cs_test_')
+    : !!app?.is_test_transaction;
+  return appIsTest === eventIsTestMode;
+}
+
+// ─── Job enqueue + worker self-kick ──────────────────────────────────────────
+// Enqueues the durable processing job for a paid application, then best-effort kicks the
+// worker for near-instant processing. The per-minute Vercel Cron (/api/jobs/run) is the
+// reliability guarantee; the self-kick is a latency optimization and is intentionally not
+// awaited. Enqueue failures never fail the webhook — the cron backstop reprocesses any
+// paid application that lacks a completed job.
+async function enqueueAndKick(supabase, {
+  applicationId, paymentIntentId, sessionId, amountTotal, customerEmail,
+  metaIsMultiCommunity, testMode, event,
+}) {
   try {
-    // Get application details including application_type and recipient email for forms
-    const { data: application, error: appError } = await supabase
+    const { data: app } = await supabase
       .from('applications')
-      .select('application_type, submitter_type, hoa_properties(property_owner_email)')
+      .select('application_type, hoa_property_id, stripe_session_id, is_test_transaction, hoa_properties(is_multi_community)')
       .eq('id', applicationId)
       .single();
 
-    if (appError) {
-      console.error('Error fetching application:', appError);
+    // Defense-in-depth: never enqueue processing for an application whose Stripe mode does not
+    // match this event's mode. Prevents a cross-environment id collision from being processed
+    // even if some other resolution path slips a mismatched app through.
+    if (app && !appMatchesEventMode(app, testMode)) {
+      console.warn(`[Webhook] enqueueAndKick skipped for application ${applicationId}: event mode (test=${testMode}) != application mode — likely a cross-environment id collision.`);
       return;
     }
 
-    const recipientEmail = application.hoa_properties?.property_owner_email || '';
+    const isMultiCommunity = !!metaIsMultiCommunity || !!app?.hoa_properties?.is_multi_community;
+    const idempotencyKey = paymentIntentId ? `pay:${paymentIntentId}` : `evt:${event.id}`;
 
-    // Get application type data to determine required forms
-    const appTypeData = await getApplicationTypeData(application.application_type);
-    const requiredForms = appTypeData.required_forms || [];
-
-    console.log(`Creating forms for application type: ${application.application_type}, Required forms: ${JSON.stringify(requiredForms)}`);
-
-    // Create each required form (skip if already exists to prevent duplicates from webhook retries)
-    for (const formType of requiredForms) {
-      const { data: existing } = await supabase
-        .from('property_owner_forms')
-        .select('id')
-        .eq('application_id', applicationId)
-        .eq('form_type', formType)
-        .is('property_group_id', null)
-        .maybeSingle();
-
-      if (existing) {
-        console.log(`Skipping ${formType} for application ${applicationId} — already exists`);
-        continue;
-      }
-
-      await supabase
-        .from('property_owner_forms')
-        .insert({
-          application_id: applicationId,
-          form_type: formType,
-          status: 'not_started',
-          recipient_email: recipientEmail,
-          access_token: generateAccessToken(),
-          expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() // 30 days
-        });
-
-      console.log(`Created ${formType} for application ${applicationId}`);
-    }
-
-    console.log(`Successfully created ${requiredForms.length} forms for application: ${applicationId}`);
-  } catch (error) {
-    console.error('Error creating property owner forms:', error);
-  }
-}
-
-// Helper function to generate access token
-function generateAccessToken() {
-  return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
-}
-
-// Helper function to auto-assign application to property owner
-async function autoAssignApplication(applicationId, supabase) {
-  try {
-    console.log(`Attempting to auto-assign application ${applicationId} to property owner`);
-
-    // Get application with property information
-    const { data: application, error: appError } = await supabase
-      .from('applications')
-      .select(`
-        id,
-        hoa_property_id,
-        application_type,
-        hoa_properties (
-          id,
-          name,
-          property_owner_email,
-          default_assignee_email,
-          settlement_assignee_email,
-          is_multi_community
-        )
-      `)
-      .eq('id', applicationId)
-      .single();
-
-    if (appError || !application) {
-      console.error('Error fetching application for auto-assignment:', appError);
-      return { success: false, error: 'Application not found' };
-    }
-
-    // Skip if already assigned
-    const { data: currentApp } = await supabase
-      .from('applications')
-      .select('assigned_to')
-      .eq('id', applicationId)
-      .single();
-
-    if (currentApp?.assigned_to) {
-      console.log(`Application ${applicationId} is already assigned to ${currentApp.assigned_to}, skipping auto-assignment`);
-      return { success: false, error: 'Application already assigned' };
-    }
-
-    const property = application.hoa_properties;
-    if (!property || !property.property_owner_email) {
-      console.log(`No property owner email found for application ${applicationId}, skipping auto-assignment`);
-      return { success: false, error: 'No property owner email found' };
-    }
-
-    // Import parseEmails dynamically to avoid circular dependencies
-    const { parseEmails } = await import('../../../lib/emailUtils');
-
-    // For settlement applications, use settlement_assignee_email if set;
-    // otherwise fall back to the first email in property_owner_email.
-    const isSettlement = application.application_type === 'settlement_va' ||
-                         application.application_type === 'settlement_nc';
-    if (isSettlement) {
-      let settlementEmail = property.settlement_assignee_email?.trim();
-
-      if (!settlementEmail) {
-        const ownerEmails = parseEmails(property.property_owner_email);
-        const firstOwner = ownerEmails[0]?.replace(/^owner\./, '').trim();
-        if (firstOwner) {
-          settlementEmail = firstOwner;
-          console.log(`[Stripe] Settlement: no settlement_assignee_email, falling back to first property owner: ${settlementEmail}`);
-        }
-      } else {
-        console.log(`[Stripe] Settlement: using settlement_assignee_email: ${settlementEmail}`);
-      }
-
-      if (!settlementEmail) {
-        console.log(`[Stripe] Settlement ${applicationId}: no assignee email found, leaving unassigned`);
-        return { success: false, error: 'No assignee email found for settlement application' };
-      }
-
-      const { error: assignError } = await supabase
-        .from('applications')
-        .update({ assigned_to: settlementEmail, updated_at: new Date().toISOString() })
-        .eq('id', applicationId);
-
-      if (assignError) {
-        console.error('[Stripe] Error assigning settlement application:', assignError);
-        return { success: false, error: assignError.message };
-      }
-
-      console.log(`[Stripe] Successfully auto-assigned settlement application ${applicationId} to ${settlementEmail}`);
-      return { success: true, assignedTo: settlementEmail };
-    }
-
-    // Parse emails (handles both single email string and comma-separated string)
-    const ownerEmails = parseEmails(property.property_owner_email);
-
-    if (ownerEmails.length === 0) {
-      console.log(`No valid property owner emails found for application ${applicationId}, skipping auto-assignment`);
-      return { success: false, error: 'No valid property owner emails found' };
-    }
-
-    // Build ordered list: default assignee first (if set and in list), then the rest
-    const defaultEmail = (property.default_assignee_email || '').trim().toLowerCase();
-    const defaultInList = defaultEmail && ownerEmails.some(e => (e || '').trim().toLowerCase() === defaultEmail);
-    const orderedEmails = defaultInList
-      ? [
-          ownerEmails.find(e => (e || '').trim().toLowerCase() === defaultEmail),
-          ...ownerEmails.filter(e => (e || '').trim().toLowerCase() !== defaultEmail)
-        ]
-      : ownerEmails;
-
-    console.log(`[Stripe] Trying ${orderedEmails.length} email(s) for application ${applicationId}`);
-
-    // Try each email in order until we find a valid staff/admin/accounting user
-    const allowedRoles = ['staff', 'admin', 'accounting'];
-    let assignedEmail = null;
-
-    for (const rawEmail of orderedEmails) {
-      if (!rawEmail) continue;
-      const emailToTry = rawEmail.replace(/^owner\./, '').trim();
-      if (!emailToTry) continue;
-
-      let { data: profile } = await supabase
-        .from('profiles')
-        .select('id, email, role')
-        .eq('email', emailToTry)
-        .single();
-
-      if (!profile) {
-        const { data: profiles } = await supabase
-          .from('profiles')
-          .select('id, email, role')
-          .ilike('email', emailToTry);
-        if (profiles && profiles.length > 0) profile = profiles[0];
-      }
-
-      if (profile && allowedRoles.includes(profile.role)) {
-        assignedEmail = profile.email;
-        console.log(`[Stripe] Found valid assignee: ${assignedEmail} (role: ${profile.role})`);
-        break;
-      } else if (profile) {
-        console.log(`[Stripe] Skipping ${emailToTry}: role "${profile.role}" not allowed`);
-      } else {
-        console.log(`[Stripe] Skipping ${emailToTry}: no profile found`);
-      }
-    }
-
-    if (!assignedEmail) {
-      console.log(`[Stripe] No valid staff/admin/accounting user found among ${orderedEmails.length} email(s) for application ${applicationId}. Leaving unassigned.`);
-      return {
-        success: true,
-        assignedTo: null,
-        message: 'No valid staff user found among property owner emails. Application left unassigned.'
-      };
-    }
-
-    const ownerEmail = assignedEmail;
-    console.log(`[Stripe] Verified property owner user: ${ownerEmail}`);
-
-    // Assign the application to the property owner
-    const { error: assignError } = await supabase
-      .from('applications')
-      .update({
-        assigned_to: ownerEmail,
-        updated_at: new Date().toISOString()
-      })
-      .eq('id', applicationId);
-
-    if (assignError) {
-      console.error('Error assigning application:', assignError);
-      return { success: false, error: assignError.message };
-    }
-
-    console.log(`Successfully auto-assigned application ${applicationId} to property owner: ${ownerEmail}`);
-    return { success: true, assignedTo: ownerEmail };
-  } catch (error) {
-    console.error('Error in auto-assign application:', error);
-    return { success: false, error: error.message };
-  }
-}
-
-// Helper function to handle multi-community applications
-async function handleMultiCommunityApplication(applicationId, metadata) {
-  const { createClient } = require('@supabase/supabase-js');
-  const { createPropertyGroups, generateDocumentsForAllGroups, createPropertyOwnerFormsForGroups } = require('../../../lib/groupingService');
-  const { deleteCachePattern } = require('../../../lib/redis');
-  
-  const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL,
-    process.env.SUPABASE_SERVICE_ROLE_KEY
-  );
-
-  try {
-    console.log(`[MC] Handling multi-community application: ${applicationId}`);
-    
-    // Get application details with property information
-    const { data: application, error: appError } = await supabase
-      .from('applications')
-      .select(`
-        *,
-        hoa_properties (
-          id,
-          name,
-          location,
-          property_owner_email,
-          is_multi_community
-        )
-      `)
-      .eq('id', applicationId)
-      .single();
-
-    if (appError || !application) {
-      throw new Error(`Application not found: ${appError?.message}`);
-    }
-
-    // Get linked properties for the primary property
-    const { getLinkedProperties } = require('../../../lib/multiCommunityUtils');
-    const linkedProperties = await getLinkedProperties(application.hoa_property_id, supabase);
-
-    if (!linkedProperties || linkedProperties.length === 0) {
-      console.log('No linked properties found, falling back to single property flow');
-      await createPropertyOwnerForms(applicationId, metadata);
-      return;
-    }
-
-    // Create property groups
-    const groups = await createPropertyGroups(
+    const { created } = await enqueueJob({
+      supabase,
       applicationId,
-      application.hoa_properties,
-      linkedProperties
-    );
+      idempotencyKey,
+      jobType: 'process_payment',
+      payload: {
+        eventId: event.id,
+        eventType: event.type,
+        testMode: !!testMode,
+        stripePaymentIntentId: paymentIntentId || null,
+        stripeSessionId: sessionId || null,
+        amountTotal: amountTotal || null,
+        customerEmail: customerEmail || null,
+      },
+      applicationType: app?.application_type,
+      isMultiCommunity,
+      isFree: false,
+    });
 
-    // Set status to payment_confirmed immediately after property groups exist.
-    // This makes the application visible in the admin dashboard right away and
-    // ensures createNotifications (below) does not skip due to pending_payment status.
-    await supabase
-      .from('applications')
-      .update({ status: 'payment_confirmed', updated_at: new Date().toISOString() })
-      .eq('id', applicationId);
-
-    // Purge any stale Redis cache
-    await deleteCachePattern('admin:applications:*');
-    console.log(`[MC] Application ${applicationId} now visible with ${groups.length} property groups`);
-
-    // Assign each property group to its settlement_assignee_email (or first property owner
-    // as fallback). Groups exist now, so the call is no longer a no-op.
-    const isSettlementApp = application.application_type === 'settlement_va' ||
-                            application.application_type === 'settlement_nc';
-    if (isSettlementApp) {
-      try {
-        const { autoAssignSettlementMCGroups } = await import('../auto-assign-application');
-        await autoAssignSettlementMCGroups(applicationId, supabase);
-        console.log(`[MC] Settlement group assignment complete for application ${applicationId}`);
-      } catch (assignError) {
-        console.warn(`[MC] Failed to assign settlement groups for application ${applicationId}:`, assignError);
-      }
-    }
-
-    // Send notifications to ALL property owners (primary + secondary) BEFORE PDF generation.
-    // Property groups now exist, so createNotifications can find all recipients.
-    // Sending here avoids emails being blocked/delayed by slow PDF generation, which
-    // caused the Stripe webhook to time out and retry ~10 hours later.
-    try {
-      const { createNotifications } = await import('../notifications/create');
-      const notifResult = await createNotifications(applicationId, supabase);
-      console.log(`[MC] Notifications for application ${applicationId}: ${notifResult.notificationsCreated} created, ${notifResult.emailsQueued || 0} emails queued`);
-    } catch (notifError) {
-      console.warn(`[MC] Failed to create notifications for application ${applicationId}:`, notifError);
-    }
-
-    // Create property owner forms for each group BEFORE PDF generation so that
-    // admin workflow forms always exist even if PDF generation later fails/times out.
-    await createPropertyOwnerFormsForGroups(applicationId, groups);
-
-    // Generate documents for all groups (slow - PDFs for each property)
-    await generateDocumentsForAllGroups(applicationId, application);
-
-  } catch (error) {
-    console.error('Error handling multi-community application:', error);
-    // Fallback to single property flow — still need to set status so the app is visible
-    try {
-      await createPropertyOwnerForms(applicationId, metadata);
-    } catch (fallbackError) {
-      console.error('Fallback to single property flow also failed:', fallbackError);
-    }
-    // Also attempt per-group form creation in case groups were created before the error
-    try {
-      const { data: existingGroups } = await supabase
-        .from('application_property_groups')
-        .select('id, property_name')
-        .eq('application_id', applicationId);
-      if (existingGroups && existingGroups.length > 0) {
-        await createPropertyOwnerFormsForGroups(applicationId, existingGroups);
-      }
-    } catch (groupFormError) {
-      console.warn(`[MC] Failed to create per-group forms in fallback for application ${applicationId}:`, groupFormError);
-    }
-    // Ensure status is set even on failure so the app doesn't get stuck
-    await supabase
-      .from('applications')
-      .update({ status: 'payment_confirmed', updated_at: new Date().toISOString() })
-      .eq('id', applicationId);
-    await deleteCachePattern('admin:applications:*');
-    console.log(`[MC] Application ${applicationId} status set after error fallback`);
-    // Still attempt to notify all property owners (primary + secondary via linked_properties lookup)
-    try {
-      const { createNotifications } = await import('../notifications/create');
-      await createNotifications(applicationId, supabase);
-    } catch (notifError) {
-      console.warn(`[MC] Failed to create fallback notifications for application ${applicationId}:`, notifError);
-    }
+    console.log(`[Webhook] Enqueued processing job for application ${applicationId} (key=${idempotencyKey}, created=${created})`);
+    kickWorker();
+  } catch (err) {
+    console.error(`[Webhook] enqueueAndKick failed for application ${applicationId}:`, err.message);
   }
 }
 
-// createPropertyOwnerFormsForGroups lives in lib/groupingService.js (idempotent, shared with
-// correct-primary-property.js and handleCorrectionPayment). Imported via require() at call sites.
-
-// ─── Auto-Submit Handler ──────────────────────────────────────────────────────
-// Called after property owner forms are created for single_property and
-// multi_community applications. Transitions status → under_review, sets
-// submitted_at + expected_completion_date, triggers auto-assign, and sends
-// the application submission email.
-//
-// NOT called for lender_questionnaire (upload API handles submission),
-// info_packet, or public_offering (their own handlers above auto-complete them).
-async function autoSubmitApplication(applicationId, supabase) {
+// Best-effort, non-awaited worker kick (near-instant processing; cron is the guarantee).
+function kickWorker() {
   try {
-    const { data: app, error } = await supabase
-      .from('applications')
-      .select('id, submitter_name, submitter_email, property_address, package_type, application_type, total_amount, submitter_type, buyer_name, submitted_at, impersonation_metadata, hoa_properties(name)')
-      .eq('id', applicationId)
-      .single();
-
-    if (error || !app) {
-      console.error(`[AutoSubmit] Could not fetch application ${applicationId}:`, error);
-      return;
-    }
-
-    const daysToAdd = app.package_type === 'rush' ? 5 : 15;
-    const completionDate = new Date(Date.now() + daysToAdd * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-
-    const updatePayload = {
-      status: 'under_review',
-      expected_completion_date: completionDate,
-      updated_at: new Date().toISOString(),
-    };
-    if (!app.submitted_at) {
-      updatePayload.submitted_at = new Date().toISOString();
-    }
-
-    const { error: updateError } = await supabase
-      .from('applications')
-      .update(updatePayload)
-      .eq('id', applicationId);
-
-    if (updateError) {
-      console.error(`[AutoSubmit] Failed to update application ${applicationId}:`, updateError);
-      return;
-    }
-
-    console.log(`[AutoSubmit] Application ${applicationId} auto-submitted → under_review (${daysToAdd}-day deadline: ${completionDate})`);
-
-    try {
-      const assignResult = await autoAssignApplication(applicationId, supabase);
-      if (assignResult?.success) {
-        console.log(`[AutoSubmit] Auto-assigned application ${applicationId} to ${assignResult.assignedTo}`);
-      } else {
-        console.warn(`[AutoSubmit] Auto-assign failed for application ${applicationId}:`, assignResult?.error);
-      }
-    } catch (assignErr) {
-      console.error('[AutoSubmit] Error during auto-assign:', assignErr);
-    }
-
-    // Skip submission email for impersonation sessions where emails are disabled
-    if (app.impersonation_metadata?.send_emails === false) {
-      console.log(`[AutoSubmit] Skipping submission email for impersonated application ${applicationId}`);
-      return;
-    }
-
-    try {
-      const baseUrl = process.env.NEXT_PUBLIC_SITE_URL || `https://${process.env.VERCEL_URL}` || 'http://localhost:3000';
-      const emailRes = await fetch(`${baseUrl}/api/send-email`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(process.env.VERCEL_AUTOMATION_BYPASS_SECRET && {
-            'x-vercel-protection-bypass': process.env.VERCEL_AUTOMATION_BYPASS_SECRET,
-          }),
-        },
-        body: JSON.stringify({
-          emailType: 'application_submission',
-          applicationId: app.id,
-          customerName: app.submitter_name,
-          customerEmail: app.submitter_email,
-          propertyAddress: app.property_address,
-          packageType: app.package_type,
-          totalAmount: app.total_amount,
-          hoaName: app.hoa_properties?.name,
-          submitterType: app.submitter_type,
-          applicationType: app.application_type,
-          buyerName: app.buyer_name,
+    const baseUrl = process.env.NEXT_PUBLIC_SITE_URL || `https://${process.env.VERCEL_URL}` || 'http://localhost:3000';
+    const secret = process.env.INTERNAL_API_SECRET || process.env.CRON_SECRET;
+    if (!secret) return;
+    fetch(`${baseUrl}/api/jobs/run`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${secret}`,
+        ...(process.env.VERCEL_AUTOMATION_BYPASS_SECRET && {
+          'x-vercel-protection-bypass': process.env.VERCEL_AUTOMATION_BYPASS_SECRET,
         }),
-      });
-
-      if (!emailRes.ok) {
-        const errText = await emailRes.text();
-        console.error(`[AutoSubmit] Submission email failed (${emailRes.status}):`, errText);
-      } else {
-        console.log(`[AutoSubmit] Submission email sent for application ${applicationId}`);
-      }
-    } catch (emailErr) {
-      console.error('[AutoSubmit] Error sending submission email:', emailErr);
-      // Don't fail — the application is already under_review
-    }
-  } catch (err) {
-    console.error(`[AutoSubmit] Unexpected error for application ${applicationId}:`, err);
-  }
+      },
+    }).catch(() => {});
+  } catch (_) { /* ignore */ }
 }

@@ -5858,62 +5858,10 @@ export default function GMGResaleFlow() {
           // Continue even if forms creation fails
         }
 
-        // Send confirmation email
-        try {
-          const hoaProperty = (hoaProperties || []).find(
-            (h) => h.id === data.hoa_property_id
-          );
-          
-          const emailResponse = await fetch('/api/send-email', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              emailType: 'application_submission',
-              applicationId: data.id,
-              customerName: data.submitter_name,
-              customerEmail: data.submitter_email,
-              propertyAddress: data.property_address,
-              packageType: data.package_type,
-              totalAmount: data.total_amount,
-              hoaName: hoaProperty?.name || 'Unknown HOA',
-              submitterType: data.submitter_type,
-              applicationType: data.application_type,
-              buyerName: data.buyer_name || '',
-            }),
-          });
-
-          if (!emailResponse.ok) {
-            console.warn('Failed to send confirmation email, but application was submitted successfully');
-          }
-        } catch (emailError) {
-          console.error('Error sending confirmation email:', emailError);
-          // Don't fail the submission if email fails
-        }
-
-        // Create notifications for property owner and staff/admin
-        try {
-          // Creating notifications for application
-          const notificationResponse = await fetch('/api/notifications/create', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ applicationId: data.id }),
-          });
-
-          if (notificationResponse.ok) {
-            const notificationResult = await notificationResponse.json();
-            // Notifications created successfully
-          } else {
-            const errorText = await notificationResponse.text();
-            console.warn(`[Submit] Failed to create notifications:`, errorText);
-          }
-        } catch (notificationError) {
-          console.error('[Submit] Error creating notifications:', notificationError);
-          // Don't fail the submission if notification creation fails
-        }
+        // Submission email and property-owner notifications are handled by the durable
+        // processing job enqueued from the Stripe webhook (auto_submit + notify_owners).
+        // We intentionally do NOT send them here — doing so previously duplicated the
+        // submission email and raced the notifications. Forms above are idempotent.
 
         // Show success snackbar
         setSnackbarData({
