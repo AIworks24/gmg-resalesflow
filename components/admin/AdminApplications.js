@@ -937,10 +937,10 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
         }
       } else {
         const inspectionStatus = group.inspection_status ?? 'not_started';
-        const resaleStatus = group.status === 'completed';
+        const resaleStatus = group.resale_status === 'completed';
         formsCompleted = inspectionStatus === 'completed' && resaleStatus;
-        
-        if (group.status === 'in_progress' || inspectionStatus === 'in_progress' ||
+
+        if (group.resale_status === 'in_progress' || inspectionStatus === 'in_progress' ||
             inspectionStatus === 'completed' || resaleStatus) {
           if (!formsCompleted) formsInProgress++;
         }
@@ -2145,7 +2145,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
       return settlementCompleted && pdfCompleted && emailCompleted;
     }
     const inspectionStatus = group.inspection_status || 'not_started';
-    const resaleStatus = group.status === 'completed';
+    const resaleStatus = group.resale_status === 'completed';
     const pdfStatus = group.pdf_status === 'completed' || !!group.pdf_url;
     const emailStatus = group.email_status === 'completed' || !!group.email_completed_at;
     return (inspectionStatus === 'completed') && resaleStatus && pdfStatus && emailStatus;
@@ -2162,7 +2162,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
       return settlementCompleted && pdfCompleted;
     }
     const inspectionStatus = group.inspection_status || 'not_started';
-    const resaleStatus = group.status === 'completed';
+    const resaleStatus = group.resale_status === 'completed';
     const pdfStatus = group.pdf_status === 'completed' || !!group.pdf_url;
     return (inspectionStatus === 'completed') && resaleStatus && pdfStatus;
   };
@@ -2248,6 +2248,8 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
             status,
             inspection_status,
             inspection_completed_at,
+            resale_status,
+            resale_completed_at,
             pdf_url,
             pdf_status,
             pdf_completed_at,
@@ -2559,7 +2561,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
           hoa_properties(name, property_owner_email, property_owner_name, is_multi_community),
           property_owner_forms(id, form_type, status, completed_at, form_data, response_data, property_group_id),
           notifications(id, notification_type, status, sent_at),
-          application_property_groups(id, property_id, property_name, property_location, property_owner_email, assigned_to, is_primary, status, inspection_status, inspection_completed_at,
+          application_property_groups(id, property_id, property_name, property_location, property_owner_email, assigned_to, is_primary, status, inspection_status, inspection_completed_at, resale_status, resale_completed_at,
             pdf_url, pdf_status, pdf_completed_at, email_status, email_completed_at, updated_at,
             hoa_properties(id, name, location, property_owner_email, property_owner_name, default_assignee_email, settlement_assignee_email)
           )
@@ -2664,11 +2666,11 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
             console.warn('Failed to refresh selected application after inspection form completion:', refreshError);
           }
         } else if (currentFormType === 'resale') {
-          // Per-property: mark the specific group's status as completed
+          // Per-property: mark the specific group's resale certificate as completed
           if (currentGroupId) {
             await supabase
               .from('application_property_groups')
-              .update({ status: 'completed', updated_at: new Date().toISOString() })
+              .update({ resale_status: 'completed', resale_completed_at: new Date().toISOString(), updated_at: new Date().toISOString() })
               .eq('id', currentGroupId);
             await loadPropertyGroups(selectedApplication.id);
           }
@@ -3206,7 +3208,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
     try {
       const { data, error } = await supabase
         .from('application_property_groups')
-        .select('id, property_id, property_name, property_location, property_owner_email, assigned_to, is_primary, status, inspection_status, inspection_completed_at, pdf_status, pdf_url, pdf_completed_at, email_status, email_completed_at, form_data, updated_at, hoa_properties(id, name, location, property_owner_email, property_owner_name, default_assignee_email, settlement_assignee_email)')
+        .select('id, property_id, property_name, property_location, property_owner_email, assigned_to, is_primary, status, inspection_status, inspection_completed_at, resale_status, resale_completed_at, pdf_status, pdf_url, pdf_completed_at, email_status, email_completed_at, form_data, updated_at, hoa_properties(id, name, location, property_owner_email, property_owner_name, default_assignee_email, settlement_assignee_email)')
         .eq('application_id', applicationId)
         .order('is_primary', { ascending: false })
         .order('created_at', { ascending: true });
@@ -5972,7 +5974,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                         const ts = getTaskStatuses(selectedApplication, g);
                         return ts.settlement === 'completed' && (ts.pdf === 'completed' || !!g.pdf_url);
                       }
-                      return (g.inspection_status === 'completed') && g.status === 'completed' && (g.pdf_status === 'completed' || !!g.pdf_url);
+                      return (g.inspection_status === 'completed') && g.resale_status === 'completed' && (g.pdf_status === 'completed' || !!g.pdf_url);
                     });
                     const allMcEmailsSent = propertyGroups.every((g) => g.email_status === 'completed' || !!g.email_completed_at);
                     const latestEmailAt = propertyGroups.reduce((max, g) => {
@@ -6095,10 +6097,9 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                                       } else {
                                           // For standard applications
                                           const inspectionStatus = group.inspection_status || 'not_started';
-                                          // group.status === 'completed' often indicates resale form completion in this context,
-                                          // OR it might be used as the overall status. 
-                                          // To be safe, let's check if all steps are done.
-                                          const resaleStatus = group.status === 'completed'; 
+                                          // Resale certificate completion is tracked on its own column now
+                                          // (previously overloaded onto group.status).
+                                          const resaleStatus = group.resale_status === 'completed';
                                           const pdfStatus = group.pdf_status === 'completed' || !!group.pdf_url;
                                           const emailStatus = group.email_status === 'completed' || !!group.email_completed_at;
                                           
@@ -6218,7 +6219,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                                       } else {
                                           /* ... Standard Tasks UI ... */
                                           const inspectionStatusForGroup = group.inspection_status ?? 'not_started';
-                                          const resaleStatusForGroup = group.status === 'completed' ? 'completed' : 'not_started';
+                                          const resaleStatusForGroup = group.resale_status ?? 'not_started';
                                           
                                           return (
                                              <div className="space-y-4">
@@ -6260,7 +6261,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                                                     title="Virginia Resale Certificate" 
                                                     description={resaleStatusForGroup === 'not_started' ? 'Not Started' : 'Fill out Virginia resale disclosure'}
                                                     status={resaleStatusForGroup}
-                                                    completedAt={resaleStatusForGroup === 'completed' ? group.updated_at : null}
+                                                    completedAt={resaleStatusForGroup === 'completed' ? group.resale_completed_at : null}
                                                     useFormCompletionDateFormat
                                                 >
                                                     <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2">

@@ -110,7 +110,7 @@ export default async function handler(req, res) {
       console.log(`[complete-task] Updating resale for group ${propertyGroupId}`);
       const { error: groupError } = await supabase
         .from('application_property_groups')
-        .update({ status: 'completed', updated_at: now })
+        .update({ resale_status: 'completed', resale_completed_at: now, updated_at: now })
         .eq('id', propertyGroupId);
 
       if (groupError) throw groupError;
@@ -215,7 +215,7 @@ async function fetchFullApplication(supabase, applicationId) {
       hoa_properties(name, property_owner_email, property_owner_name, is_multi_community),
       property_owner_forms(id, form_type, status, completed_at, form_data, response_data, property_group_id),
       notifications(id, notification_type, status, sent_at),
-      application_property_groups(id, property_id, property_name, property_location, property_owner_email, assigned_to, is_primary, status, inspection_status, inspection_completed_at,
+      application_property_groups(id, property_id, property_name, property_location, property_owner_email, assigned_to, is_primary, status, inspection_status, inspection_completed_at, resale_status, resale_completed_at,
         pdf_url, pdf_status, pdf_completed_at, email_status, email_completed_at, updated_at,
         hoa_properties(id, name, location, property_owner_email, property_owner_name, default_assignee_email)
       )

@@ -89,6 +89,8 @@ export default async function handler(req, res) {
           email_completed_at,
           inspection_status,
           inspection_completed_at,
+          resale_status,
+          resale_completed_at,
           form_data,
           hoa_properties(id, name, location, property_owner_email, property_owner_name, default_assignee_email)
         )
@@ -199,7 +201,7 @@ export default async function handler(req, res) {
           formsCompleted = settlementForm?.status === 'completed';
         } else {
           const inspectionStatus = group.inspection_status ?? 'not_started';
-          const resaleStatus = group.status === 'completed';
+          const resaleStatus = group.resale_status === 'completed';
           formsCompleted = inspectionStatus === 'completed' && resaleStatus;
         }
 

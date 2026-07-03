@@ -97,6 +97,7 @@ export default async function handler(req, res) {
           id,
           status,
           inspection_status,
+          resale_status,
           pdf_status,
           pdf_url,
           email_status,
@@ -124,7 +125,7 @@ export default async function handler(req, res) {
           const form = app.property_owner_forms?.find(f => f.form_type === 'settlement_form' && f.property_group_id === group.id);
           formsCompleted = form?.status === 'completed';
         } else {
-          formsCompleted = (group.inspection_status ?? 'not_started') === 'completed' && group.status === 'completed';
+          formsCompleted = (group.inspection_status ?? 'not_started') === 'completed' && group.resale_status === 'completed';
         }
         const pdfCompleted = group.pdf_status === 'completed' || !!group.pdf_url;
         const emailCompleted = group.email_status === 'completed' || !!group.email_completed_at;

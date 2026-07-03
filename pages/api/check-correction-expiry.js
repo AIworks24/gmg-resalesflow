@@ -119,6 +119,7 @@ export default async function handler(req, res) {
               is_primary:           g.is_primary,
               status:               'pending',
               inspection_status:    'not_started',
+              resale_status:        'not_started',
               pdf_status:           'not_started',
               email_status:         'not_started',
             }));

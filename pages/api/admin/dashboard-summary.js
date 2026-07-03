@@ -66,7 +66,9 @@ export default async function handler(req, res) {
           pdf_url,
           email_status,
           email_completed_at,
-          inspection_status
+          inspection_status,
+          resale_status,
+          resale_completed_at
         )
       `)
       .neq('status', 'draft')
@@ -107,7 +109,7 @@ export default async function handler(req, res) {
           formsCompleted = settlementForm?.status === 'completed';
         } else {
           const inspectionStatus = group.inspection_status ?? 'not_started';
-          const resaleStatus = group.status === 'completed';
+          const resaleStatus = group.resale_status === 'completed';
           formsCompleted = inspectionStatus === 'completed' && resaleStatus;
         }
 

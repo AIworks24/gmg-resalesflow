@@ -6511,7 +6511,7 @@ export default function GMGResaleFlow() {
                           } else {
                             // Standard multi-community: check inspection form, resale form, PDF, and email
                             const inspectionStatus = group.inspection_status ?? 'not_started';
-                            const resaleStatus = group.status === 'completed';
+                            const resaleStatus = group.resale_status === 'completed';
                             const formsCompleted = inspectionStatus === 'completed' && resaleStatus;
                             const pdfCompleted = group.pdf_status === 'completed' || !!group.pdf_url;
                             const emailCompleted = group.email_status === 'completed' || !!group.email_completed_at;
