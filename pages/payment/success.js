@@ -279,8 +279,6 @@ export default function PaymentSuccess() {
     );
   }
 
-  const resaleForm = application.property_owner_forms?.find(f => f.form_type === 'resale_certificate');
-  const inspectionForm = application.property_owner_forms?.find(f => f.form_type === 'inspection_form');
   const isInfoPacket = application.application_type === 'info_packet';
   const isPublicOffering = application.application_type === 'public_offering';
   const isStandardResale = !isInfoPacket && !isPublicOffering;
@@ -697,22 +695,6 @@ export default function PaymentSuccess() {
                     <p className="text-sm text-gray-600">
                       We&apos;ll notify you when resale certificate is ready.
                     </p>
-                    {resaleForm && (
-                      <a
-                        href={`/forms/resale-certificate/${resaleForm.access_token}`}
-                        className="inline-block mt-1 text-sm text-green-600 hover:text-green-700 underline"
-                      >
-                        Complete Resale Certificate Form →
-                      </a>
-                    )}
-                    {inspectionForm && (
-                      <a
-                        href={`/forms/inspection/${inspectionForm.access_token}`}
-                        className="inline-block mt-1 text-sm text-green-600 hover:text-green-700 underline ml-4"
-                      >
-                        Complete Inspection Form →
-                      </a>
-                    )}
                   </div>
                 </div>
 
