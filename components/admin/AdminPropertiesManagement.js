@@ -33,7 +33,8 @@ import {
   ArrowUp,
   ArrowDown,
   Filter,
-  Tag
+  Tag,
+  RotateCcw
 } from 'lucide-react';
 import { 
   getLinkedProperties, 
@@ -553,13 +554,18 @@ const AdminPropertiesManagement = () => {
   const [sortOrder, setSortOrder] = useState('asc');
   const [locationFilter, setLocationFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState('active'); // 'active' | 'retired'
   const [showModal, setShowModal] = useState(false);
   const [modalMode, setModalMode] = useState('add'); // 'add' or 'edit'
   const [selectedProperty, setSelectedProperty] = useState(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [propertyToDelete, setPropertyToDelete] = useState(null);
   const [relatedApplicationsCount, setRelatedApplicationsCount] = useState(0);
+  const [inProgressApplicationsCount, setInProgressApplicationsCount] = useState(0);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [showRestoreConfirm, setShowRestoreConfirm] = useState(false);
+  const [propertyToRestore, setPropertyToRestore] = useState(null);
+  const [isRestoring, setIsRestoring] = useState(false);
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
@@ -694,11 +700,11 @@ const AdminPropertiesManagement = () => {
   // Reset to page 1 when filters change
   useEffect(() => {
     setCurrentPage(1);
-  }, [locationFilter, typeFilter, sortOrder]);
+  }, [locationFilter, typeFilter, statusFilter, sortOrder]);
 
   // Build API URL with query parameters
   // Always bypass cache to ensure fresh data for properties
-  const apiUrl = `/api/admin/hoa-properties?page=${currentPage}&pageSize=${pageSize}&search=${encodeURIComponent(debouncedSearchTerm)}&sortField=name&sortOrder=${sortOrder}&locationFilter=${encodeURIComponent(locationFilter)}&typeFilter=${encodeURIComponent(typeFilter)}&bypassCache=true`;
+  const apiUrl = `/api/admin/hoa-properties?page=${currentPage}&pageSize=${pageSize}&search=${encodeURIComponent(debouncedSearchTerm)}&sortField=name&sortOrder=${sortOrder}&locationFilter=${encodeURIComponent(locationFilter)}&typeFilter=${encodeURIComponent(typeFilter)}&statusFilter=${encodeURIComponent(statusFilter)}&bypassCache=true`;
 
   // Fetch properties using SWR
   const { data: swrData, error: swrError, isLoading, mutate } = useSWR(
@@ -1001,7 +1007,7 @@ const AdminPropertiesManagement = () => {
       // Use page 1 and empty search for new properties to ensure they're visible
       const refreshPage = modalMode === 'add' ? 1 : currentPage;
       const refreshSearch = modalMode === 'add' ? '' : debouncedSearchTerm;
-      const refreshUrl = `/api/admin/hoa-properties?page=${refreshPage}&pageSize=${pageSize}&search=${encodeURIComponent(refreshSearch)}&sortField=name&sortOrder=${sortOrder}&locationFilter=${encodeURIComponent(locationFilter)}&typeFilter=${encodeURIComponent(typeFilter)}&bypassCache=true&_t=${Date.now()}`;
+      const refreshUrl = `/api/admin/hoa-properties?page=${refreshPage}&pageSize=${pageSize}&search=${encodeURIComponent(refreshSearch)}&sortField=name&sortOrder=${sortOrder}&locationFilter=${encodeURIComponent(locationFilter)}&typeFilter=${encodeURIComponent(typeFilter)}&statusFilter=${encodeURIComponent(statusFilter)}&bypassCache=true&_t=${Date.now()}`;
       
       try {
         const freshResponse = await fetch(refreshUrl);
@@ -1029,127 +1035,74 @@ const AdminPropertiesManagement = () => {
     }
   };
 
+  // Count the real orders attached to a property, counting each application once whether it is
+  // attached directly (single community) or through a multi-community group. Drafts and unpaid
+  // carts are not orders, so they are excluded the same way /api/admin/applications excludes them.
+  const countRelatedApplications = async (propertyId) => {
+    const [{ data: directApps }, { data: groupRows }] = await Promise.all([
+      supabase
+        .from('applications')
+        .select('id, status')
+        .eq('hoa_property_id', propertyId)
+        .is('deleted_at', null),
+      supabase
+        .from('application_property_groups')
+        .select('application_id')
+        .eq('property_id', propertyId),
+    ]);
+
+    const byId = new Map();
+    (directApps || []).forEach((app) => byId.set(app.id, app.status));
+
+    // Applications reached via a group need their status looked up separately.
+    const groupAppIds = (groupRows || [])
+      .map((row) => row.application_id)
+      .filter((id) => id && !byId.has(id));
+
+    if (groupAppIds.length > 0) {
+      const { data: groupApps } = await supabase
+        .from('applications')
+        .select('id, status')
+        .in('id', groupAppIds)
+        .is('deleted_at', null);
+      (groupApps || []).forEach((app) => byId.set(app.id, app.status));
+    }
+
+    const statuses = Array.from(byId.values()).filter(
+      (status) => status !== 'draft' && status !== 'pending_payment'
+    );
+
+    return {
+      total: statuses.length,
+      inProgress: statuses.filter(
+        (status) => status !== 'completed' && status !== 'rejected'
+      ).length,
+    };
+  };
+
+  const openDeleteConfirm = async (property) => {
+    setPropertyToDelete(property);
+    try {
+      const { total, inProgress } = await countRelatedApplications(property.id);
+      setRelatedApplicationsCount(total);
+      setInProgressApplicationsCount(inProgress);
+    } catch (error) {
+      console.error('Error checking related applications:', error);
+      setRelatedApplicationsCount(0);
+      setInProgressApplicationsCount(0);
+    }
+    setShowDeleteConfirm(true);
+  };
+
   const handleDelete = async () => {
     if (!propertyToDelete || isDeleting) return;
 
     setIsDeleting(true);
     try {
-      // Get all applications that reference this property
-      const { data: directApplications, error: appsError } = await supabase
-        .from('applications')
-        .select('id')
-        .eq('hoa_property_id', propertyToDelete.id);
-
-      if (appsError) {
-        console.error('Error fetching direct applications:', appsError);
-      }
-
-      // Get all property groups that reference this property (for multi-community apps)
-      const { data: propertyGroups, error: groupsError } = await supabase
-        .from('application_property_groups')
-        .select('application_id, id')
-        .eq('property_id', propertyToDelete.id);
-
-      if (groupsError) {
-        console.error('Error fetching property groups:', groupsError);
-      }
-
-      // Collect all unique application IDs that need to be deleted
-      const applicationIdsToDelete = new Set();
-      
-      // Add direct applications
-      if (directApplications) {
-        directApplications.forEach(app => applicationIdsToDelete.add(app.id));
-      }
-
-      // Add applications from property groups
-      if (propertyGroups) {
-        propertyGroups.forEach(group => {
-          if (group.application_id) {
-            applicationIdsToDelete.add(group.application_id);
-          }
-        });
-      }
-
-      // Delete all related applications and their data
-      if (applicationIdsToDelete.size > 0) {
-        const appIdsArray = Array.from(applicationIdsToDelete);
-        
-        // For each application, delete related data first
-        for (const appId of appIdsArray) {
-          // Delete notifications for this application first using API endpoint with service role
-          try {
-            const notificationsResponse = await fetch('/api/admin/delete-application-notifications', {
-              method: 'DELETE',
-              headers: {
-                'Content-Type': 'application/json',
-              },
-              body: JSON.stringify({ applicationId: appId }),
-            });
-
-            if (!notificationsResponse.ok) {
-              const errorData = await notificationsResponse.json();
-              console.error(`Error deleting notifications for application ${appId}:`, errorData);
-              throw new Error(`Failed to delete notifications for application ${appId}: ${errorData.error || 'Unknown error'}`);
-            }
-          } catch (notificationsError) {
-            console.error(`Error deleting notifications for application ${appId}:`, notificationsError);
-            throw notificationsError; // Don't continue if notifications deletion fails
-          }
-
-          // Soft delete property owner forms for this application
-          // Note: We'll keep forms as hard delete since they're child records
-          const { error: formsError } = await supabase
-            .from('property_owner_forms')
-            .delete()
-            .eq('application_id', appId);
-
-          if (formsError) {
-            console.error(`Error deleting forms for application ${appId}:`, formsError);
-            // Continue with deletion even if forms deletion fails
-          }
-
-          // Soft delete application property groups for this application
-          // Note: We'll keep groups as hard delete since they're child records
-          const { error: groupsDeleteError } = await supabase
-            .from('application_property_groups')
-            .delete()
-            .eq('application_id', appId);
-
-          if (groupsDeleteError) {
-            console.error(`Error deleting property groups for application ${appId}:`, groupsDeleteError);
-            // Continue with deletion even if groups deletion fails
-          }
-
-          // Soft delete the application itself (set deleted_at timestamp instead of hard deleting)
-          const { error: appDeleteError } = await supabase
-            .from('applications')
-            .update({ deleted_at: new Date().toISOString() })
-            .eq('id', appId);
-
-          if (appDeleteError) {
-            console.error(`Error deleting application ${appId}:`, appDeleteError);
-            throw new Error(`Failed to delete application ${appId}: ${appDeleteError.message}`);
-          }
-        }
-      }
-
-      // Also soft delete any remaining property groups that reference this property
-      // (in case some weren't caught above)
-      // Note: We'll keep groups as hard delete since they're child records
-      if (propertyGroups && propertyGroups.length > 0) {
-        const { error: remainingGroupsError } = await supabase
-          .from('application_property_groups')
-          .delete()
-          .eq('property_id', propertyToDelete.id);
-
-        if (remainingGroupsError) {
-          console.error('Error deleting remaining property groups:', remainingGroupsError);
-          // Continue with property deletion
-        }
-      }
-
-      // Soft delete the property (set deleted_at timestamp instead of hard deleting)
+      // Removing a property only retires the property row. Existing applications keep their
+      // hoa_property_id and continue to resolve the community name (the row stays readable),
+      // so order history, receipts and revenue reports are untouched. Post-payment processing
+      // looks the property up by id without a deleted_at filter, so in-flight orders still run.
       const { error } = await supabase
         .from('hoa_properties')
         .update({ deleted_at: new Date().toISOString() })
@@ -1157,26 +1110,59 @@ const AdminPropertiesManagement = () => {
 
       if (error) throw error;
 
+      await deleteCachePattern(`admin:hoa_properties:*`);
+
+      const preservedCount = relatedApplicationsCount;
+
       setShowDeleteConfirm(false);
       setPropertyToDelete(null);
       setRelatedApplicationsCount(0);
+      setInProgressApplicationsCount(0);
       setIsDeleting(false);
       mutate();
-      
-      const deletedCount = applicationIdsToDelete.size;
-      if (deletedCount > 0) {
+
+      if (preservedCount > 0) {
         showSnackbar(
-          `Property and ${deletedCount} related application(s) deleted successfully!`,
+          `Property removed. ${preservedCount} existing order(s) were kept and remain accessible.`,
           'success'
         );
       } else {
-        showSnackbar('Property deleted successfully!', 'success');
+        showSnackbar('Property removed successfully!', 'success');
       }
     } catch (error) {
-      console.error('Error deleting property:', error);
-      showSnackbar('Error deleting property: ' + (error.message || 'Unknown error occurred'), 'error');
+      console.error('Error removing property:', error);
+      showSnackbar('Error removing property: ' + (error.message || 'Unknown error occurred'), 'error');
       setIsDeleting(false);
       // Don't close modal on error so user can try again or cancel
+    }
+  };
+
+  const handleRestore = async () => {
+    if (!propertyToRestore || isRestoring) return;
+
+    setIsRestoring(true);
+    try {
+      const { error } = await supabase
+        .from('hoa_properties')
+        .update({ deleted_at: null })
+        .eq('id', propertyToRestore.id);
+
+      if (error) throw error;
+
+      await deleteCachePattern(`admin:hoa_properties:*`);
+
+      const restoredName = propertyToRestore.name;
+
+      setShowRestoreConfirm(false);
+      setPropertyToRestore(null);
+      setIsRestoring(false);
+      mutate();
+
+      showSnackbar(`"${restoredName}" restored and available for new orders again.`, 'success');
+    } catch (error) {
+      console.error('Error restoring property:', error);
+      showSnackbar('Error restoring property: ' + (error.message || 'Unknown error occurred'), 'error');
+      setIsRestoring(false);
     }
   };
 
@@ -1314,7 +1300,7 @@ const AdminPropertiesManagement = () => {
       
       // Force SWR to revalidate by fetching with bypassCache parameter
       // This ensures we have the latest data from the database
-      const refreshUrl = `/api/admin/hoa-properties?page=${currentPage}&pageSize=${pageSize}&search=${encodeURIComponent(debouncedSearchTerm)}&sortField=name&sortOrder=${sortOrder}&locationFilter=${encodeURIComponent(locationFilter)}&typeFilter=${encodeURIComponent(typeFilter)}&bypassCache=true&_t=${Date.now()}`;
+      const refreshUrl = `/api/admin/hoa-properties?page=${currentPage}&pageSize=${pageSize}&search=${encodeURIComponent(debouncedSearchTerm)}&sortField=name&sortOrder=${sortOrder}&locationFilter=${encodeURIComponent(locationFilter)}&typeFilter=${encodeURIComponent(typeFilter)}&statusFilter=${encodeURIComponent(statusFilter)}&bypassCache=true&_t=${Date.now()}`;
       try {
         const freshResponse = await fetch(refreshUrl);
         if (!freshResponse.ok) throw new Error('Failed to refresh');
@@ -1503,7 +1489,7 @@ const AdminPropertiesManagement = () => {
       
       // Force SWR to revalidate by fetching with bypassCache parameter
       // This ensures we have the latest data from the database
-      const refreshUrl = `/api/admin/hoa-properties?page=${currentPage}&pageSize=${pageSize}&search=${encodeURIComponent(debouncedSearchTerm)}&sortField=name&sortOrder=${sortOrder}&locationFilter=${encodeURIComponent(locationFilter)}&typeFilter=${encodeURIComponent(typeFilter)}&bypassCache=true&_t=${Date.now()}`;
+      const refreshUrl = `/api/admin/hoa-properties?page=${currentPage}&pageSize=${pageSize}&search=${encodeURIComponent(debouncedSearchTerm)}&sortField=name&sortOrder=${sortOrder}&locationFilter=${encodeURIComponent(locationFilter)}&typeFilter=${encodeURIComponent(typeFilter)}&statusFilter=${encodeURIComponent(statusFilter)}&bypassCache=true&_t=${Date.now()}`;
       try {
         const freshResponse = await fetch(refreshUrl);
         if (!freshResponse.ok) throw new Error('Failed to refresh');
@@ -1726,9 +1712,23 @@ const AdminPropertiesManagement = () => {
                       <ChevronDown className="h-4 w-4 text-gray-400" />
                     </div>
                   </div>
+
+                  <div className="relative flex-1 sm:flex-none">
+                    <select
+                      value={statusFilter}
+                      onChange={(e) => setStatusFilter(e.target.value)}
+                      className="w-full pl-3 pr-8 py-2.5 bg-white border border-gray-200 rounded-lg text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 appearance-none transition-all"
+                    >
+                      <option value="active">Active</option>
+                      <option value="retired">Retired</option>
+                    </select>
+                    <div className="absolute inset-y-0 right-0 pr-2 flex items-center pointer-events-none">
+                      <ChevronDown className="h-4 w-4 text-gray-400" />
+                    </div>
+                  </div>
                 </div>
               </div>
-              
+
               <button
                 onClick={openAddModal}
                 className="w-full lg:w-auto flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 whitespace-nowrap"
@@ -1856,6 +1856,21 @@ const AdminPropertiesManagement = () => {
                     )}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                    {statusFilter === 'retired' ? (
+                      <div className="flex items-center justify-center">
+                        <button
+                          onClick={() => {
+                            setPropertyToRestore(property);
+                            setShowRestoreConfirm(true);
+                          }}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-green-700 bg-green-50 border border-green-200 rounded-lg hover:bg-green-100 transition-colors"
+                          title="Restore Property"
+                        >
+                          <RotateCcw className="w-4 h-4" />
+                          Restore
+                        </button>
+                      </div>
+                    ) : (
                     <div className="flex items-center justify-center gap-2">
                       <button
                         onClick={() => router.push(`/admin/property-files/${property.id}`)}
@@ -1879,34 +1894,14 @@ const AdminPropertiesManagement = () => {
                         <Edit className="w-4 h-4" />
                       </button>
                       <button
-                        onClick={async () => {
-                          setPropertyToDelete(property);
-                          // Check for related applications before showing confirmation
-                          try {
-                            const { count: applicationCount } = await supabase
-                              .from('applications')
-                              .select('*', { count: 'exact', head: true })
-                              .eq('hoa_property_id', property.id);
-
-                            const { count: groupCount } = await supabase
-                              .from('application_property_groups')
-                              .select('*', { count: 'exact', head: true })
-                              .eq('property_id', property.id);
-
-                            const totalCount = (applicationCount || 0) + (groupCount || 0);
-                            setRelatedApplicationsCount(totalCount);
-                          } catch (error) {
-                            console.error('Error checking related applications:', error);
-                            setRelatedApplicationsCount(0);
-                          }
-                          setShowDeleteConfirm(true);
-                        }}
+                        onClick={() => openDeleteConfirm(property)}
                         className="p-1.5 text-red-600 hover:bg-red-50 hover:shadow-[0_0_8px_rgba(220,38,38,0.4)] rounded-lg transition-all"
-                        title="Delete Property"
+                        title="Remove Property"
                       >
                         <Trash2 className="w-4 h-4" />
                       </button>
                     </div>
+                    )}
                   </td>
                 </tr>
                 ))
@@ -1988,53 +1983,48 @@ const AdminPropertiesManagement = () => {
                 </div>
 
                 <div className="border-t border-gray-100 pt-3 flex items-center justify-between gap-2">
-                  <button
-                    onClick={() => router.push(`/admin/property-files/${property.id}`)}
-                    className="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 text-sm text-green-600 bg-green-50 rounded-lg hover:bg-green-100 transition-colors"
-                  >
-                    <FileText className="w-4 h-4" />
-                    <span className="font-medium">Docs</span>
-                  </button>
-                  <button
-                    onClick={() => openLinkModal(property)}
-                    className="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 text-sm text-purple-600 bg-purple-50 rounded-lg hover:bg-purple-100 transition-colors"
-                  >
-                    <Link className="w-4 h-4" />
-                    <span className="font-medium">Link</span>
-                  </button>
-                  <button
-                    onClick={() => openEditModal(property)}
-                    className="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 text-sm text-blue-600 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors"
-                  >
-                    <Edit className="w-4 h-4" />
-                    <span className="font-medium">Edit</span>
-                  </button>
-                  <button
-                    onClick={async () => {
-                      setPropertyToDelete(property);
-                      try {
-                        const { count: applicationCount } = await supabase
-                          .from('applications')
-                          .select('*', { count: 'exact', head: true })
-                          .eq('hoa_property_id', property.id);
-
-                        const { count: groupCount } = await supabase
-                          .from('application_property_groups')
-                          .select('*', { count: 'exact', head: true })
-                          .eq('property_id', property.id);
-
-                        const totalCount = (applicationCount || 0) + (groupCount || 0);
-                        setRelatedApplicationsCount(totalCount);
-                      } catch (error) {
-                        console.error('Error checking related applications:', error);
-                        setRelatedApplicationsCount(0);
-                      }
-                      setShowDeleteConfirm(true);
-                    }}
-                    className="flex items-center justify-center p-2 text-red-600 bg-red-50 rounded-lg hover:bg-red-100 transition-colors"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
+                  {statusFilter === 'retired' ? (
+                    <button
+                      onClick={() => {
+                        setPropertyToRestore(property);
+                        setShowRestoreConfirm(true);
+                      }}
+                      className="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 text-sm text-green-700 bg-green-50 rounded-lg hover:bg-green-100 transition-colors"
+                    >
+                      <RotateCcw className="w-4 h-4" />
+                      <span className="font-medium">Restore</span>
+                    </button>
+                  ) : (
+                    <>
+                      <button
+                        onClick={() => router.push(`/admin/property-files/${property.id}`)}
+                        className="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 text-sm text-green-600 bg-green-50 rounded-lg hover:bg-green-100 transition-colors"
+                      >
+                        <FileText className="w-4 h-4" />
+                        <span className="font-medium">Docs</span>
+                      </button>
+                      <button
+                        onClick={() => openLinkModal(property)}
+                        className="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 text-sm text-purple-600 bg-purple-50 rounded-lg hover:bg-purple-100 transition-colors"
+                      >
+                        <Link className="w-4 h-4" />
+                        <span className="font-medium">Link</span>
+                      </button>
+                      <button
+                        onClick={() => openEditModal(property)}
+                        className="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 text-sm text-blue-600 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors"
+                      >
+                        <Edit className="w-4 h-4" />
+                        <span className="font-medium">Edit</span>
+                      </button>
+                      <button
+                        onClick={() => openDeleteConfirm(property)}
+                        className="flex items-center justify-center p-2 text-red-600 bg-red-50 rounded-lg hover:bg-red-100 transition-colors"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
             ))
@@ -2804,47 +2794,51 @@ const AdminPropertiesManagement = () => {
           </div>
         )}
 
-        {/* Delete Confirmation Modal */}
+        {/* Remove (retire) Confirmation Modal */}
         {showDeleteConfirm && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
             <div className="bg-white rounded-lg max-w-md w-full p-6">
               <div className="flex items-center gap-3 mb-4">
                 <AlertTriangle className="w-6 h-6 text-red-600" />
-                <h2 className="text-lg font-semibold">Confirm Delete</h2>
+                <h2 className="text-lg font-semibold">Remove Property</h2>
               </div>
               <div className="mb-6">
                 {isDeleting ? (
                   <div className="flex items-center gap-3 py-4">
                     <RefreshCw className="w-5 h-5 text-blue-600 animate-spin" />
-                    <div>
-                      <p className="text-gray-700 font-medium mb-1">
-                        Deleting property and related data...
-                      </p>
-                      <p className="text-sm text-gray-600">
-                        {relatedApplicationsCount > 0 
-                          ? `Removing ${relatedApplicationsCount} application(s) and all associated data. This may take a moment.`
-                          : 'Please wait while we delete the property.'
-                        }
-                      </p>
-                    </div>
+                    <p className="text-gray-700 font-medium">
+                      Removing property...
+                    </p>
                   </div>
                 ) : (
                   <>
                     <p className="text-gray-700 mb-3">
-                      Are you sure you want to delete property <strong>"{propertyToDelete?.name}"</strong>?
+                      Remove <strong>"{propertyToDelete?.name}"</strong> from the app? It will no longer be
+                      selectable for new orders and will disappear from this list.
                     </p>
                     {relatedApplicationsCount > 0 && (
-                      <div className="bg-red-50 border border-red-200 rounded-md p-3 mb-3">
-                        <p className="text-sm text-red-800 font-medium mb-1">
-                          ⚠️ Warning: This will also delete {relatedApplicationsCount} related application(s)
+                      <div className="bg-green-50 border border-green-200 rounded-md p-3 mb-3">
+                        <p className="text-sm text-green-800 font-medium mb-1">
+                          {relatedApplicationsCount} existing order(s) will be kept
                         </p>
-                        <p className="text-xs text-red-700">
-                          All applications, forms, and related data associated with this property will be permanently deleted.
+                        <p className="text-xs text-green-700">
+                          Order history, forms and revenue reporting for this community stay in the system
+                          and remain searchable under Applications.
+                        </p>
+                      </div>
+                    )}
+                    {inProgressApplicationsCount > 0 && (
+                      <div className="bg-amber-50 border border-amber-200 rounded-md p-3 mb-3">
+                        <p className="text-sm text-amber-800">
+                          <span className="font-medium">
+                            {inProgressApplicationsCount} order(s) are still in progress.
+                          </span>{' '}
+                          They will continue to process normally.
                         </p>
                       </div>
                     )}
                     <p className="text-sm text-gray-600">
-                      This action cannot be undone.
+                      You can bring it back later from the <strong>Retired</strong> filter.
                     </p>
                   </>
                 )}
@@ -2852,10 +2846,11 @@ const AdminPropertiesManagement = () => {
               <div className="flex justify-end gap-3">
                 <button
                   onClick={() => {
-                    if (isDeleting) return; // Prevent closing during deletion
+                    if (isDeleting) return; // Prevent closing during removal
                     setShowDeleteConfirm(false);
                     setPropertyToDelete(null);
                     setRelatedApplicationsCount(0);
+                    setInProgressApplicationsCount(0);
                     setIsDeleting(false);
                   }}
                   disabled={isDeleting}
@@ -2871,12 +2866,44 @@ const AdminPropertiesManagement = () => {
                   {isDeleting && (
                     <RefreshCw className="w-4 h-4 animate-spin" />
                   )}
-                  {isDeleting 
-                    ? 'Deleting...' 
-                    : relatedApplicationsCount > 0 
-                      ? `Delete Property & ${relatedApplicationsCount} Application(s)` 
-                      : 'Delete Property'
-                  }
+                  {isDeleting ? 'Removing...' : 'Remove Property'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Restore Confirmation Modal */}
+        {showRestoreConfirm && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+            <div className="bg-white rounded-lg max-w-md w-full p-6">
+              <div className="flex items-center gap-3 mb-4">
+                <RotateCcw className="w-6 h-6 text-green-600" />
+                <h2 className="text-lg font-semibold">Restore Property</h2>
+              </div>
+              <p className="text-gray-700 mb-6">
+                Restore <strong>"{propertyToRestore?.name}"</strong>? It will appear in the properties list
+                again and requesters will be able to select it for new orders.
+              </p>
+              <div className="flex justify-end gap-3">
+                <button
+                  onClick={() => {
+                    if (isRestoring) return;
+                    setShowRestoreConfirm(false);
+                    setPropertyToRestore(null);
+                  }}
+                  disabled={isRestoring}
+                  className="px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleRestore}
+                  disabled={isRestoring}
+                  className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                >
+                  {isRestoring && <RefreshCw className="w-4 h-4 animate-spin" />}
+                  {isRestoring ? 'Restoring...' : 'Restore Property'}
                 </button>
               </div>
             </div>

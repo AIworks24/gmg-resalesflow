@@ -36,11 +36,12 @@ export default async function handler(req, res) {
     const sortOrder = req.query.sortOrder || 'asc';
     const locationFilter = req.query.locationFilter || '';
     const typeFilter = req.query.typeFilter || '';
+    const statusFilter = req.query.statusFilter === 'retired' ? 'retired' : 'active';
     const bypassCache = req.query.bypassCache === 'true'; // Allow bypassing cache
 
     // Try to get from cache first (unless bypass is requested)
     // Cache key includes pagination params and user ID to prevent collisions
-    const cacheKey = `admin:hoa_properties:${user.id}:page:${page}:size:${pageSize}:search:${search}:sort:${sortField}:${sortOrder}:loc:${locationFilter}:type:${typeFilter}`;
+    const cacheKey = `admin:hoa_properties:${user.id}:page:${page}:size:${pageSize}:search:${search}:sort:${sortField}:${sortOrder}:loc:${locationFilter}:type:${typeFilter}:status:${statusFilter}`;
     
     if (!bypassCache) {
       const cachedData = await getCache(cacheKey);
@@ -62,11 +63,14 @@ export default async function handler(req, res) {
     const from = (page - 1) * pageSize;
     const to = from + pageSize - 1;
 
-    // Build query - exclude soft-deleted properties
+    // Build query - retired properties are the soft-deleted ones (deleted_at set)
     let query = supabase
       .from('hoa_properties')
-      .select('*', { count: 'exact' })
-      .is('deleted_at', null); // Only get non-deleted properties
+      .select('*', { count: 'exact' });
+
+    query = statusFilter === 'retired'
+      ? query.not('deleted_at', 'is', null)
+      : query.is('deleted_at', null);
 
     // Apply search filter if provided
     if (search && search.trim()) {
