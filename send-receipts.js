@@ -29,16 +29,24 @@ const toOverride = (args.find(a => a.startsWith('--to=')) || '').replace('--to='
 const idArgs = args.filter(a => !a.startsWith('--')).map(Number).filter(Boolean);
 const APPLICATION_IDS = idArgs.length > 0 ? idArgs : [2242, 2248];
 
-const LIVE_SUPABASE_URL = 'https://dnivljiyahzxpyxjjifi.supabase.co';
-const LIVE_SERVICE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRuaXZsaml5YWh6eHB5eGpqaWZpIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc0ODg4MzMxOCwiZXhwIjoyMDY0NDU5MzE4fQ.lzXIkpyauA6MQxCKBBIP97QrEOkGP5ZaB-MVQvuO2Kc';
-const TEST_SUPABASE_URL = 'https://myfhdzawdvtdsqeatjkn.supabase.co';
-const TEST_SERVICE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15ZmhkemF3ZHZ0ZHNxZWF0amtuIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2NDI0OTI0MiwiZXhwIjoyMDc5ODI1MjQyfQ.OjQah5Aj3yWeT1JO2OdS-8NiBy_8vo5qeJ4oI9li1WM';
+function requireEnv(...names) {
+  for (const name of names) {
+    if (process.env[name]) return process.env[name];
+  }
+  console.error(`Missing required environment variable: ${names.join(' or ')}`);
+  console.error('Set it in .env.local (see .env.local.example).');
+  process.exit(1);
+}
 
-const supabaseUrl = isTest ? TEST_SUPABASE_URL : LIVE_SUPABASE_URL;
-const supabaseKey = isTest ? TEST_SERVICE_KEY : LIVE_SERVICE_KEY;
+const supabaseUrl = isTest
+  ? requireEnv('SUPABASE_URL_TEST')
+  : requireEnv('SUPABASE_URL_LIVE', 'NEXT_PUBLIC_SUPABASE_URL');
+const supabaseKey = isTest
+  ? requireEnv('SUPABASE_SERVICE_ROLE_KEY_TEST')
+  : requireEnv('SUPABASE_SERVICE_ROLE_KEY_LIVE', 'SUPABASE_SERVICE_ROLE_KEY');
 const stripeKey = isTest
-  ? (process.env.STRIPE_SECRET_KEY_TEST || process.env.STRIPE_SECRET_KEY)
-  : (process.env.STRIPE_SECRET_KEY_LIVE || process.env.STRIPE_SECRET_KEY);
+  ? requireEnv('STRIPE_SECRET_KEY_TEST', 'STRIPE_SECRET_KEY')
+  : requireEnv('STRIPE_SECRET_KEY_LIVE', 'STRIPE_SECRET_KEY');
 
 console.log(`Mode:    ${isTest ? 'TEST (test DB + test Stripe)' : 'LIVE (production DB + live Stripe)'}`);
 console.log(`App IDs: ${APPLICATION_IDS.join(', ')}`);
@@ -69,16 +77,16 @@ function buildReceiptHtml({ customerName, propertyAddress, packageType, totalAmo
     if (m) { cardBrand = m[1].toUpperCase(); cardLast4 = m[2]; }
   }
 
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://dnivljiyahzxpyxjjifi.supabase.co';
-  const logoUrl = `${supabaseUrl}/storage/v1/object/public/bucket0/assets/company_logo_white.png`;
+  const assetBaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const logoUrl = `${assetBaseUrl}/storage/v1/object/public/bucket0/assets/company_logo_white.png`;
   const brandColor = '#0f4734';
 
   const iconMap = {
-    VISA: `${supabaseUrl}/storage/v1/object/public/bucket0/assets/card-icons/visa.png`,
-    MASTERCARD: `${supabaseUrl}/storage/v1/object/public/bucket0/assets/card-icons/mastercard.png`,
-    AMEX: `${supabaseUrl}/storage/v1/object/public/bucket0/assets/card-icons/americanexpress.png`,
-    'AMERICAN EXPRESS': `${supabaseUrl}/storage/v1/object/public/bucket0/assets/card-icons/americanexpress.png`,
-    DISCOVER: `${supabaseUrl}/storage/v1/object/public/bucket0/assets/card-icons/discover.png`,
+    VISA: `${assetBaseUrl}/storage/v1/object/public/bucket0/assets/card-icons/visa.png`,
+    MASTERCARD: `${assetBaseUrl}/storage/v1/object/public/bucket0/assets/card-icons/mastercard.png`,
+    AMEX: `${assetBaseUrl}/storage/v1/object/public/bucket0/assets/card-icons/americanexpress.png`,
+    'AMERICAN EXPRESS': `${assetBaseUrl}/storage/v1/object/public/bucket0/assets/card-icons/americanexpress.png`,
+    DISCOVER: `${assetBaseUrl}/storage/v1/object/public/bucket0/assets/card-icons/discover.png`,
   };
 
   function getCardBrandDisplay(brand) {
