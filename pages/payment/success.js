@@ -3,6 +3,7 @@ import { useRouter } from 'next/router';
 import { CheckCircle, FileText, Clock, Mail, Home, Pencil, X, Save, Loader2, Plus, Trash2 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import ImpersonationBanner from '../../components/ImpersonationBanner';
+import LenderQuestionnaireUpload from '../../components/LenderQuestionnaireUpload';
 import posthog from '../../lib/posthog';
 
 const formatPropertyAddress = (address, unitNumber) => {
@@ -72,8 +73,13 @@ export default function PaymentSuccess() {
         total_amount: data.total_amount,
       });
 
-      // For standard resale types, poll until auto-submit completes if needed
-      const isStandardResale = data.application_type !== 'info_packet' && data.application_type !== 'public_offering';
+      // For standard resale types, poll until auto-submit completes if needed.
+      // Lender questionnaires are excluded: they stay at payment_confirmed until the
+      // requester uploads the lender's form, which is what submits them.
+      const isStandardResale =
+        data.application_type !== 'info_packet' &&
+        data.application_type !== 'public_offering' &&
+        data.application_type !== 'lender_questionnaire';
       if (isStandardResale && data.status !== 'under_review') {
         pollAttemptsRef.current = 0;
         setIsPolling(true);
@@ -84,6 +90,32 @@ export default function PaymentSuccess() {
     } finally {
       setLoading(false);
     }
+  };
+
+  // Re-read the row without re-firing the payment_completed event (used after the
+  // lender questionnaire upload flips the application to under_review).
+  const refreshApplication = async (appId) => {
+    const { data, error } = await supabase
+      .from('applications')
+      .select(`
+        *,
+        hoa_properties(name),
+        property_owner_forms(
+          id,
+          form_type,
+          status,
+          access_token,
+          expires_at
+        )
+      `)
+      .eq('id', appId)
+      .single();
+
+    if (error) {
+      console.error('Error refreshing application:', error);
+      return;
+    }
+    setApplication(data);
   };
 
   const loadApplicationById = async (appId) => {
@@ -281,7 +313,11 @@ export default function PaymentSuccess() {
 
   const isInfoPacket = application.application_type === 'info_packet';
   const isPublicOffering = application.application_type === 'public_offering';
-  const isStandardResale = !isInfoPacket && !isPublicOffering;
+  const isLenderQuestionnaire = application.application_type === 'lender_questionnaire';
+  const isStandardResale = !isInfoPacket && !isPublicOffering && !isLenderQuestionnaire;
+  const lqFileUploaded = !!application.lender_questionnaire_file_path;
+  // HOA is never editable — it's rendered as static text and handleSave never sends it.
+  const canEditDetails = isStandardResale || isLenderQuestionnaire;
 
   const buyerEmailList = application.buyer_email
     ? application.buyer_email.split(',').map(e => e.trim()).filter(Boolean)
@@ -304,9 +340,30 @@ export default function PaymentSuccess() {
                 ? 'Your Info Packet (Welcome Package) request has been submitted.'
                 : isPublicOffering
                 ? 'Your Public Offering Statement request has been submitted.'
+                : isLenderQuestionnaire
+                ? lqFileUploaded
+                  ? 'Your lender questionnaire request has been submitted.'
+                  : 'One last step — upload the questionnaire form below to submit your request.'
                 : 'Your resale certificate application has been submitted successfully.'
               }
             </p>
+
+            {/* Lender questionnaire status badge */}
+            {isLenderQuestionnaire && (
+              <div className="mt-3 inline-flex items-center gap-2">
+                {lqFileUploaded ? (
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-sm font-medium bg-green-50 text-green-800 border border-green-200">
+                    <CheckCircle className="w-3.5 h-3.5" />
+                    Application Under Review
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-sm font-medium bg-yellow-50 text-yellow-800 border border-yellow-200">
+                    <Clock className="w-3.5 h-3.5" />
+                    Awaiting Your Questionnaire Form
+                  </span>
+                )}
+              </div>
+            )}
 
             {/* Submission status badge — only for standard resale */}
             {isStandardResale && (
@@ -339,18 +396,50 @@ export default function PaymentSuccess() {
             </div>
           )}
 
-          {/* Application Details — with inline edit for standard resale */}
+          {/* Lender questionnaire: uploading the form is what submits the application */}
+          {isLenderQuestionnaire && !lqFileUploaded && (
+            <LenderQuestionnaireUpload
+              applicationId={application.id}
+              onUploaded={() => refreshApplication(application.id)}
+            />
+          )}
+
+          {isLenderQuestionnaire && lqFileUploaded && (
+            <div className="bg-green-50 border border-green-200 rounded-lg p-5 mb-6">
+              <div className="flex items-start">
+                <div className="bg-green-100 p-2 rounded-full mr-3 flex-shrink-0">
+                  <FileText className="h-5 w-5 text-green-600" />
+                </div>
+                <div>
+                  <h3 className="font-semibold text-green-900 mb-2">We've Received Your Questionnaire</h3>
+                  <p className="text-sm text-green-800 mb-3">
+                    Your lender's questionnaire form has been uploaded and your request is now being
+                    processed. No further action is required.
+                  </p>
+                  <ul className="text-sm text-green-800 space-y-1">
+                    <li>Our staff will complete the form you uploaded.</li>
+                    <li>
+                      You'll receive email updates at {application.submitter_email}, and the completed
+                      form will be delivered electronically.
+                    </li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Application Details — inline edit for standard resale and lender questionnaire */}
           <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-5 mb-6">
             <div className="flex items-center justify-between mb-4">
               <div>
                 <h2 className="text-lg font-semibold text-gray-900">
-                  {isInfoPacket ? 'Info Packet Details' : isPublicOffering ? 'Submission Details' : 'Application Details'}
+                  {isInfoPacket ? 'Info Packet Details' : isPublicOffering ? 'Submission Details' : isLenderQuestionnaire ? 'Request Details' : 'Application Details'}
                 </h2>
                 <p className="text-xs text-gray-400 mt-0.5 font-mono">
                   Application #{application.id}
                 </p>
               </div>
-              {isStandardResale && !isEditing && (
+              {canEditDetails && !isEditing && (
                 <button
                   onClick={handleStartEdit}
                   className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 px-2.5 py-1.5 rounded-lg hover:bg-gray-100 transition-colors"
@@ -359,7 +448,7 @@ export default function PaymentSuccess() {
                   Edit
                 </button>
               )}
-              {isStandardResale && isEditing && (
+              {canEditDetails && isEditing && (
                 <div className="flex items-center gap-2">
                   <button
                     onClick={handleCancelEdit}

@@ -11,7 +11,6 @@ import { useApplicantAuth } from '../providers/ApplicantAuthProvider';
 import useApplicantAuthStore from '../stores/applicantAuthStore';
 import useImpersonationStore from '../stores/impersonationStore';
 import { fetchWithImpersonation } from '../lib/apiWithImpersonation';
-import { isPdf, uploadLqPdfDirect, parseUploadError, LQ_SERVER_UPLOAD_MAX_BYTES } from '../lib/lenderQuestionnaireUpload';
 import ImpersonationBanner from '../components/ImpersonationBanner';
 import useRequireVerifiedEmail from '../hooks/useRequireVerifiedEmail';
 import MultiEmailInput from '../components/common/MultiEmailInput';
@@ -96,6 +95,23 @@ const getForcedPriceSync = (property) => {
 const shouldApplyForcedPrice = (submitterType, publicOffering = false, infoPacket = false) => {
   return submitterType === 'builder' && !publicOffering && !infoPacket;
 };
+
+// A paid lender questionnaire sits at `payment_confirmed` until the requester uploads the
+// lender's form on /payment/success — that upload is what submits it. It must stay resumable
+// until then, otherwise closing the tab strands the application after payment.
+const RESUMABLE_STATUSES = ['draft', 'pending_payment', 'payment_completed', 'payment_confirmed'];
+
+const isResumable = (app) => RESUMABLE_STATUSES.includes(app?.status);
+
+const isPaid = (app) =>
+  !!(app?.payment_completed_at ||
+    app?.payment_status === 'completed' ||
+    app?.status === 'payment_completed' ||
+    app?.status === 'payment_confirmed');
+
+const isLenderQuestionnaireApp = (app) =>
+  app?.application_type === 'lender_questionnaire' ||
+  app?.submitter_type === 'lender_questionnaire';
 
 // Helper function to clean property name (remove "Property" suffix)
 const cleanPropertyName = (name) => {
@@ -1371,12 +1387,13 @@ const PackagePaymentStep = ({
   const handlePayment = async () => {
     // Check if payment is already completed - if so, redirect to next step
     if (isPaymentCompleted && applicationId) {
-      // Payment already completed - redirect to next step
-      const isLenderQuestionnaire = applicationType === 'lender_questionnaire' || 
+      const isLenderQuestionnaire = applicationType === 'lender_questionnaire' ||
                                      formData.submitterType === 'lender_questionnaire';
-      
+
       if (isLenderQuestionnaire) {
-        setCurrentStep(5); // Go to upload step
+        // Paid lender questionnaire: finish on the success page, where the lender's
+        // form is uploaded (there is no review step).
+        window.location.href = `/payment/success?app_id=${applicationId}`;
       } else {
         setCurrentStep(5); // Go to review step
       }
@@ -3614,416 +3631,6 @@ const AuthModal = ({ authMode, setAuthMode, setShowAuthModal, handleAuth, resetP
   );
 };
 
-const LenderQuestionnaireUploadStep = ({ formData, applicationId, setCurrentStep, setSnackbarData, setShowSnackbar, loadApplications }) => {
-  const [selectedFile, setSelectedFile] = React.useState(null);
-  const [isDragging, setIsDragging] = React.useState(false);
-  const [isUploading, setIsUploading] = React.useState(false);
-  const [uploadProgress, setUploadProgress] = React.useState(0);
-  const [isConverting, setIsConverting] = React.useState(false);
-  const [uploadSuccess, setUploadSuccess] = React.useState(false);
-  const [needsConversion, setNeedsConversion] = React.useState(false);
-  const fileInputRef = React.useRef(null);
-  const dropZoneRef = React.useRef(null);
-  
-  // Get user from auth store to check authentication status
-  const { user } = useApplicantAuthStore();
-
-  const handleDragEnter = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragging(true);
-  };
-
-  const handleDragLeave = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragging(false);
-  };
-
-  const handleDragOver = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-  };
-
-  const handleDrop = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragging(false);
-
-    const files = e.dataTransfer.files;
-    if (files && files.length > 0) {
-      handleFileSelect(files[0]);
-    }
-  };
-
-  const handleFileSelect = (file) => {
-    // Validate file type - only PDF, DOC, DOCX for lender questionnaire
-    const allowedTypes = ['.pdf', '.doc', '.docx'];
-    const fileExt = '.' + file.name.split('.').pop().toLowerCase();
-    
-    if (!allowedTypes.includes(fileExt)) {
-      setSnackbarData({
-        message: 'Invalid file type. Please upload PDF, DOC, or DOCX files only.',
-        type: 'error'
-      });
-      setShowSnackbar(true);
-      return;
-    }
-
-    // Validate file size (10MB max)
-    const maxSize = 10 * 1024 * 1024; // 10MB
-    if (file.size > maxSize) {
-      setSnackbarData({
-        message: 'File size exceeds 10MB limit.',
-        type: 'error'
-      });
-      setShowSnackbar(true);
-      return;
-    }
-
-    // Check if file needs conversion (non-PDF files)
-    const needsConversionCheck = fileExt !== '.pdf';
-    setNeedsConversion(needsConversionCheck);
-    setSelectedFile(file);
-    setUploadSuccess(false);
-  };
-
-  const handleFileInputChange = (e) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      handleFileSelect(file);
-    }
-  };
-
-  const handleSubmit = async () => {
-    if (!selectedFile || !applicationId) {
-      setSnackbarData({
-        message: 'Please select a file to upload.',
-        type: 'error'
-      });
-      setShowSnackbar(true);
-      return;
-    }
-
-    setIsUploading(true);
-    setUploadProgress(0);
-    setIsConverting(false);
-    setUploadSuccess(false);
-
-    try {
-      // PDFs upload directly to storage (bypassing the ~4.5MB serverless body
-      // limit); DOC/DOCX still go through the server for conversion to PDF.
-      const willConvert = !isPdf(selectedFile.name);
-
-      // Block large DOC/DOCX up front so the user gets a clear message, not a 413
-      if (willConvert && selectedFile.size > LQ_SERVER_UPLOAD_MAX_BYTES) {
-        throw new Error('Word documents must be under 4MB. Please upload a PDF instead — PDFs of any size are supported.');
-      }
-
-      // Simulate upload progress (faster for PDF, slower for conversion)
-      const progressInterval = setInterval(() => {
-        setUploadProgress(prev => {
-          // If converting, slow down progress to show conversion phase
-          if (willConvert && prev >= 40 && prev < 80) {
-            // Slow progress during conversion phase
-            return prev + 2;
-          }
-          if (prev >= 90) {
-            clearInterval(progressInterval);
-            return prev;
-          }
-          return prev + (willConvert ? 5 : 10);
-        });
-      }, 200);
-
-      // Show converting status when progress reaches conversion phase
-      if (willConvert) {
-        setTimeout(() => {
-          setIsConverting(true);
-        }, 1000);
-      }
-
-      let response;
-      if (willConvert) {
-        // DOC/DOCX: send through the server for conversion to PDF
-        const formData = new FormData();
-        formData.append('file', selectedFile);
-        formData.append('applicationId', applicationId);
-        response = await fetchWithImpersonation('/api/upload-lender-questionnaire', {
-          method: 'POST',
-          body: formData,
-        });
-      } else {
-        // PDF: upload directly to storage, then record the path via JSON
-        const filePath = await uploadLqPdfDirect(supabase, {
-          applicationId,
-          kind: '',
-          file: selectedFile,
-          upsert: false,
-        });
-        response = await fetchWithImpersonation('/api/upload-lender-questionnaire', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ applicationId, filePath }),
-        });
-      }
-
-      clearInterval(progressInterval);
-      setUploadProgress(100);
-      setIsConverting(false);
-
-      if (!response.ok) {
-        throw new Error(await parseUploadError(response));
-      }
-
-      const data = await response.json();
-
-      // Show success indicator
-      setUploadSuccess(true);
-      setIsUploading(false);
-
-      // Show success message
-      const successMessage = data.wasConverted
-        ? 'File uploaded and converted to PDF successfully! Your request has been submitted.'
-        : 'Lender questionnaire uploaded successfully! Your request has been submitted.';
-      
-      setSnackbarData({
-        message: successMessage,
-        type: 'success'
-      });
-      setShowSnackbar(true);
-
-      // Wait a bit to show success indicator before redirecting
-      setTimeout(async () => {
-        try {
-          // Check auth state from the store
-          const authStore = useApplicantAuthStore.getState();
-          
-          // Verify user is still authenticated
-          if (!authStore.user || !authStore.isAuthenticated()) {
-            console.error('User session lost during upload');
-            setSnackbarData({
-              message: 'Upload successful! However, your session expired. Please refresh the page and log in again to view your applications.',
-              type: 'warning'
-            });
-            setShowSnackbar(true);
-            // Don't redirect if not authenticated
-            return;
-          }
-
-          // Try to reload applications - if this fails due to auth, we'll catch it
-          try {
-            await loadApplications();
-          } catch (loadError) {
-            console.error('Error loading applications:', loadError);
-            // If it's an auth error, don't redirect
-            if (loadError.message?.includes('auth') || loadError.message?.includes('session') || loadError.message?.includes('unauthorized') || loadError.message?.includes('401')) {
-              setSnackbarData({
-                message: 'Upload successful! However, your session expired. Please refresh the page and log in again.',
-                type: 'warning'
-              });
-              setShowSnackbar(true);
-              return;
-            }
-            // For other errors, continue - applications might still be loaded from cache
-          }
-          
-          // Final auth check before redirect
-          const finalAuthCheck = useApplicantAuthStore.getState();
-          if (finalAuthCheck.user && finalAuthCheck.isAuthenticated()) {
-            // User is still authenticated, redirect to Review & Submit step (step 6)
-            setCurrentStep(6);
-          } else {
-            console.warn('Auth state lost after loading applications');
-            setSnackbarData({
-              message: 'Upload successful! Please refresh the page to see your updated applications.',
-              type: 'success'
-            });
-            setShowSnackbar(true);
-          }
-        } catch (error) {
-          console.error('Error during post-upload redirect:', error);
-          // Don't redirect on error - user can manually navigate or refresh
-          setSnackbarData({
-            message: 'Upload successful! Please refresh the page to see your updated applications.',
-            type: 'success'
-          });
-          setShowSnackbar(true);
-        }
-      }, 2000); // 2 second delay to show success indicator
-    } catch (error) {
-      console.error('Error uploading lender questionnaire:', error);
-      setIsConverting(false);
-      setUploadSuccess(false);
-      setSnackbarData({
-        message: error.message || 'Failed to upload lender questionnaire. Please try again.',
-        type: 'error'
-      });
-      setShowSnackbar(true);
-    } finally {
-      setIsUploading(false);
-      // Don't reset progress immediately on success - let user see it
-      if (!uploadSuccess) {
-        setUploadProgress(0);
-      }
-    }
-  };
-
-  return (
-    <div className='space-y-6'>
-      <div className='text-center mb-8'>
-        <h3 className='text-2xl font-bold text-green-900 mb-2'>
-          Upload Lender Questionnaire
-        </h3>
-        <p className='text-gray-600'>
-          Please upload your lender's questionnaire form. Our staff will complete it and return it once processed.
-        </p>
-      </div>
-
-      <div className='bg-white p-6 rounded-lg border border-green-200'>
-        <div
-          ref={dropZoneRef}
-          onDragEnter={handleDragEnter}
-          onDragOver={handleDragOver}
-          onDragLeave={handleDragLeave}
-          onDrop={handleDrop}
-          className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors ${
-            isDragging
-              ? 'border-green-500 bg-green-50'
-              : selectedFile
-              ? 'border-green-300 bg-green-50'
-              : 'border-gray-300 hover:border-green-400'
-          }`}
-        >
-          <Upload className='h-12 w-12 mx-auto mb-4 text-gray-400' />
-          {!selectedFile ? (
-            <>
-              <p className='text-lg font-medium text-gray-700 mb-2'>
-                Drag and drop your lender's questionnaire form here
-              </p>
-              <p className='text-sm text-gray-500 mb-4'>
-                or
-              </p>
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                className='px-6 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors'
-              >
-                Browse Files
-              </button>
-              <p className='text-xs text-gray-500 mt-4'>
-                Accepted formats: PDF, DOC, DOCX (Max 10MB)
-              </p>
-            </>
-          ) : (
-            <div className='space-y-4'>
-              <FileText className='h-12 w-12 mx-auto text-green-600' />
-              <p className='text-lg font-medium text-gray-700'>
-                {selectedFile.name}
-              </p>
-              <p className='text-sm text-gray-500'>
-                {(selectedFile.size / 1024 / 1024).toFixed(2)} MB
-              </p>
-              {needsConversion && (
-                <div className='p-3 bg-blue-50 border border-blue-200 rounded-lg'>
-                  <div className='flex items-center gap-2 text-blue-700'>
-                    <InfoIcon className='h-4 w-4' />
-                    <p className='text-sm font-medium'>
-                      This file will be converted to PDF automatically
-                    </p>
-                  </div>
-                </div>
-              )}
-              <button
-                onClick={() => {
-                  setSelectedFile(null);
-                  setNeedsConversion(false);
-                  if (fileInputRef.current) {
-                    fileInputRef.current.value = '';
-                  }
-                }}
-                className='text-sm text-red-600 hover:text-red-700'
-              >
-                Remove File
-              </button>
-            </div>
-          )}
-          <input
-            ref={fileInputRef}
-            type='file'
-            accept='.pdf,.doc,.docx'
-            onChange={handleFileInputChange}
-            className='hidden'
-          />
-        </div>
-
-        {isUploading && (
-          <div className='mt-4 space-y-2'>
-            <div className='w-full bg-gray-200 rounded-full h-2.5'>
-              <div
-                className={`h-2.5 rounded-full transition-all duration-300 ${
-                  isConverting ? 'bg-blue-600' : 'bg-green-600'
-                }`}
-                style={{ width: `${uploadProgress}%` }}
-              ></div>
-            </div>
-            <div className='flex items-center justify-center gap-2'>
-              {isConverting ? (
-                <>
-                  <Clock className='h-4 w-4 text-blue-600 animate-spin' />
-                  <p className='text-sm text-blue-600 font-medium'>
-                    Converting to PDF... {uploadProgress}%
-                  </p>
-                </>
-              ) : (
-                <p className='text-sm text-gray-600'>
-                  Uploading... {uploadProgress}%
-                </p>
-              )}
-            </div>
-          </div>
-        )}
-
-        {uploadSuccess && (
-          <div className='mt-4 p-4 bg-green-50 border border-green-200 rounded-lg'>
-            <div className='flex items-center justify-center gap-2 text-green-700'>
-              <CheckCircle className='h-5 w-5' />
-              <p className='text-sm font-medium'>
-                File uploaded successfully! Redirecting to dashboard...
-              </p>
-            </div>
-          </div>
-        )}
-
-        <button
-          onClick={handleSubmit}
-          disabled={!selectedFile || isUploading || uploadSuccess}
-          className='mt-6 w-full px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed font-medium flex items-center justify-center gap-2'
-        >
-          {uploadSuccess ? (
-            <>
-              <CheckCircle className='h-5 w-5' />
-              Upload Complete
-            </>
-          ) : isUploading ? (
-            <>
-              {isConverting ? (
-                <>
-                  <Clock className='h-5 w-5 animate-spin' />
-                  Converting...
-                </>
-              ) : (
-                'Uploading...'
-              )}
-            </>
-          ) : (
-            'Submit Request'
-          )}
-        </button>
-      </div>
-    </div>
-  );
-};
-
 const ReviewSubmitStep = ({ formData, handleInputChange, stripePrices, applicationId, hoaProperties, handleSubmit, isSubmitting, setSnackbarData, setShowSnackbar, user }) => {
   // Check if user just returned from payment
   const [showPaymentSuccess, setShowPaymentSuccess] = React.useState(false);
@@ -4081,7 +3688,9 @@ const ReviewSubmitStep = ({ formData, handleInputChange, stripePrices, applicati
   // Load multi-community information and pricing
   React.useEffect(() => {
     const loadMultiCommunityInfo = async () => {
-      if (formData.hoaProperty && hoaProperties) {
+      // Lender questionnaires are a flat charge regardless of how many communities the
+      // property spans, so they must never be priced per-property here.
+      if (formData.hoaProperty && hoaProperties && applicationType !== 'lender_questionnaire') {
         const selectedProperty = hoaProperties.find(prop => prop.name === formData.hoaProperty);
         if (selectedProperty && selectedProperty.is_multi_community) {
           try {
@@ -5192,27 +4801,9 @@ export default function GMGResaleFlow() {
     }
 
     if (paymentSuccess === 'true' && sessionId && appId) {
-      // Load the application to check its type
-      loadDraftApplication(appId).then((applicationData) => {
-        if (!applicationData) {
-          console.error('No application data returned from loadDraftApplication');
-          return;
-        }
-
-        const isLenderQuestionnaire =
-          applicationData.application_type === 'lender_questionnaire' ||
-          applicationData.submitter_type === 'lender_questionnaire';
-
-        if (isLenderQuestionnaire) {
-          // Lender questionnaire still needs the upload step
-          setCurrentStep(5);
-        } else {
-          // Standard resale: redirect to the enhanced thank you page
-          window.location.replace(`/payment/success?session_id=${sessionId}`);
-        }
-      }).catch((error) => {
-        console.error('Error in payment success handler:', error);
-      });
+      // Safety net for any checkout session created before every type was pointed at
+      // /payment/success — Stripe no longer sends anyone back here.
+      window.location.replace(`/payment/success?session_id=${sessionId}`);
     }
 
     if (paymentCancelled === 'true' && appId) {
@@ -6072,6 +5663,12 @@ export default function GMGResaleFlow() {
         icon: CheckCircle,
         label: 'Payment Completed',
       },
+      // Where a paid lender questionnaire waits until its form is uploaded.
+      payment_confirmed: {
+        color: 'bg-yellow-100 text-yellow-800',
+        icon: Upload,
+        label: 'Awaiting Your Form',
+      },
       submitted: {
         color: 'bg-blue-100 text-blue-800',
         icon: CheckCircle,
@@ -6649,35 +6246,18 @@ export default function GMGResaleFlow() {
                                 </span>
                                 
                                 <div className='flex items-center gap-2'>
-                                  {(app.status === 'draft' || app.status === 'pending_payment' || app.status === 'payment_completed') && (
+                                  {isResumable(app) && (
                                     <button
                                       onClick={() => {
                                         loadDraftApplication(app.id).then((applicationData) => {
-                                          // Check if payment was completed
-                                          const paymentCompleted = applicationData?.payment_completed_at || 
-                                                                    applicationData?.status === 'payment_completed' ||
-                                                                    applicationData?.payment_status === 'completed';
-                                          
-                                          // Check if this is a lender questionnaire application
-                                          const isLenderQuestionnaire = 
-                                            applicationData?.application_type === 'lender_questionnaire' ||
-                                            applicationData?.submitter_type === 'lender_questionnaire';
-                                          
-                                          if (paymentCompleted) {
-                                            if (isLenderQuestionnaire) {
-                                              // For lender questionnaire: check if file was uploaded
-                                              const hasUploadedFile = !!applicationData?.lender_questionnaire_file_path;
-                                              if (hasUploadedFile) {
-                                                // File uploaded - go to review step (step 6)
-                                                setCurrentStep(6);
-                                              } else {
-                                                // Payment completed but no upload - go to upload step (step 5)
-                                                setCurrentStep(5);
-                                              }
-                                            } else {
-                                              // Non-lender questionnaire: go to review step (step 5)
-                                              setCurrentStep(5);
+                                          if (isPaid(applicationData)) {
+                                            if (isLenderQuestionnaireApp(applicationData)) {
+                                              // Paid lender questionnaire: finish on the success page,
+                                              // where the lender's form is uploaded.
+                                              window.location.href = `/payment/success?app_id=${app.id}`;
+                                              return;
                                             }
+                                            setCurrentStep(5);
                                           } else if (app.status === 'pending_payment') {
                                             // Payment pending - go to payment step
                                             setCurrentStep(4);
@@ -7082,11 +6662,15 @@ export default function GMGResaleFlow() {
 
     const handleResume = (app) => {
       loadDraftApplication(app.id).then((applicationData) => {
-        const paymentCompleted = applicationData?.payment_completed_at ||
-          applicationData?.status === 'payment_completed' ||
-          applicationData?.payment_status === 'completed';
-        if (paymentCompleted) setCurrentStep(5);
-        else if (app.status === 'pending_payment') setCurrentStep(4);
+        if (isPaid(applicationData)) {
+          if (isLenderQuestionnaireApp(applicationData)) {
+            // Paid lender questionnaire: finish on the success page, where the
+            // lender's form is uploaded.
+            window.location.href = `/payment/success?app_id=${app.id}`;
+            return;
+          }
+          setCurrentStep(5);
+        } else if (app.status === 'pending_payment') setCurrentStep(4);
         else setCurrentStep(1);
       });
     };
@@ -7206,7 +6790,7 @@ export default function GMGResaleFlow() {
                   const StatusIcon = statusConfig[app.status]?.icon || Clock;
                   const statusStyle = statusConfig[app.status]?.color || 'bg-gray-100 text-gray-800';
                   const statusLabel = statusConfig[app.status]?.label || app.status;
-                  const canResume = app.status === 'draft' || app.status === 'pending_payment' || app.status === 'payment_completed';
+                  const canResume = isResumable(app);
                   return (
                     <div key={app.id} className='p-4'>
                       <div className='flex flex-col gap-2'>
@@ -7274,7 +6858,7 @@ export default function GMGResaleFlow() {
                       const StatusIcon = statusConfig[app.status]?.icon || Clock;
                       const statusStyle = statusConfig[app.status]?.color || 'bg-gray-100 text-gray-800';
                       const statusLabel = statusConfig[app.status]?.label || app.status;
-                      const canResume = app.status === 'draft' || app.status === 'pending_payment' || app.status === 'payment_completed';
+                      const canResume = isResumable(app);
                       const appType = (app.application_type || app.submitter_type || '—').replace(/_/g, ' ');
                       return (
                         <tr key={app.id} className='hover:bg-gray-50/50 transition-colors'>
@@ -7332,14 +6916,14 @@ export default function GMGResaleFlow() {
 
   // Form Step Components - dynamically adjust based on application type
   const steps = React.useMemo(() => {
+    // Lender questionnaire ends at payment; the lender's form is uploaded on
+    // /payment/success, which is also what submits the application.
     if (applicationType === 'lender_questionnaire') {
       return [
         { number: 1, title: 'HOA Selection', icon: Building2 },
         { number: 2, title: 'Submitter Info', icon: User },
         { number: 3, title: 'Transaction Details', icon: Users },
         { number: 4, title: 'Package & Payment', icon: CreditCard },
-        { number: 5, title: 'Upload Lender Form', icon: Upload },
-        { number: 6, title: 'Review & Submit', icon: CheckCircle },
       ];
     }
     if (applicationType === 'info_packet' || applicationType === 'public_offering') {
@@ -7411,44 +6995,8 @@ export default function GMGResaleFlow() {
           />
         );
       case 5:
-        // For lender questionnaire: Upload step comes before Review
-        // Check if this is a lender questionnaire application
-        const isLenderQuestionnaire = applicationType === 'lender_questionnaire' || 
-                                       formData.submitterType === 'lender_questionnaire';
-        
-        if (isLenderQuestionnaire) {
-          // Lender Questionnaire Upload Step
-          return (
-            <LenderQuestionnaireUploadStep
-              formData={formData}
-              applicationId={applicationId}
-              setCurrentStep={setCurrentStep}
-              setSnackbarData={setSnackbarData}
-              setShowSnackbar={setShowSnackbar}
-              loadApplications={loadApplications}
-            />
-          );
-        } else {
-          // Review & Submit Step (for non-lender questionnaire)
-          return (
-            <ReviewSubmitStep
-              formData={formData}
-              handleInputChange={handleInputChange}
-              stripePrices={stripePrices}
-              applicationId={applicationId}
-              hoaProperties={hoaProperties}
-              handleSubmit={handleSubmit}
-              isSubmitting={isSubmitting}
-              setSnackbarData={setSnackbarData}
-              setShowSnackbar={setShowSnackbar}
-              user={user}
-            />
-          );
-        }
-      case 6:
-        // Review & Submit Step (always the last step)
-        // For lender questionnaire, this comes after upload
-        // For other types, this is step 5 (handled above)
+        // Review & Submit — the last step. Lender questionnaires end at payment (step 4)
+        // and finish on /payment/success, where the form is uploaded.
         return (
           <ReviewSubmitStep
             formData={formData}
@@ -7839,20 +7387,12 @@ export default function GMGResaleFlow() {
         <div className='fixed bottom-0 left-0 right-0 md:relative md:bottom-auto md:left-auto md:right-auto bg-white border-t border-gray-200 md:border-0 md:bg-transparent shadow-lg md:shadow-none z-40 md:z-auto'>
           <div className='max-w-5xl mx-auto px-3 sm:px-4 lg:px-8 py-3 md:py-0'>
             <div className='flex justify-between gap-3 md:mb-12'>
-              {/* Show Previous button for all steps except step 1, step 5 (Upload for lender questionnaire), and step 6 (Review) */}
-              {currentStep !== 1 && currentStep !== 5 && currentStep !== 6 ? (
+              {/* Show Previous button for all steps except step 1 and step 5 (Review) */}
+              {currentStep !== 1 && currentStep !== 5 ? (
                 <button
                   onClick={prevStep}
                   disabled={currentStep === 1}
                   className='flex-1 md:flex-initial px-4 sm:px-6 py-3 border border-gray-300 rounded-lg text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2 text-sm sm:text-base font-medium'
-                >
-                  Previous
-                </button>
-              ) : currentStep === 6 ? (
-                // For step 6 (Review), show Previous button to go back to step 5 (Upload for lender questionnaire)
-                <button
-                  onClick={prevStep}
-                  className='flex-1 md:flex-initial px-4 sm:px-6 py-3 border border-gray-300 rounded-lg text-gray-700 bg-white hover:bg-gray-50 transition-colors flex items-center justify-center gap-2 text-sm sm:text-base font-medium'
                 >
                   Previous
                 </button>

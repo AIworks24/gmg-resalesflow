@@ -730,9 +730,7 @@ export default async function handler(req, res) {
       // Disable Stripe promo codes when a per-user override is already applied to prevent double-discounting.
       // Allow promo codes for all other flows (property force price or catalog pricing).
       allow_promotion_codes: !hasUserOverride,
-      success_url: applicationType === 'lender_questionnaire'
-        ? `${req.headers.origin}/?payment_success=true&session_id={CHECKOUT_SESSION_ID}&app_id=${applicationId}${testParam}`
-        : `${req.headers.origin}/payment/success?session_id={CHECKOUT_SESSION_ID}`,
+      success_url: `${req.headers.origin}/payment/success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${req.headers.origin}/?payment_cancelled=true&app_id=${applicationId}${testParam}`,
       metadata: {
         applicationId: applicationId,
@@ -796,7 +794,6 @@ export default async function handler(req, res) {
       }
     }
     
-    // Create checkout session - redirect back to application flow instead of success page
     const session = await stripe.checkout.sessions.create(sessionData);
 
     const applicationUpdate = {
