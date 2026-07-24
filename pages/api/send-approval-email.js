@@ -44,7 +44,7 @@ export default async function handler(req, res) {
         `
         *,
         hoa_properties(name, property_owner_email, property_owner_name),
-        property_owner_forms(id, form_type, status, completed_at, form_data, response_data)
+        property_owner_forms(id, form_type, property_group_id, status, completed_at, form_data, response_data)
       `
       )
       .eq('id', applicationId)
@@ -117,11 +117,18 @@ export default async function handler(req, res) {
     }
     
     // Add the inspection form as a separate document
-    const inspectionForm = application.property_owner_forms?.find(f => f.form_type === 'inspection_form');
+    // Multi-community: each property group has its own inspection form. Selecting without
+    // filtering by property_group_id hands every property the same (wrong) inspection.
+    const inspectionForm = application.property_owner_forms?.find(f =>
+      f.form_type === 'inspection_form' &&
+      (isPropertySpecific ? f.property_group_id === propertyGroupId : true)
+    );
     if (inspectionForm && inspectionForm.response_data) {
       try {
         console.log('Creating inspection form PDF');
-        const filename = `Property_Inspection_Form_${application.property_address.replace(/[^a-zA-Z0-9]/g, '_')}.pdf`;
+        const filename = isPropertySpecific && propertyName
+          ? `Property_Inspection_Form_${propertyName.replace(/[^a-zA-Z0-9]/g, '_')}.pdf`
+          : `Property_Inspection_Form_${application.property_address.replace(/[^a-zA-Z0-9]/g, '_')}.pdf`;
         
         // Use dedicated React PDF component for inspection form
         const formData = inspectionForm.response_data;
@@ -148,7 +155,7 @@ export default async function handler(req, res) {
         
         const pdfElement = React.createElement(InspectionFormPdfDocument, {
           propertyAddress: application.property_address,
-          hoaName: application.hoa_properties.name,
+          hoaName: (isPropertySpecific && propertyName) || application.hoa_properties.name,
           generatedDate: null, // Let component format with timezone
           formStatus: inspectionForm.status,
           completedAt: inspectionForm.completed_at,
@@ -164,8 +171,11 @@ export default async function handler(req, res) {
         }
         const pdfBuffer = Buffer.concat(chunks);
         
-        // Upload to Supabase storage
-        const storagePath = `inspection-forms/${applicationId}/inspection-form-${applicationId}.pdf`;
+        // Upload to Supabase storage.
+        // Per-group path: a single shared path lets each property's email overwrite the last.
+        const storagePath = isPropertySpecific
+          ? `inspection-forms/${applicationId}/inspection-form-${applicationId}-${propertyGroupId}.pdf`
+          : `inspection-forms/${applicationId}/inspection-form-${applicationId}.pdf`;
         const { data: uploadData, error: uploadError } = await supabase.storage
           .from('bucket0')
           .upload(storagePath, pdfBuffer, {

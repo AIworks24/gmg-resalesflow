@@ -41,7 +41,7 @@ export default async function handler(req, res) {
       .from('applications')
       .select(
         `*, hoa_properties(name, property_owner_email, property_owner_name),
-        property_owner_forms(id, form_type, status, completed_at, form_data, response_data),
+        property_owner_forms(id, form_type, property_group_id, status, completed_at, form_data, response_data),
         application_property_groups(*)`
       )
       .eq('id', applicationId)
@@ -128,7 +128,8 @@ export default async function handler(req, res) {
           group.property_id || application.hoa_property_id,
           true,
           group.property_name,
-          EXPIRY_30_DAYS
+          EXPIRY_30_DAYS,
+          group.id
         );
 
         const buyerEmails = parseBuyerEmails(application.buyer_email);
@@ -236,7 +237,8 @@ async function buildDownloadLinks(
   propertyIdForDocs,
   isPropertySpecific,
   propertyName,
-  EXPIRY_30_DAYS
+  EXPIRY_30_DAYS,
+  propertyGroupId = null
 ) {
   const downloadLinks = [];
 
@@ -263,12 +265,17 @@ async function buildDownloadLinks(
   }
 
   // 2. Inspection form PDF (regenerate from stored form data)
-  const inspectionForm = application.property_owner_forms?.find(
-    (f) => f.form_type === 'inspection_form'
+  // Multi-community: each property group has its own inspection form. Selecting without
+  // filtering by property_group_id hands every property the same (wrong) inspection.
+  const inspectionForm = application.property_owner_forms?.find((f) =>
+    f.form_type === 'inspection_form' &&
+    (propertyGroupId ? f.property_group_id === propertyGroupId : true)
   );
   if (inspectionForm && inspectionForm.response_data) {
     try {
-      const filename = `Property_Inspection_Form_${application.property_address.replace(/[^a-zA-Z0-9]/g, '_')}.pdf`;
+      const filename = isPropertySpecific && propertyName
+        ? `Property_Inspection_Form_${propertyName.replace(/[^a-zA-Z0-9]/g, '_')}.pdf`
+        : `Property_Inspection_Form_${application.property_address.replace(/[^a-zA-Z0-9]/g, '_')}.pdf`;
       const formData = inspectionForm.response_data;
 
       const React = await import('react');
@@ -293,7 +300,7 @@ async function buildDownloadLinks(
       const userTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
       const pdfElement = React.createElement(InspectionFormPdfDocument, {
         propertyAddress: application.property_address,
-        hoaName: application.hoa_properties.name,
+        hoaName: (isPropertySpecific && propertyName) || application.hoa_properties.name,
         generatedDate: null,
         formStatus: inspectionForm.status,
         completedAt: inspectionForm.completed_at,
@@ -307,7 +314,10 @@ async function buildDownloadLinks(
       for await (const chunk of stream) chunks.push(chunk);
       const pdfBuffer = Buffer.concat(chunks);
 
-      const storagePath = `inspection-forms/${applicationId}/inspection-form-${applicationId}.pdf`;
+      // Per-group path: a single shared path lets each property's email overwrite the last.
+      const storagePath = propertyGroupId
+        ? `inspection-forms/${applicationId}/inspection-form-${applicationId}-${propertyGroupId}.pdf`
+        : `inspection-forms/${applicationId}/inspection-form-${applicationId}.pdf`;
       const { error: uploadError } = await supabase.storage
         .from('bucket0')
         .upload(storagePath, pdfBuffer, { contentType: 'application/pdf', upsert: true });
