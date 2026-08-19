@@ -281,6 +281,27 @@ const calculateTotalDatabase = async (formData, hoaProperties, applicationType, 
       return total;
     }
 
+    // Public Offering builder pricing — MC properties pay per community, single properties pay flat $200.
+    if (formData.submitterType === 'builder' && formData.publicOffering) {
+      if (formData.hoaProperty && hoaProperties) {
+        const selectedProperty = hoaProperties.find(prop => prop.name === formData.hoaProperty);
+        if (selectedProperty?.is_multi_community) {
+          const { calculateMultiCommunityPricing } = await import('../lib/multiCommunityUtils');
+          const mcPricing = await calculateMultiCommunityPricing(
+            selectedProperty.id, formData.packageType, 'public_offering',
+            null, 'builder', true
+          );
+          // Consistent with regular MC: DB total_amount excludes CC fees (non-refundable, charged per-association by Stripe)
+          return mcPricing.total;
+        }
+      }
+      // Single-property POS
+      let total = 200.0;
+      if (formData.packageType === 'rush') total += 70.66;
+      if (formData.paymentMethod === 'credit_card' && total > 0) total += 9.95;
+      return Math.round(total * 100) / 100;
+    }
+
     // Check for multi-community pricing (skip for lender_questionnaire)
     if (formData.hoaProperty && hoaProperties) {
       const selectedProperty = hoaProperties.find(prop => prop.name === formData.hoaProperty);

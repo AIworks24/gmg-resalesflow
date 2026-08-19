@@ -116,55 +116,60 @@ export default async function handler(req, res) {
     }
 
     // Public Offering Statement special handling
+    // MC properties: one line item per community at $200 each (mirrors info_packet MC logic)
+    // Single properties: single $200 line item
     if (formData?.submitterType === 'builder' && formData?.publicOffering) {
-      const basePrice = 200.0;
       const rushFee = packageType === 'rush' ? 70.66 : 0;
-      const totalAmount = basePrice + rushFee + (paymentMethod === 'credit_card' ? 9.95 : 0);
-      const basePriceCents = Math.round(basePrice * 100);
       const rushFeeCents = Math.round(rushFee * 100);
       const creditCardFeeCents = paymentMethod === 'credit_card' ? 995 : 0;
+      const TRANSFER_THRESHOLD_CENTS = 20000;
+      const TRANSFER_AMOUNT_PER_ITEM_CENTS = 2100;
 
+      const posProperties = (isMultiCommunity && allProperties.length > 1) ? allProperties : [allProperties[0]];
       const lineItems = [];
-      lineItems.push({
-        price_data: {
-          currency: 'usd',
-          product_data: {
-            name: 'Public Offering Statement',
-            description: 'Document request only',
-          },
-          unit_amount: basePriceCents,
-        },
-        quantity: 1,
-      });
-      if (rushFeeCents > 0) {
+      let totalCents = 0;
+      let propertyItemCount = 0;
+
+      for (const prop of posProperties) {
+        const propName = prop.name || prop.property_name || 'Community';
+        const label = posProperties.length > 1 ? `Public Offering Statement — ${propName}` : 'Public Offering Statement';
         lineItems.push({
           price_data: {
             currency: 'usd',
-            product_data: {
-              name: 'Rush Processing',
-              description: '5 business days',
+            product_data: { name: label, description: 'Document request only' },
+            unit_amount: 20000, // $200 per community
+          },
+          quantity: 1,
+        });
+        totalCents += 20000;
+        propertyItemCount++;
+
+        if (rushFeeCents > 0) {
+          lineItems.push({
+            price_data: {
+              currency: 'usd',
+              product_data: { name: 'Rush Processing', description: '5 business days' },
+              unit_amount: rushFeeCents,
             },
-            unit_amount: rushFeeCents,
-          },
-          quantity: 1,
-        });
-      }
-      if (creditCardFeeCents > 0) {
-        lineItems.push({
-          price_data: {
-            currency: 'usd',
-            product_data: { name: 'Credit Card Processing Fee', description: 'Non-refundable processing fee for credit card payments' },
-            unit_amount: creditCardFeeCents,
-          },
-          quantity: 1,
-        });
+            quantity: 1,
+          });
+          totalCents += rushFeeCents;
+        }
+
+        if (creditCardFeeCents > 0) {
+          lineItems.push({
+            price_data: {
+              currency: 'usd',
+              product_data: { name: 'Credit Card Processing Fee', description: 'Non-refundable processing fee for credit card payments' },
+              unit_amount: creditCardFeeCents,
+            },
+            quantity: 1,
+          });
+          totalCents += creditCardFeeCents;
+        }
       }
 
-      // Calculate total amount in cents for public offering
-      const publicOfferingTotalCents = basePriceCents + rushFeeCents + creditCardFeeCents;
-      
-      // Prepare checkout session data for public offering
-      const publicOfferingSessionData = {
+      const posSessionData = {
         payment_method_types: ['card'],
         line_items: lineItems,
         mode: 'payment',
@@ -173,9 +178,10 @@ export default async function handler(req, res) {
         cancel_url: `${req.headers.origin}/?payment_cancelled=true&app_id=${applicationId}`,
         metadata: {
           applicationId: applicationId,
-          packageType: 'standard',
+          packageType: packageType,
           paymentMethod: paymentMethod,
           specialRequest: 'public_offering',
+          isMultiCommunity: posProperties.length > 1 ? 'true' : 'false',
           customerName: formData.submitterName || '',
           customerEmail: formData.submitterEmail || '',
         },
@@ -183,42 +189,29 @@ export default async function handler(req, res) {
         billing_address_collection: 'required',
       };
 
-      // Set payment_intent_data metadata so the webhook can identify the application
-      // directly from paymentIntent.metadata without needing a session fallback lookup.
-      publicOfferingSessionData.payment_intent_data = {
+      posSessionData.payment_intent_data = {
         metadata: {
           applicationId: applicationId,
           specialRequest: 'public_offering',
+          isMultiCommunity: posProperties.length > 1 ? 'true' : 'false',
           customerName: formData.submitterName || '',
         },
       };
 
-      // Add Stripe Connect transfer for transactions >= $200
-      // Public offering is always a single property item, so $21 per item = $21 total
-      const TRANSFER_THRESHOLD_CENTS = 20000; // $200.00
-      const TRANSFER_AMOUNT_PER_ITEM_CENTS = 2100; // $21.00 per property item
-      const publicOfferingPropertyItemCount = 1; // Public offering is always 1 property item
-      const totalTransferAmountCents = TRANSFER_AMOUNT_PER_ITEM_CENTS * publicOfferingPropertyItemCount;
-
-      if (publicOfferingTotalCents >= TRANSFER_THRESHOLD_CENTS) {
+      if (totalCents >= TRANSFER_THRESHOLD_CENTS) {
         const connectedAccountId = getConnectedAccountId(finalTestMode);
-
         if (connectedAccountId) {
-          publicOfferingSessionData.payment_intent_data.transfer_data = {
+          const totalTransferCents = TRANSFER_AMOUNT_PER_ITEM_CENTS * propertyItemCount;
+          posSessionData.payment_intent_data.transfer_data = {
             destination: connectedAccountId,
-            amount: totalTransferAmountCents, // $21 × 1 property item to connected account
+            amount: totalTransferCents,
           };
-
-          console.log(`[Stripe Connect] Public Offering - Transfer enabled: $${(totalTransferAmountCents / 100).toFixed(2)} ($${(TRANSFER_AMOUNT_PER_ITEM_CENTS / 100).toFixed(2)} × ${publicOfferingPropertyItemCount} property item) to connected account ${connectedAccountId}`);
-          console.log(`[Stripe Connect] Public Offering - Total amount: $${(publicOfferingTotalCents / 100).toFixed(2)}, Platform keeps: $${((publicOfferingTotalCents - totalTransferAmountCents) / 100).toFixed(2)}`);
-        } else {
-          console.warn(`[Stripe Connect] Public Offering - Transfer threshold met, but connected account ID not configured`);
+          console.log(`[Stripe Connect] Public Offering${posProperties.length > 1 ? ' MC' : ''} - Transfer: $${(totalTransferCents / 100).toFixed(2)} ($21 × ${propertyItemCount}) to ${connectedAccountId}`);
         }
       }
 
-      const session = await stripe.checkout.sessions.create(publicOfferingSessionData);
+      const session = await stripe.checkout.sessions.create(posSessionData);
 
-      // Update the application with the session ID
       const { createClient } = await import('@supabase/supabase-js');
       const supabase = createClient(
         process.env.NEXT_PUBLIC_SUPABASE_URL,

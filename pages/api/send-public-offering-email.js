@@ -80,7 +80,7 @@ export default async function handler(req, res) {
     .select(`
       id, submitter_email, submitter_name, property_address, hoa_property_id,
       application_type, buyer_email, notes, email_completed_at,
-      hoa_properties(id, name)
+      hoa_properties(id, name, is_multi_community)
     `)
     .eq('id', applicationId)
     .single();
@@ -91,9 +91,25 @@ export default async function handler(req, res) {
   }
 
   const EXPIRY_30_DAYS = 30 * 24 * 60 * 60;
-  const propertyId = application.hoa_property_id;
+  const primaryPropertyId = application.hoa_property_id;
   const hoaName = application.hoa_properties?.name;
-  const downloadLinks = await buildPublicOfferingLinks(supabase, propertyId, EXPIRY_30_DAYS);
+
+  // For MC properties, fetch and deliver docs from all linked communities
+  let allPropertyIds = [primaryPropertyId];
+  if (application.hoa_properties?.is_multi_community) {
+    try {
+      const { getAllPropertiesForTransaction } = await import('../../lib/multiCommunityUtils');
+      const allProps = await getAllPropertiesForTransaction(primaryPropertyId, supabase);
+      allPropertyIds = allProps.map(p => p.linked_property_id || p.id).filter(Boolean);
+      if (allPropertyIds.length === 0) allPropertyIds = [primaryPropertyId];
+    } catch (err) {
+      console.error('[send-public-offering-email] Failed to fetch linked properties:', err);
+    }
+  }
+
+  const downloadLinks = (
+    await Promise.all(allPropertyIds.map(id => buildPublicOfferingLinks(supabase, id, EXPIRY_30_DAYS)))
+  ).flat();
 
   const addressLine = application.property_address
     ? `for <strong>${application.property_address}</strong> in <strong>${hoaName}</strong>`
