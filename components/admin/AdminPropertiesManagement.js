@@ -643,6 +643,7 @@ const AdminPropertiesManagement = () => {
     special_requirements: '',
     is_multi_community: false,
     allow_public_offering: false,
+    pos_notice: '',
     allow_info_packet: false,
     info_packet_price: null,
     info_packet_allowed_domains: [],
@@ -755,6 +756,7 @@ const AdminPropertiesManagement = () => {
       special_requirements: '',
       is_multi_community: false,
       allow_public_offering: false,
+      pos_notice: '',
       allow_info_packet: false,
       info_packet_price: null,
       force_price_enabled: false,
@@ -838,6 +840,7 @@ const AdminPropertiesManagement = () => {
       special_requirements: property.special_requirements || '',
       is_multi_community: actuallyMultiCommunity,
       allow_public_offering: property.allow_public_offering || false,
+      pos_notice: property.pos_notice || '',
       allow_info_packet: property.allow_info_packet || false,
       info_packet_price: property.info_packet_price ?? null,
       info_packet_allowed_domains: property.info_packet_allowed_domains || [],
@@ -897,6 +900,7 @@ const AdminPropertiesManagement = () => {
             // For new properties, default to false (will be set to true when properties are linked)
             is_multi_community: linkedProperties.length > 0,
             allow_public_offering: formData.allow_public_offering || false,
+            pos_notice: formData.allow_public_offering ? (formData.pos_notice || null) : null,
             allow_info_packet: formData.allow_info_packet || false,
             info_packet_price: formData.allow_info_packet ? (formData.info_packet_price || null) : null,
             info_packet_allowed_domains: formData.allow_info_packet ? (formData.info_packet_allowed_domains || []) : [],
@@ -936,6 +940,7 @@ const AdminPropertiesManagement = () => {
             // For new properties, default to false (will be set to true when properties are linked)
             is_multi_community: linkedProperties.length > 0,
             allow_public_offering: formData.allow_public_offering || false,
+            pos_notice: formData.allow_public_offering ? (formData.pos_notice || null) : null,
             allow_info_packet: formData.allow_info_packet || false,
             info_packet_price: formData.allow_info_packet ? (formData.info_packet_price || null) : null,
             info_packet_allowed_domains: formData.allow_info_packet ? (formData.info_packet_allowed_domains || []) : [],
@@ -2340,6 +2345,21 @@ const AdminPropertiesManagement = () => {
                           </p>
                         </div>
                       </div>
+                    </div>
+                  )}
+                  {formData.allow_public_offering && (
+                    <div className="mt-3">
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Custom Notice for Builders <span className="text-gray-400 font-normal">(optional)</span>
+                      </label>
+                      <textarea
+                        rows={3}
+                        className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent"
+                        placeholder="e.g. Attention Builders: you will receive TWO documents — one per association (Reids Place Building and Reids Place Land). Total will be $400 plus credit card fees at checkout."
+                        value={formData.pos_notice || ''}
+                        onChange={(e) => setFormData({ ...formData, pos_notice: e.target.value })}
+                      />
+                      <p className="text-xs text-gray-500 mt-1">Shown to builders on the POS checkbox in the order form. Leave blank to use the default message.</p>
                     </div>
                   )}
                 </div>

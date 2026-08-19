@@ -911,7 +911,7 @@ const SubmitterInfoStep = React.memo(({ formData, handleInputChange, hoaProperti
               />
               <div className='min-w-0'>
                 <div className='text-sm sm:text-base font-medium text-amber-900'>Request Public Offering Statement</div>
-                <div className='text-xs sm:text-sm text-amber-800 mt-1'>This special request skips other forms and goes straight to payment. Fixed fee: $200.</div>
+                <div className='text-xs sm:text-sm text-amber-800 mt-1'>{selectedProperty?.pos_notice || 'This special request skips other forms and goes straight to payment. Fixed fee: $200.'}</div>
               </div>
             </label>
           </div>
