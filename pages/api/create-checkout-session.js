@@ -453,13 +453,21 @@ export default async function handler(req, res) {
     // Handle free transactions (e.g., Virginia settlement agents with standard processing)
     if (totalAmount === 0) {
       // Update application as completed without payment
+      const freeApplicationUpdate = {
+        payment_status: 'not_required',
+        status: 'under_review',
+        submitted_at: new Date().toISOString()
+      };
+      // Free applications never touch Stripe, so there is no cs_test_ session id to infer
+      // test mode from later. Mark impersonated ones so admin corrections (restructure,
+      // rush upgrade) create their checkout sessions against test Stripe, not live.
+      if (identity.isImpersonating) {
+        freeApplicationUpdate.is_test_transaction = true;
+      }
+
       const { error: updateError } = await supabase
         .from('applications')
-        .update({ 
-          payment_status: 'not_required',
-          status: 'under_review',
-          submitted_at: new Date().toISOString()
-        })
+        .update(freeApplicationUpdate)
         .eq('id', applicationId);
 
       if (updateError) {

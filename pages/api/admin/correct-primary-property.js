@@ -186,13 +186,23 @@ export default async function handler(req, res) {
     const appTypeForRush = HUNDRED_DOLLAR_RUSH_TYPES.includes(application.application_type) ? application.application_type : 'single_property';
     const configRushFee  = getPricing(appTypeForRush, true).rushFee;
 
-    // Base fee is always the single-property price ($317.95) regardless of app type.
-    const effectiveBasePerProp = getPricing('single_property', false).base;
+    // Base fee per additional property, by application type:
+    //   - settlement_va → $0 (free by Virginia law; the rush fee still applies)
+    //   - settlement_nc → $450 (SETTLEMENT_NC_PRICE)
+    //   - everything else → $317.95 (single-property rate)
+    // multi_community deliberately maps to single_property: MC applications are priced
+    // per-property at the single-property rate, not the $450 MC bundle rate.
+    const TYPE_PRICED_BASE_TYPES = ['settlement_va', 'settlement_nc'];
+    const appTypeForBase = TYPE_PRICED_BASE_TYPES.includes(application.application_type) ? application.application_type : 'single_property';
+    const effectiveBasePerProp = getPricing(appTypeForBase, false).base;
 
-    // Per-property charge for NEW additional properties at the target package
-    const pricePerProp     = effectiveBasePerProp + (targetIsRush ? configRushFee : 0);
+    // Per-property charge for NEW additional properties at the target package.
+    // The convenience fee only applies when there is an underlying charge to process —
+    // a free VA settlement must not be invoiced $9.95 for nothing.
+    const chargePerProp    = effectiveBasePerProp + (targetIsRush ? configRushFee : 0);
+    const pricePerProp     = chargePerProp > 0 ? chargePerProp + convFeePerProp : 0;
     const deltaAmountCents = delta > 0
-      ? (pricePerProp + convFeePerProp) * delta
+      ? pricePerProp * delta
       : 0;
 
     // If upgrading from standard → rush, charge the rush fee for all currently-paid properties
@@ -435,18 +445,21 @@ export default async function handler(req, res) {
       additionalProperties.forEach((prop) => {
         const propLocation = prop.location ? ` · ${prop.location}` : '';
 
-        // Base processing fee (derived from actual amount paid, not pricing config)
-        lineItems.push({
-          price_data: {
-            currency: 'usd',
-            product_data: {
-              name: `${documentLabel} — ${prop.name}`,
-              description: `${targetIsRush ? 'Rush' : 'Standard'} ${documentLabel} for ${application.property_address || prop.name} (${targetIsRush ? '5 business days' : '15 calendar days'})`,
+        // Base processing fee — omitted entirely for app types with a $0 base (VA settlement),
+        // since Stripe should never receive a zero-amount line item.
+        if (effectiveBasePerProp > 0) {
+          lineItems.push({
+            price_data: {
+              currency: 'usd',
+              product_data: {
+                name: `${documentLabel} — ${prop.name}`,
+                description: `${targetIsRush ? 'Rush' : 'Standard'} ${documentLabel} for ${application.property_address || prop.name} (${targetIsRush ? '5 business days' : '15 calendar days'})`,
+              },
+              unit_amount: effectiveBasePerProp,
             },
-            unit_amount: effectiveBasePerProp,
-          },
-          quantity: 1,
-        });
+            quantity: 1,
+          });
+        }
 
         // Rush fee for this additional property (if target is rush)
         if (targetIsRush && configRushFee > 0) {
@@ -463,8 +476,8 @@ export default async function handler(req, res) {
           });
         }
 
-        // Credit card convenience fee
-        if (isCreditCard) {
+        // Credit card convenience fee — only when this property carries an actual charge
+        if (isCreditCard && chargePerProp > 0) {
           lineItems.push({
             price_data: {
               currency: 'usd',

@@ -6866,10 +6866,12 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                                     return (
                                       <div key={i} className='border-b border-amber-200 pb-2 mb-2 last:border-0 last:pb-0 last:mb-0'>
                                         <div className='font-medium text-amber-800 mb-1 text-xs'>{prop.name}</div>
-                                        <div className='flex justify-between text-amber-700 text-xs ml-4'>
-                                          <span>Base fee:</span>
-                                          <span>${(base / 100).toFixed(2)}</span>
-                                        </div>
+                                        {base > 0 && (
+                                          <div className='flex justify-between text-amber-700 text-xs ml-4'>
+                                            <span>Base fee:</span>
+                                            <span>${(base / 100).toFixed(2)}</span>
+                                          </div>
+                                        )}
                                         {rush > 0 && (
                                           <div className='flex justify-between text-amber-700 text-xs ml-4'>
                                             <span>Rush Processing:</span>
