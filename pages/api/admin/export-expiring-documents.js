@@ -3,6 +3,7 @@ import path from 'path';
 import { createPagesServerClient } from '@supabase/auth-helpers-nextjs';
 import { componentToPdf } from '../../../lib/reactPdfService';
 import { ReportPdfDocument } from '../../../lib/components/ReportPdfDocument';
+import { parsePropertyId } from '../../../lib/reports/propertyFilter';
 
 function escapeCSV(val) {
   const s = String(val ?? '');
@@ -44,6 +45,7 @@ export default async function handler(req, res) {
 
     const { format = 'csv', days: daysParam = '30' } = req.query;
     const windowDays = Math.max(1, parseInt(daysParam) || 30);
+    const propertyId = parsePropertyId(req.query.propertyId);
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -51,7 +53,7 @@ export default async function handler(req, res) {
     future.setDate(today.getDate() + windowDays);
     const futureDateStr = future.toISOString().split('T')[0];
 
-    const { data: docs, error } = await supabase
+    let docsQuery = supabase
       .from('property_documents')
       .select(`
         id, document_name, document_key, expiration_date,
@@ -61,6 +63,11 @@ export default async function handler(req, res) {
       .eq('is_not_applicable', false)
       .lte('expiration_date', futureDateStr)
       .order('expiration_date', { ascending: true });
+
+    // Documents hang directly off a property — no multi-community union needed here
+    if (propertyId !== null) docsQuery = docsQuery.eq('property_id', propertyId);
+
+    const { data: docs, error } = await docsQuery;
 
     if (error) throw error;
 

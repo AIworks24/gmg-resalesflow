@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useCallback } from 'react';
+import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import { useRouter } from 'next/router';
 import { useQuery } from '@tanstack/react-query';
 import {
@@ -18,10 +18,13 @@ import {
   Clock,
   Download,
   ChevronDown,
+  CheckSquare,
+  Search,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import useAdminAuthStore from '../../stores/adminAuthStore';
 import { useApplications } from '../../hooks/useApplications';
+import { useAppContext } from '../../lib/AppContext';
 import AdminLayout from './AdminLayout';
 import useSWR from 'swr';
 
@@ -349,16 +352,155 @@ function ReportCard({ title, description, reportKey, hasPdf, handleDownload, exp
   );
 }
 
+// ─── property filter ───────────────────────────────────────────────────────
+
+/**
+ * Searchable community picker. Options come from AppContext (already loaded
+ * app-wide, non-deleted, sorted by name) — ~80 entries, too many for a plain
+ * <select>. Modeled on the assignee dropdown in AdminApplications.
+ *
+ * `value` is 'all' or an hoa_properties.id.
+ */
+function PropertyFilterDropdown({ value, onChange, properties }) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const containerRef = useRef(null);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const handleClickOutside = (e) => {
+      if (containerRef.current && !containerRef.current.contains(e.target)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [open]);
+
+  const selected = useMemo(
+    () => properties.find((p) => String(p.id) === String(value)),
+    [properties, value],
+  );
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return properties;
+    return properties.filter(
+      (p) =>
+        (p.name || '').toLowerCase().includes(q) ||
+        (p.location || '').toLowerCase().includes(q),
+    );
+  }, [properties, query]);
+
+  const select = (next) => {
+    onChange(next);
+    setOpen(false);
+    setQuery('');
+  };
+
+  return (
+    <div className="relative min-w-[14rem]" ref={containerRef}>
+      <button
+        type="button"
+        onClick={() => {
+          setOpen((o) => !o);
+          if (!open) setQuery('');
+        }}
+        className="w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all flex items-center justify-between gap-2"
+      >
+        <span className="truncate">
+          {value === 'all' ? 'All Properties' : (selected?.name ?? `Property #${value}`)}
+        </span>
+        <ChevronDown
+          className={`w-4 h-4 text-gray-400 flex-shrink-0 transition-transform ${open ? 'rotate-180' : ''}`}
+        />
+      </button>
+
+      {open && (
+        <div
+          className="absolute z-50 mt-1 w-full min-w-[16rem] bg-white border border-gray-200 rounded-lg shadow-lg py-1"
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') setOpen(false);
+          }}
+        >
+          <button
+            type="button"
+            onClick={() => select('all')}
+            className={`w-full px-3 py-2 text-left text-sm font-normal flex items-center gap-2 ${
+              value === 'all' ? 'bg-blue-50 text-blue-700' : 'text-gray-700 hover:bg-gray-50'
+            }`}
+          >
+            {value === 'all' && <CheckSquare className="w-4 h-4 flex-shrink-0" />}
+            <span className="truncate">All Properties</span>
+          </button>
+
+          <div className="border-t border-gray-100 px-2 pt-2 pb-1">
+            <div className="relative">
+              <Search className="w-4 h-4 absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+              <input
+                type="text"
+                placeholder="Search properties..."
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  // Escape still closes; everything else stays in the input
+                  if (e.key === 'Escape') setOpen(false);
+                  else e.stopPropagation();
+                }}
+                className="w-full pl-8 pr-3 py-1.5 border border-gray-200 rounded-md text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+                autoFocus
+              />
+            </div>
+          </div>
+
+          <div className="max-h-48 overflow-y-auto border-t border-gray-100">
+            {filtered.length === 0 ? (
+              <div className="px-3 py-4 text-sm text-gray-500 text-center">
+                No properties match
+              </div>
+            ) : (
+              filtered.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => select(String(p.id))}
+                  className={`w-full px-3 py-2 text-left text-sm font-normal flex items-center gap-2 min-w-0 ${
+                    String(value) === String(p.id)
+                      ? 'bg-blue-50 text-blue-700'
+                      : 'text-gray-700 hover:bg-gray-50'
+                  }`}
+                >
+                  {String(value) === String(p.id) && (
+                    <CheckSquare className="w-4 h-4 flex-shrink-0" />
+                  )}
+                  <span className="truncate">
+                    {p.name}
+                    {p.location ? (
+                      <span className="text-gray-400"> · {p.location}</span>
+                    ) : null}
+                  </span>
+                </button>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ExportReportsTab({
   exportDateFilter, setExportDateFilter,
   exportCustomRange, setExportCustomRange,
   exportPeriodLabel,
   exportExpiringDays, setExportExpiringDays,
+  exportPropertyFilter, setExportPropertyFilter,
+  exportPropertyLabel, hoaProperties,
   exportLoading, handleDownload,
 }) {
   return (
     <div className="space-y-4">
-      {/* Date range control */}
+      {/* Date range + property control */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 px-5 py-4">
         <div className="flex flex-wrap items-center gap-3">
           <div className="flex items-center gap-2">
@@ -398,8 +540,18 @@ function ExportReportsTab({
               />
             </div>
           )}
+          <div className="flex items-center gap-2">
+            <Building className="w-4 h-4 text-gray-400" />
+            <span className="text-sm font-medium text-gray-700">Property:</span>
+          </div>
+          <PropertyFilterDropdown
+            value={exportPropertyFilter}
+            onChange={setExportPropertyFilter}
+            properties={hoaProperties}
+          />
+
           <span className="ml-1 text-xs text-gray-400 font-medium bg-gray-50 border border-gray-200 rounded-md px-2.5 py-1">
-            {exportPeriodLabel}
+            {exportPeriodLabel} · {exportPropertyLabel}
           </span>
         </div>
       </div>
@@ -416,9 +568,9 @@ function ExportReportsTab({
 
       <ReportCard
         title="Applications (full export)"
-        description="All fields, all statuses — complete audit trail"
+        description="CSV: all fields, all statuses — complete audit trail · PDF: summary report"
         reportKey="applications"
-        hasPdf={false}
+        hasPdf
         handleDownload={handleDownload}
         exportLoading={exportLoading}
       />
@@ -459,15 +611,29 @@ const AdminReports = () => {
   const [customDateRange, setCustomDateRange] = useState({ startDate: '', endDate: '' });
   const [activeTab, setActiveTab]           = useState('reports');
   const [expiringDays, setExpiringDays]     = useState(30);
+  const [propertyFilter, setPropertyFilter] = useState('all');
 
   // Export Reports tab state
   const [exportDateFilter, setExportDateFilter]         = useState('month');
   const [exportCustomRange, setExportCustomRange]       = useState({ startDate: '', endDate: '' });
   const [exportExpiringDays, setExportExpiringDays]     = useState(30);
+  const [exportPropertyFilter, setExportPropertyFilter] = useState('all');
   const [exportLoading, setExportLoading]               = useState({});
 
   const router      = useRouter();
   const { role }    = useAdminAuthStore();
+
+  // Community list for the property filters — already loaded app-wide by AppProvider
+  const { hoaProperties } = useAppContext();
+
+  const propertyName = useCallback(
+    (id) => hoaProperties.find((p) => String(p.id) === String(id))?.name || '',
+    [hoaProperties],
+  );
+
+  const exportPropertyLabel = exportPropertyFilter === 'all'
+    ? 'All Properties'
+    : (propertyName(exportPropertyFilter) || `Property #${exportPropertyFilter}`);
 
   // ── computed date range ──────────────────────────────────────────────────
 
@@ -513,8 +679,9 @@ const AdminReports = () => {
     const p = new URLSearchParams();
     if (dateRange?.start) p.set('dateStart', dateRange.start);
     if (dateRange?.end)   p.set('dateEnd',   dateRange.end);
+    if (propertyFilter !== 'all') p.set('propertyId', propertyFilter);
     return p.toString();
-  }, [dateRange]);
+  }, [dateRange, propertyFilter]);
 
   const summaryQuery = useQuery({
     queryKey: ['reports-summary', summaryParams],
@@ -532,6 +699,10 @@ const AdminReports = () => {
   // Stripe revenue — sourced directly from Stripe's balance transactions.
   // Loads in parallel; always live mode regardless of test-mode cookies.
   // Resolves historical payments that pre-date stripe_payment_intent_id storage.
+  //
+  // Stripe balance transactions carry no link to a community, so this cannot be
+  // scoped by property. When a property filter is active we skip the request
+  // entirely and fall back to the DB revenue figure from the summary endpoint.
   const stripeQuery = useQuery({
     queryKey: ['stripe-revenue', summaryParams],
     queryFn: async ({ signal }) => {
@@ -539,17 +710,20 @@ const AdminReports = () => {
       if (!res.ok) throw new Error('Failed to load Stripe revenue');
       return res.json();
     },
+    enabled: propertyFilter === 'all',
     placeholderData: (prev) => prev,
     staleTime:  60 * 60 * 1000, // 1 hour — matches server-side Redis TTL
     gcTime:     2 * 60 * 60 * 1000,
     retry: (count, err) => err?.status >= 500 && count < 1,
   });
 
-  // Comparison is period-independent — always this week/month vs previous
+  // Comparison is period-independent — always this week/month vs previous.
+  // It does honour the property filter so the deltas match the filtered KPIs.
   const comparisonQuery = useQuery({
-    queryKey: ['reports-comparison'],
+    queryKey: ['reports-comparison', propertyFilter],
     queryFn: async ({ signal }) => {
-      const res = await fetch('/api/admin/reports/comparison', { signal });
+      const params = propertyFilter !== 'all' ? `?propertyId=${propertyFilter}` : '';
+      const res = await fetch(`/api/admin/reports/comparison${params}`, { signal });
       if (!res.ok) throw new Error('Failed to load comparison');
       return res.json();
     },
@@ -617,7 +791,8 @@ const AdminReports = () => {
     dateRange: dateRange
       ? { start: new Date(dateRange.start), end: new Date(dateRange.end) }
       : null,
-  }), [dateRange]);
+    propertyId: propertyFilter !== 'all' ? propertyFilter : null,
+  }), [dateRange, propertyFilter]);
 
   const recentQuery = useApplications(recentFilters);
 
@@ -653,7 +828,9 @@ const AdminReports = () => {
 
   const summary             = summaryQuery.data;
   const comparison          = comparisonQuery.data;
-  const stripeData          = stripeQuery.data;
+  // Stripe figures are account-wide; discard them entirely while a property is
+  // selected (placeholderData would otherwise carry the unfiltered total over).
+  const stripeData          = propertyFilter === 'all' ? stripeQuery.data : null;
   const isLoadingSummary    = summaryQuery.isLoading;
   const isLoadingComparison = comparisonQuery.isLoading;
   const isLoadingStripe     = stripeQuery.isLoading;
@@ -722,10 +899,16 @@ const AdminReports = () => {
   const handleDownload = useCallback(async (reportKey, format, opts = {}) => {
     setExportLoading((prev) => ({ ...prev, [`${reportKey}-${format}`]: true }));
     try {
+      const propertyId = exportPropertyFilter !== 'all' ? exportPropertyFilter : null;
+
       if (reportKey === 'applications') {
-        const body = exportDateRange
-          ? { dateRange: { start: exportDateRange.start, end: exportDateRange.end } }
-          : {};
+        const body = {
+          format,
+          ...(exportDateRange
+            ? { dateRange: { start: exportDateRange.start, end: exportDateRange.end } }
+            : {}),
+          ...(propertyId ? { propertyId } : {}),
+        };
         const res  = await fetch('/api/admin/export-applications', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -733,7 +916,7 @@ const AdminReports = () => {
         });
         if (!res.ok) throw new Error(await res.text());
         const blob = await res.blob();
-        triggerDownload(blob, `applications-export.csv`);
+        triggerDownload(blob, `applications-export.${format === 'pdf' ? 'pdf' : 'csv'}`);
         return;
       }
 
@@ -744,6 +927,7 @@ const AdminReports = () => {
         if (exportDateRange?.start) params.set('dateStart', exportDateRange.start);
         if (exportDateRange?.end)   params.set('dateEnd',   exportDateRange.end);
       }
+      if (propertyId) params.set('propertyId', propertyId);
 
       const endpointMap = {
         revenue:            '/api/admin/export-revenue',
@@ -762,7 +946,7 @@ const AdminReports = () => {
     } finally {
       setExportLoading((prev) => ({ ...prev, [`${reportKey}-${format}`]: false }));
     }
-  }, [exportDateRange, exportExpiringDays]);
+  }, [exportDateRange, exportExpiringDays, exportPropertyFilter]);
 
   function triggerDownload(blob, filename) {
     const url  = URL.createObjectURL(blob);
@@ -781,7 +965,8 @@ const AdminReports = () => {
     summaryQuery.refetch();
     recentQuery.refetch();
     comparisonQuery.refetch();
-    stripeQuery.refetch();
+    // Disabled while a property is selected — refetch() would fire it anyway
+    if (propertyFilter === 'all') stripeQuery.refetch();
   };
 
 
@@ -1058,6 +1243,10 @@ const AdminReports = () => {
             exportPeriodLabel={exportPeriodLabel}
             exportExpiringDays={exportExpiringDays}
             setExportExpiringDays={setExportExpiringDays}
+            exportPropertyFilter={exportPropertyFilter}
+            setExportPropertyFilter={setExportPropertyFilter}
+            exportPropertyLabel={exportPropertyLabel}
+            hoaProperties={hoaProperties}
             exportLoading={exportLoading}
             handleDownload={handleDownload}
           />
@@ -1102,6 +1291,26 @@ const AdminReports = () => {
                       className="px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
                     />
                   </div>
+                )}
+
+                <div className="flex items-center gap-2">
+                  <Building className="w-4 h-4 text-gray-500" />
+                  <span className="text-sm font-medium text-gray-700">Property:</span>
+                </div>
+                <PropertyFilterDropdown
+                  value={propertyFilter}
+                  onChange={setPropertyFilter}
+                  properties={hoaProperties}
+                />
+
+                {propertyFilter !== 'all' && (
+                  <button
+                    type="button"
+                    onClick={() => setPropertyFilter('all')}
+                    className="text-xs text-gray-500 hover:text-gray-700 underline underline-offset-2"
+                  >
+                    Clear
+                  </button>
                 )}
 
                 {summaryQuery.isError && (
@@ -1156,6 +1365,10 @@ const AdminReports = () => {
                           </span>
                         )}
                       </div>
+                    ) : propertyFilter !== 'all' ? (
+                      <p className="text-xs text-gray-400 mt-1">
+                        DB estimate — Stripe totals aren&apos;t property-scoped
+                      </p>
                     ) : (
                       !isLoadingStripe && (
                         <p className="text-xs text-gray-400 mt-1">Stripe-completed payments only</p>

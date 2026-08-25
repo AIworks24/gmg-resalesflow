@@ -1,5 +1,7 @@
 import { createPagesServerClient } from '@supabase/auth-helpers-nextjs';
 import { getCache, setCache } from '../../../../lib/redis';
+import { applyPropertyScope, parsePropertyId, resolvePropertyScope } from '../../../../lib/reports/propertyFilter';
+import { excludeDrafts, REPORT_SCOPE_VERSION } from '../../../../lib/reports/reportFilters';
 
 const ALLOWED_ROLES = ['admin', 'staff', 'accounting'];
 const CACHE_TTL = 5 * 60; // 5 minutes
@@ -25,13 +27,18 @@ function endOfDay(date) {
   return d;
 }
 
-async function fetchWindowStats(supabase, start, end) {
-  const { data, error } = await supabase
+async function fetchWindowStats(supabase, start, end, propertyScope = null) {
+  let query = supabase
     .from('applications')
     .select('total_amount, payment_status')
     .is('deleted_at', null)
     .gte('created_at', start.toISOString())
     .lte('created_at', end.toISOString());
+
+  query = excludeDrafts(query);
+  query = applyPropertyScope(query, propertyScope);
+
+  const { data, error } = await query;
 
   if (error) throw error;
 
@@ -68,7 +75,9 @@ export default async function handler(req, res) {
       return res.status(403).json({ error: 'Forbidden - Admin access required' });
     }
 
-    const cacheKey = `reports:comparison:${new Date().toISOString().slice(0, 13)}`; // hourly cache
+    const propertyId = parsePropertyId(req.query.propertyId);
+
+    const cacheKey = `reports:comparison:${REPORT_SCOPE_VERSION}:${new Date().toISOString().slice(0, 13)}:prop:${propertyId ?? 'all'}`; // hourly cache
     const cached = await getCache(cacheKey);
     if (cached) {
       res.setHeader('X-Cache', 'HIT');
@@ -94,12 +103,15 @@ export default async function handler(req, res) {
     const lastMonthEnd   = new Date(thisMonthStart);
     lastMonthEnd.setMilliseconds(-1);
 
+    // Resolve the property scope once — all four windows reuse it
+    const propertyScope = await resolvePropertyScope(supabase, propertyId);
+
     // Run all four queries in parallel
     const [thisWeek, lastWeek, thisMonth, lastMonth] = await Promise.all([
-      fetchWindowStats(supabase, thisWeekStart,  thisWeekEnd),
-      fetchWindowStats(supabase, lastWeekStart,  lastWeekEnd),
-      fetchWindowStats(supabase, thisMonthStart, thisMonthEnd),
-      fetchWindowStats(supabase, lastMonthStart, lastMonthEnd),
+      fetchWindowStats(supabase, thisWeekStart,  thisWeekEnd,   propertyScope),
+      fetchWindowStats(supabase, lastWeekStart,  lastWeekEnd,   propertyScope),
+      fetchWindowStats(supabase, thisMonthStart, thisMonthEnd,  propertyScope),
+      fetchWindowStats(supabase, lastMonthStart, lastMonthEnd,  propertyScope),
     ]);
 
     const formatMonthLabel = (d) =>

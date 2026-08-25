@@ -3,6 +3,8 @@ import path from 'path';
 import { createPagesServerClient } from '@supabase/auth-helpers-nextjs';
 import { componentToPdf } from '../../../lib/reactPdfService';
 import { ReportPdfDocument } from '../../../lib/components/ReportPdfDocument';
+import { applyPropertyScope, getPropertyName, parsePropertyId, resolvePropertyScope } from '../../../lib/reports/propertyFilter';
+import { excludeDrafts } from '../../../lib/reports/reportFilters';
 
 const ALLOWED_ROLES = ['admin', 'accounting'];
 
@@ -90,6 +92,7 @@ export default async function handler(req, res) {
     }
 
     const { format = 'csv', dateStart, dateEnd } = req.query;
+    const propertyId = parsePropertyId(req.query.propertyId);
 
     let query = supabase
       .from('applications')
@@ -103,11 +106,21 @@ export default async function handler(req, res) {
       .is('deleted_at', null)
       .order('created_at', { ascending: false });
 
+    // A draft can still carry a completed payment — exclude it from revenue
+    query = excludeDrafts(query);
+
     if (dateStart) query = query.gte('created_at', dateStart);
     if (dateEnd)   query = query.lte('created_at', dateEnd);
 
+    // Scope to one community (primary or multi-community member)
+    const propertyScope = await resolvePropertyScope(supabase, propertyId);
+    query = applyPropertyScope(query, propertyScope);
+
     const { data: apps, error } = await query;
     if (error) throw error;
+
+    const propertyName = await getPropertyName(supabase, propertyId);
+    const scopeLabel   = propertyName ? `Community: ${propertyName}` : 'All Communities';
 
     const totalRevenue = apps.reduce((s, a) => s + parseFloat(a.total_amount || 0), 0);
     const avgRevenue   = apps.length ? totalRevenue / apps.length : 0;
@@ -144,6 +157,7 @@ export default async function handler(req, res) {
 
       const csv = [
         `# Revenue Report — ${period}`,
+        `# ${scopeLabel}`,
         `# Generated: ${new Date().toLocaleDateString('en-US')}`,
         `# Total Gross Revenue: ${fmtAlways(totalRevenue)} | Applications: ${apps.length} | Avg: ${fmtAlways(avgRevenue)}`,
         '',
@@ -226,7 +240,7 @@ export default async function handler(req, res) {
 
     const pdfBuffer = await componentToPdf(ReportPdfDocument, {
       title:       'Revenue Report',
-      subtitle:    'Completed payments only',
+      subtitle:    `Completed payments only · ${scopeLabel}`,
       period,
       generatedAt: new Date().toISOString(),
       logoBase64,

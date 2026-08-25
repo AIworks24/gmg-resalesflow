@@ -1,5 +1,7 @@
 import { createPagesServerClient } from '@supabase/auth-helpers-nextjs';
 import { getCache, setCache } from '../../../../lib/redis';
+import { applyPropertyScope, parsePropertyId, resolvePropertyScope } from '../../../../lib/reports/propertyFilter';
+import { excludeDrafts, REPORT_SCOPE_VERSION } from '../../../../lib/reports/reportFilters';
 
 const ALLOWED_ROLES = ['admin', 'staff', 'accounting'];
 const CACHE_TTL = 5 * 60; // 5 minutes
@@ -28,8 +30,9 @@ export default async function handler(req, res) {
     }
 
     const { dateStart, dateEnd } = req.query;
+    const propertyId = parsePropertyId(req.query.propertyId);
 
-    const cacheKey = `reports:summary:${dateStart || 'all'}:${dateEnd || 'all'}`;
+    const cacheKey = `reports:summary:${REPORT_SCOPE_VERSION}:${dateStart || 'all'}:${dateEnd || 'all'}:prop:${propertyId ?? 'all'}`;
     const cached = await getCache(cacheKey);
     if (cached) {
       res.setHeader('X-Cache', 'HIT');
@@ -54,8 +57,15 @@ export default async function handler(req, res) {
       `)
       .is('deleted_at', null);
 
+    // Drafts are never business activity — keep them out of every report
+    query = excludeDrafts(query);
+
     if (dateStart) query = query.gte('created_at', dateStart);
     if (dateEnd)   query = query.lte('created_at', dateEnd);
+
+    // Scope to one community (primary or multi-community member)
+    const propertyScope = await resolvePropertyScope(supabase, propertyId);
+    query = applyPropertyScope(query, propertyScope);
 
     const { data: apps, error: appsError } = await query;
     if (appsError) throw appsError;

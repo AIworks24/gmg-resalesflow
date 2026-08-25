@@ -1,5 +1,6 @@
 import { createPagesServerClient } from '@supabase/auth-helpers-nextjs';
 import { getCache, setCache } from '../../../lib/redis';
+import { applyPropertyScope, parsePropertyId, resolvePropertyScope } from '../../../lib/reports/propertyFilter';
 
 export default async function handler(req, res) {
   if (req.method !== 'GET') {
@@ -45,9 +46,10 @@ export default async function handler(req, res) {
     const pageNum = parseInt(page);
     const limitNum = parseInt(limit);
     const shouldBypassCache = bypassCache === 'true' || bypassCache === true;
+    const propertyId = parsePropertyId(req.query.propertyId);
 
     // Generate dynamic cache key based on filters (including sort parameters and user ID to prevent collisions)
-    const cacheKey = `admin:applications:${user.id}:${status}:${urgency}:${search}:${dateStart || 'null'}:${dateEnd || 'null'}:${sortBy}:${sortOrder}:${pageNum}:${limitNum}`;
+    const cacheKey = `admin:applications:${user.id}:${status}:${urgency}:${search}:${dateStart || 'null'}:${dateEnd || 'null'}:${sortBy}:${sortOrder}:${pageNum}:${limitNum}:prop:${propertyId ?? 'all'}`;
     
     // Try to get from cache first (unless bypassed for real-time updates)
     if (!shouldBypassCache) {
@@ -142,6 +144,12 @@ export default async function handler(req, res) {
         .gte('created_at', dateStart)
         .lte('created_at', dateEnd);
     }
+
+    // Apply property filter — matches the primary community OR any multi-community member.
+    // Chaining a second .or() alongside the search filter above is safe: PostgREST ANDs them.
+    // Resolve first, then apply synchronously — never `await` a query builder.
+    const propertyScope = await resolvePropertyScope(supabase, propertyId);
+    query = applyPropertyScope(query, propertyScope);
 
     // Apply sorting (validate sortBy to prevent SQL injection)
     const allowedSortFields = ['created_at', 'submitted_at', 'property_address', 'status', 'submitter_name', 'application_type'];

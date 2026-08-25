@@ -44,6 +44,9 @@
     "pages/api/check-stuck-applications.js": {
       "maxDuration": 30
     },
+    "pages/api/admin/export-applications.js": {
+      "maxDuration": 60
+    },
     "pages/api/jobs/run.js": {
       "maxDuration": 300
     }

@@ -1,5 +1,6 @@
 import { createPagesServerClient } from '@supabase/auth-helpers-nextjs';
 import { getCache, setCache } from '../../../../lib/redis';
+import { REPORT_SCOPE_VERSION } from '../../../../lib/reports/reportFilters';
 
 const ALLOWED_ROLES = ['admin', 'staff', 'accounting'];
 const CACHE_TTL = 2 * 60; // 2 minutes — short TTL since this is an action list
@@ -27,7 +28,7 @@ export default async function handler(req, res) {
       return res.status(403).json({ error: 'Forbidden - Admin access required' });
     }
 
-    const cacheKey = `reports:pending-applications`;
+    const cacheKey = `reports:pending-applications:${REPORT_SCOPE_VERSION}`;
     const cached = await getCache(cacheKey);
     if (cached) {
       res.setHeader('X-Cache', 'HIT');
@@ -55,6 +56,7 @@ export default async function handler(req, res) {
       .eq('payment_status', 'completed')
       .is('submitted_at', null)
       .is('deleted_at', null)
+      .neq('status', 'draft')
       .order('created_at', { ascending: false });
 
     if (appsError) throw appsError;
