@@ -5192,7 +5192,10 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                       </div>
                       <div>
                         <label className='text-xs font-medium text-gray-500 uppercase tracking-wider block mb-1'>Total Amount</label>
-                        <div className='text-sm font-bold text-gray-900'>${selectedApplication.total_amount?.toFixed(2) || '0.00'}</div>
+                        {/* stripe_amount_total is the actual charge. total_amount excludes the
+                            per-property CC fees for multi-community, so showing it here made
+                            staff see a different number than the customer's receipt and Stripe. */}
+                        <div className='text-sm font-bold text-gray-900'>${Number(selectedApplication.stripe_amount_total ?? selectedApplication.total_amount ?? 0).toFixed(2)}</div>
                       </div>
                     </div>
                   </div>

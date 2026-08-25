@@ -2,13 +2,15 @@
  * Manually resend receipt emails.
  *
  * Usage:
- *   node send-receipts.js [--test] [--to=email@example.com] [appId1 appId2 ...]
+ *   node send-receipts.js [--test] [--dry-run] [--to=email@example.com] [appId1 appId2 ...]
  *
  *   --test          Use test Supabase DB + test Stripe key
+ *   --dry-run       Render the receipt to an HTML file instead of emailing it
  *   --to=EMAIL      Override recipient (send to this address instead of the submitter)
  *   No ids given    Defaults to live apps 2242 and 2248
  *
  * Examples:
+ *   node send-receipts.js --dry-run 2779                     (writes HTML, sends nothing)
  *   node send-receipts.js --to=ianrizhmanago@gmail.com 2251
  *   node send-receipts.js                                    (sends to live 2242 + 2248)
  */
@@ -17,6 +19,9 @@
 
 require('dotenv').config({ path: '.env.local' });
 
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const { createClient } = require('@supabase/supabase-js');
 const Stripe = require('stripe');
 const { Client } = require('@microsoft/microsoft-graph-client');
@@ -25,6 +30,7 @@ require('isomorphic-fetch');
 
 const args = process.argv.slice(2);
 const isTest = args.includes('--test');
+const isDryRun = args.includes('--dry-run');
 const toOverride = (args.find(a => a.startsWith('--to=')) || '').replace('--to=', '') || null;
 const idArgs = args.filter(a => !a.startsWith('--')).map(Number).filter(Boolean);
 const APPLICATION_IDS = idArgs.length > 0 ? idArgs : [2242, 2248];
@@ -39,16 +45,49 @@ function requireEnv(...names) {
 }
 
 const supabaseUrl = isTest
-  ? requireEnv('SUPABASE_URL_TEST')
+  ? requireEnv('SUPABASE_URL_TEST', 'NEXT_PUBLIC_SUPABASE_URL')
   : requireEnv('SUPABASE_URL_LIVE', 'NEXT_PUBLIC_SUPABASE_URL');
 const supabaseKey = isTest
-  ? requireEnv('SUPABASE_SERVICE_ROLE_KEY_TEST')
+  ? requireEnv('SUPABASE_SERVICE_ROLE_KEY_TEST', 'SUPABASE_SERVICE_ROLE_KEY')
   : requireEnv('SUPABASE_SERVICE_ROLE_KEY_LIVE', 'SUPABASE_SERVICE_ROLE_KEY');
 const stripeKey = isTest
   ? requireEnv('STRIPE_SECRET_KEY_TEST', 'STRIPE_SECRET_KEY')
   : requireEnv('STRIPE_SECRET_KEY_LIVE', 'STRIPE_SECRET_KEY');
 
+// .env.local carries the test and live Supabase blocks stacked, one commented out. Toggling
+// them by hand can leave a URL from one project paired with a service-role key from the
+// other, and the URL wins — so the script would read a DIFFERENT database than the operator
+// believes and resend a real customer a receipt built from the wrong application row.
+// The service-role JWT names its project in the `ref` claim, so verify the pair agrees.
+function supabaseProjectRef(url) {
+  const m = /^https:\/\/([a-z0-9]+)\.supabase\./.exec(url || '');
+  return m ? m[1] : null;
+}
+
+function serviceKeyProjectRef(key) {
+  try {
+    const payload = String(key).split('.')[1];
+    if (!payload) return null;
+    return JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')).ref || null;
+  } catch {
+    return null; // Non-JWT key format (e.g. sb_secret_*) — nothing to cross-check.
+  }
+}
+
+const urlRef = supabaseProjectRef(supabaseUrl);
+const keyRef = serviceKeyProjectRef(supabaseKey);
+if (urlRef && keyRef && urlRef !== keyRef) {
+  console.error('Refusing to run: Supabase URL and service-role key belong to different projects.');
+  console.error(`  URL project: ${urlRef}`);
+  console.error(`  Key project: ${keyRef}`);
+  console.error('  Check the commented test/live blocks in .env.local.');
+  process.exit(1);
+}
+
 console.log(`Mode:    ${isTest ? 'TEST (test DB + test Stripe)' : 'LIVE (production DB + live Stripe)'}`);
+console.log(`Action:  ${isDryRun ? 'DRY RUN — rendering to file, NO email will be sent' : 'SEND — real emails will be delivered'}`);
+console.log(`DB:      ${supabaseUrl}${urlRef ? ` (project ${urlRef})` : ''}`);
+console.log(`Stripe:  ${stripeKey.startsWith('sk_live_') || stripeKey.startsWith('rk_live_') ? 'LIVE' : 'TEST'} key`);
 console.log(`App IDs: ${APPLICATION_IDS.join(', ')}`);
 if (toOverride) console.log(`To:      ${toOverride} (override — not sending to actual submitter)`);
 console.log('');
@@ -64,6 +103,33 @@ function escapeHtml(text) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#039;');
+}
+
+// Mirror of resolveReceiptTotal() in lib/processing/steps.js — duplicated because that
+// module is ESM and this is a standalone CommonJS script. Keep the two in sync.
+//
+// The receipt total must be what Stripe actually charged, NOT applications.total_amount:
+// for multi_community that column holds refundable service fees only, excluding the
+// $9.95 CC fee charged per association (ClickUp 86d44v1by).
+function resolveReceiptTotal({ app, chargedCents, lineItems }) {
+  const candidates = [
+    { source: 'stripe charge', value: chargedCents != null ? chargedCents / 100 : null },
+    { source: 'stripe_amount_total column', value: app.stripe_amount_total != null ? Number(app.stripe_amount_total) : null },
+    {
+      source: 'stripe line items',
+      value: (lineItems || []).length > 0
+        ? lineItems.reduce((sum, item) => sum + Number(item.amount), 0)
+        : null,
+    },
+    { source: 'total_amount column (FALLBACK — not a Stripe figure)', value: app.total_amount != null ? Number(app.total_amount) : null },
+  ];
+  const resolved = candidates.find(c => c.value != null && Number.isFinite(c.value));
+  if (!resolved) return { total: '0.00', source: 'none', fromStripe: false };
+  return {
+    total: resolved.value.toFixed(2),
+    source: resolved.source,
+    fromStripe: resolved.source !== candidates[3].source,
+  };
 }
 
 function buildReceiptHtml({ customerName, propertyAddress, packageType, totalAmount, invoiceNumber, stripeChargeId, invoiceDate, applicationType, paymentMethod, lineItems }) {
@@ -239,7 +305,7 @@ async function resendReceipt(applicationId) {
 
   const { data: app, error } = await supabase
     .from('applications')
-    .select('id, submitter_email, submitter_name, property_address, package_type, total_amount, payment_method, application_type, stripe_session_id, stripe_payment_intent_id, payment_completed_at, submitted_at')
+    .select('id, submitter_email, submitter_name, property_address, package_type, total_amount, stripe_amount_total, payment_method, application_type, stripe_session_id, stripe_payment_intent_id, payment_completed_at, submitted_at')
     .eq('id', applicationId)
     .single();
 
@@ -253,10 +319,10 @@ async function resendReceipt(applicationId) {
   console.log(`  Submitter: ${app.submitter_email}`);
   console.log(`  Sending to: ${recipient}${toOverride ? ' (overridden)' : ''}`);
   console.log(`  Address:   ${app.property_address}`);
-  console.log(`  Amount:    $${app.total_amount}`);
   console.log(`  Paid at:   ${app.payment_completed_at}`);
 
   let receiptUrl = null, receiptNumber = null, paymentMethod = null, lineItems = [];
+  let chargedCents = null;
 
   if (app.stripe_payment_intent_id) {
     try {
@@ -265,6 +331,7 @@ async function resendReceipt(applicationId) {
         const charge = await stripe.charges.retrieve(pi.latest_charge);
         receiptUrl = charge.receipt_url;
         receiptNumber = charge.receipt_number;
+        chargedCents = charge.amount;
         if (charge.payment_method_details?.card) {
           const { brand, last4 } = charge.payment_method_details.card;
           paymentMethod = `${(brand || 'CARD').toUpperCase()} - ${last4 || '****'}`;
@@ -301,12 +368,27 @@ async function resendReceipt(applicationId) {
 
   const invoiceDate = app.payment_completed_at || app.submitted_at;
   const invoiceNumber = `PAY-${app.id}`;
+  const { total: totalAmount, source, fromStripe } = resolveReceiptTotal({ app, chargedCents, lineItems });
+
+  console.log(`  Amount:    $${totalAmount}  (source: ${source}; total_amount column: $${app.total_amount})`);
+  if (Number(totalAmount) !== Number(app.total_amount)) {
+    console.log(`  ⚠️  Receipting the Stripe-charged amount, not total_amount (expected for multi-community).`);
+  }
+
+  // Never email a total we could not confirm against Stripe — an unverified figure is the
+  // whole defect this script exists to correct.
+  if (!fromStripe && !isDryRun) {
+    console.error(`  ❌ Refusing to send: could not obtain a Stripe amount for #${app.id}.`);
+    console.error(`     Falling back to the total_amount column risks re-sending a wrong total.`);
+    console.error(`     Check that this app's Stripe IDs belong to the ${isTest ? 'TEST' : 'LIVE'} Stripe account.\n`);
+    return;
+  }
 
   const html = buildReceiptHtml({
     customerName: app.submitter_name || 'Customer',
     propertyAddress: app.property_address || '',
     packageType: app.package_type || 'standard',
-    totalAmount: app.total_amount,
+    totalAmount,
     invoiceNumber,
     stripeChargeId: app.stripe_payment_intent_id,
     invoiceDate,
@@ -316,9 +398,17 @@ async function resendReceipt(applicationId) {
   });
 
   const subject = `Payment Receipt #${invoiceNumber}`;
-  await sendViaGraph(recipient, subject, html);
-
   const displayDate = new Date(invoiceDate).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+
+  if (isDryRun) {
+    const outPath = path.join(os.tmpdir(), `receipt-${app.id}.html`);
+    fs.writeFileSync(outPath, html, 'utf8');
+    console.log(`  📄 DRY RUN — nothing sent. Rendered to: ${outPath}`);
+    console.log(`     Would have gone to ${recipient} | Date: ${displayDate}\n`);
+    return;
+  }
+
+  await sendViaGraph(recipient, subject, html);
   console.log(`  ✅ Sent to ${recipient} | Date: ${displayDate}\n`);
 }
 

@@ -117,6 +117,13 @@ export default async function handler(req, res) {
           updateData.stripe_payment_intent_id = session.payment_intent;
         }
 
+        // Record what Stripe actually charged. NOT total_amount — that column holds
+        // refundable service fees only for multi_community (CC fees excluded), and
+        // downstream refund math and revenue reports depend on that meaning.
+        if (session.amount_total != null) {
+          updateData.stripe_amount_total = session.amount_total / 100;
+        }
+
           // Idempotency guard: skip if already processed (prevents duplicate emails on Stripe retries)
           const { data: updatedApp } = await supabase
             .from('applications')
@@ -274,9 +281,14 @@ export default async function handler(req, res) {
             paymentUpdateData.status = 'payment_confirmed';
           }
           
-          // Correct the total amount based on actual payment
-        if (paymentIntent.amount_total) {
-          paymentUpdateData.total_amount = paymentIntent.amount_total / 100; // Convert from cents
+          // Record what Stripe actually charged. A PaymentIntent exposes `amount`, not
+          // `amount_total` (only Checkout Sessions have that) — the previous version of
+          // this block read `amount_total` and so silently never ran. Writes
+          // stripe_amount_total, never total_amount: see the note in
+          // checkout.session.completed above.
+        const chargedCents = paymentIntent.amount_total ?? paymentIntent.amount;
+        if (chargedCents != null) {
+          paymentUpdateData.stripe_amount_total = chargedCents / 100;
         }
         
         // First, try to update by stripe_payment_intent_id

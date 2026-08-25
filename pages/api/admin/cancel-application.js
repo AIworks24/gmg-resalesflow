@@ -58,6 +58,7 @@ export default async function handler(req, res) {
         submitter_name,
         submitter_email,
         total_amount,
+        stripe_amount_total,
         status,
         notes,
         stripe_payment_intent_id,
@@ -113,15 +114,22 @@ export default async function handler(req, res) {
       throw updateError;
     }
 
-    // total_amount stores the full Stripe charge (base cost + CC fees included).
     const CONVENIENCE_FEE_CENTS = 995; // $9.95 per property
     const isCreditCard = application.payment_method === 'credit_card';
     const numProperties = (application.application_property_groups || []).length || 1;
     const totalCCFees = isCreditCard ? (CONVENIENCE_FEE_CENTS * numProperties) / 100 : 0;
-    // totalPaid = what the customer was actually charged (total_amount already includes CC fees)
-    const totalPaid = application.total_amount > 0 ? application.total_amount : 0;
+
+    // totalPaid must come from stripe_amount_total — the actual charge. total_amount is
+    // NOT the full charge for multi_community (it excludes the per-property CC fees), so
+    // subtracting the fees from it double-subtracted them and under-refunded MC
+    // cancellations by $9.95 x N. Rows predating stripe_amount_total fall back to the
+    // previous behaviour rather than guessing.
+    const chargedTotal = application.stripe_amount_total != null
+      ? Number(application.stripe_amount_total)
+      : null;
+    const totalPaid = chargedTotal ?? (application.total_amount > 0 ? Number(application.total_amount) : 0);
     // refundAmount = total paid minus non-refundable CC fees
-    const refundAmount = application.total_amount > 0 ? application.total_amount - totalCCFees : 0;
+    const refundAmount = totalPaid > 0 ? Math.max(0, totalPaid - totalCCFees) : 0;
 
     // Send email to requestor and resales@gmgva.com
     const submitterEmail = application.submitter_email;

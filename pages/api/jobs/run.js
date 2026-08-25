@@ -27,8 +27,9 @@ const TIME_BUDGET_MS = 280_000; // leave headroom under maxDuration
 
 const APP_FIELDS =
   'id, application_type, submitter_email, submitter_name, property_address, package_type, ' +
-  'total_amount, status, submitted_at, receipt_sent_at, property_owner_notified_at, ' +
-  'email_completed_at, impersonation_metadata, stripe_session_id, stripe_payment_intent_id';
+  'total_amount, stripe_amount_total, status, submitted_at, receipt_sent_at, ' +
+  'property_owner_notified_at, email_completed_at, impersonation_metadata, ' +
+  'stripe_session_id, stripe_payment_intent_id';
 
 function authorized(req) {
   const authHeader = req.headers['authorization'] || '';
