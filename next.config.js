@@ -14,6 +14,15 @@ const nextConfig = {
   },
   reactStrictMode: true,
   swcMinify: true,
+  eslint: {
+    // `npm run lint` is the gate; the build is not. Adding .eslintrc.json made
+    // `next build` start running ESLint, and 58 pre-existing errors across the
+    // repo would fail every build and block Vercel deploys. This restores the
+    // prior build behaviour (ESLint was skipped entirely when no config existed)
+    // while keeping lint runnable on demand. Flip to false once the backlog in
+    // `npm run lint` is cleared.
+    ignoreDuringBuilds: true,
+  },
   images: {
     domains: ['dnivljiyahzxpyxjjifi.supabase.co'],
   },

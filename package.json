@@ -10,13 +10,16 @@
     "start:dev": "cross-env NODE_ENV=development next start",
     "start": "cross-env NODE_ENV=production next start",
     "lint": "next lint",
+    "test": "jest",
+    "test:watch": "jest --watch",
     "start1": "cross-env NODE_ENV=production next build && cross-env NODE_ENV=production next start",
     "supabase:start": "supabase start",
     "supabase:stop": "supabase stop",
     "supabase:status": "supabase status",
     "supabase:reset": "supabase db reset",
     "supabase:credentials": "node scripts/get-local-supabase-credentials.js",
-    "stripe:listen": "set -a; [ -f .env.local ] && . ./.env.local; set +a; stripe listen --api-key \"$STRIPE_SECRET_KEY_TEST\" --forward-to localhost:3000/api/webhooks/stripe"
+    "stripe:listen": "set -a; [ -f .env.local ] && . ./.env.local; set +a; stripe listen --api-key \"$STRIPE_SECRET_KEY_TEST\" --forward-to localhost:3000/api/webhooks/stripe",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@azure/identity": "^4.13.0",
@@ -60,10 +63,12 @@
     "zustand": "^5.0.6"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "autoprefixer": "^10.0.1",
     "cross-env": "^7.0.3",
     "eslint": "^8.51.0",
     "eslint-config-next": "14.0.0",
+    "jest": "^29.7.0",
     "postcss": "^8.4.31",
     "sharp": "^0.34.5",
     "tailwindcss": "^3.3.0"

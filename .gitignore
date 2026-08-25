@@ -169,3 +169,9 @@ config.local.json
 CLAUDE.md
 .claude/
 .env*.local
+
+# Playwright
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/

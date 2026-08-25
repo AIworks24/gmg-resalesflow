@@ -2,6 +2,7 @@ import { createClient } from '@supabase/supabase-js';
 import formidable from 'formidable';
 import fs from 'fs';
 import { isJsonRequest, readJsonBody } from '../../lib/readJsonBody';
+import { appendProcessNote, resolveActorName } from '../../lib/processHistoryServer';
 
 // Disable body parsing, we'll handle it with formidable (multipart) or read the
 // raw JSON body ourselves (direct-to-storage mode).
@@ -18,7 +19,7 @@ const supabase = createClient(
 
 // Records the completed file path on the application. Shared by both upload
 // modes so the database side-effects stay identical.
-async function finalize(res, applicationId, filePath, wasConverted) {
+async function finalize(res, applicationId, filePath, wasConverted, actorName) {
   const { error: updateError } = await supabase
     .from('applications')
     .update({
@@ -32,6 +33,15 @@ async function finalize(res, applicationId, filePath, wasConverted) {
     console.error('Error updating application:', updateError);
     return res.status(500).json({ error: 'Failed to update application: ' + updateError.message });
   }
+
+  // Must be awaited before responding: the admin UI refetches the application as
+  // soon as this returns, and a stale snapshot written back by /api/save-comments
+  // would drop the entry.
+  await appendProcessNote(
+    supabase,
+    applicationId,
+    `Completed lender questionnaire uploaded by ${actorName}.`
+  );
 
   return res.status(200).json({
     success: true,
@@ -49,6 +59,13 @@ export default async function handler(req, res) {
   }
 
   try {
+    // Resolve the acting user BEFORE parsing the body — this route runs with
+    // bodyParser disabled, and formidable/readJsonBody consume the stream.
+    const actor = await resolveActorName(req, res);
+    if (!actor.authenticated) {
+      console.warn('[upload-lq-completed] unauthenticated call');
+    }
+
     // JSON mode: the PDF was uploaded directly to storage by the browser and we
     // only need to record its path. The tiny JSON body never hits the ~4.5MB
     // serverless body limit that breaks large multipart uploads.
@@ -64,7 +81,7 @@ export default async function handler(req, res) {
         return res.status(400).json({ error: 'Invalid file path' });
       }
 
-      return await finalize(res, applicationId, filePath, false);
+      return await finalize(res, applicationId, filePath, false, actor.name);
     }
 
     // Multipart mode: file streamed through the function (DOC/DOCX needing
@@ -154,7 +171,7 @@ export default async function handler(req, res) {
     // Clean up temporary file
     fs.unlinkSync(file.filepath);
 
-    return await finalize(res, applicationId, filePath, wasConverted);
+    return await finalize(res, applicationId, filePath, wasConverted, actor.name);
   } catch (error) {
     console.error('Error in upload-lender-questionnaire-completed:', error);
     return res.status(500).json({ error: error.message || 'Internal server error' });

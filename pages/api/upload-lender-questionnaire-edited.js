@@ -1,6 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import formidable from 'formidable';
 import fs from 'fs';
+import { appendProcessNote, resolveActorName } from '../../lib/processHistoryServer';
 
 export const config = {
   api: {
@@ -19,6 +20,15 @@ export default async function handler(req, res) {
   }
 
   try {
+    // Resolve the acting user BEFORE parsing the body — formidable consumes the
+    // request stream. This route has no in-repo caller (the "Edit PDF" button
+    // opens SimplePDF and asks the user to re-upload manually), so the actor
+    // will often be the 'Admin' fallback.
+    const actor = await resolveActorName(req, res);
+    if (!actor.authenticated) {
+      console.warn('[upload-lq-edited] unauthenticated call');
+    }
+
     // Parse form data
     const form = formidable({
       maxFileSize: 10 * 1024 * 1024, // 10MB
@@ -97,6 +107,13 @@ export default async function handler(req, res) {
 
     // Clean up temporary file
     fs.unlinkSync(file.filepath);
+
+    // Awaited before responding so the admin UI's refetch sees the entry.
+    await appendProcessNote(
+      supabase,
+      applicationId,
+      `Lender questionnaire edited in the PDF editor by ${actor.name}.`
+    );
 
     return res.status(200).json({
       success: true,

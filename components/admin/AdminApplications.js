@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
 import useSWR from 'swr';
 import { isPdf, uploadLqPdfDirect, parseUploadError, LQ_SERVER_UPLOAD_MAX_BYTES } from '../../lib/lenderQuestionnaireUpload';
+import { parseProcessNotes, splitProcessNotes, classifyProcessNote } from '../../lib/processHistory';
 
 // Helper function to format property address with unit number
 const formatPropertyAddress = (address, unitNumber) => {
@@ -1598,13 +1599,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
           // Also match effective assignee (property owner default) when group.assigned_to is null
           const hasMatchingEffective = groups.some(g => {
             if (g.assigned_to) return false;
-            const defaultEmail = (() => {
-              const hoa = g.hoa_properties;
-              const emails = parseEmails(hoa?.property_owner_email || g.property_owner_email);
-              if (!emails.length) return null;
-              if (hoa?.default_assignee_email && emails.some(e => e.toLowerCase() === (hoa.default_assignee_email || '').toLowerCase())) return hoa.default_assignee_email;
-              return emails[0];
-            })();
+            const defaultEmail = getDefaultPropertyAssigneeEmail(g, app.application_type);
             return defaultEmail && defaultEmail.toLowerCase() === assigneeFilter.toLowerCase();
           });
           return hasMatchingEffective;
@@ -1654,13 +1649,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
           const isAssignedToAnyGroup = app.application_property_groups.some(group => {
             if (group.assigned_to && group.assigned_to.toLowerCase() === userEmail.toLowerCase()) return true;
             if (!group.assigned_to) {
-              const defaultEmail = (() => {
-                const hoa = group.hoa_properties;
-                const emails = parseEmails(hoa?.property_owner_email || group.property_owner_email);
-                if (!emails.length) return null;
-                if (hoa?.default_assignee_email && emails.some(e => e.toLowerCase() === (hoa.default_assignee_email || '').toLowerCase())) return hoa.default_assignee_email;
-                return emails[0];
-              })();
+              const defaultEmail = getDefaultPropertyAssigneeEmail(group, app.application_type);
               if (defaultEmail && defaultEmail.toLowerCase() === userEmail.toLowerCase()) return true;
             }
             return false;
@@ -5211,23 +5200,9 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
 
                 {/* Process History - collapsible, collapsed by default */}
                 {(() => {
-                  const auditPattern = /^\[\d{4}-\d{2}-\d{2}T[\d:.]+Z\]/;
-                  const auditEntries = (selectedApplication.notes || '').split('\n\n').filter(c => auditPattern.test(c.trim()));
-
-                  // Classify a message into an event type for icon + color
-                  const classify = (msg) => {
-                    const m = msg.toLowerCase();
-                    if (m.includes('property corrected') || m.includes('correct property') || m.includes('correct primary')) return 'correction';
-                    if (m.includes('rush upgrade invoice') || m.includes('upgrade invoice')) return 'rush_invoice';
-                    if (m.includes('package upgraded') || m.includes('upgraded to rush') || m.includes('upgrade to rush')) return 'rush_upgrade';
-                    if (m.includes('application rejected') || m.includes('application cancelled')) return 'rejected';
-                    if (m.includes('task completed') || m.includes('was completed')) return 'task';
-                    if (m.includes('assigned to') || m.includes('re-assigned') || m.includes('reassigned')) return 'assigned';
-                    if (m.includes('invoice paid') || m.includes('payment received') || m.includes('payment confirmed')) return 'paid';
-                    if (m.includes('details updated') || m.includes('details was updated')) return 'details';
-                    if (m.includes('email sent') || m.includes('emailed to') || m.includes('resend') || m.includes('send to email')) return 'email';
-                    return 'default';
-                  };
+                  // Parsing and classification live in lib/processHistory so the
+                  // API routes that write these notes share one definition.
+                  const auditEntries = parseProcessNotes(selectedApplication.notes);
 
                   const eventConfig = {
                     submitted:    { Icon: CheckCircle,    dot: 'bg-green-500',  iconColor: 'text-green-600',  label: null },
@@ -5240,6 +5215,12 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                     paid:         { Icon: CreditCard,     dot: 'bg-green-500',  iconColor: 'text-green-600',  label: null },
                     details:      { Icon: PenLine,        dot: 'bg-gray-500',   iconColor: 'text-gray-500',   label: null },
                     email:        { Icon: Send,           dot: 'bg-sky-500',    iconColor: 'text-sky-600',    label: null },
+                    // Lender questionnaire steps read slate → blue → sky in time
+                    // order. Green is reserved for submitted/paid.
+                    lq_original:  { Icon: Paperclip,      dot: 'bg-amber-500',  iconColor: 'text-amber-600',  label: null },
+                    lq_download:  { Icon: Download,       dot: 'bg-slate-500',  iconColor: 'text-slate-600',  label: null },
+                    lq_upload:    { Icon: FileCheck,      dot: 'bg-blue-500',   iconColor: 'text-blue-600',   label: null },
+                    lq_edit:      { Icon: PenLine,        dot: 'bg-violet-500', iconColor: 'text-violet-600', label: null },
                     default:      { Icon: Clock,          dot: 'bg-gray-400',   iconColor: 'text-gray-400',   label: null },
                   };
 
@@ -5256,11 +5237,8 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                     });
                   }
 
-                  auditEntries.forEach(entry => {
-                    const match = entry.match(/^\[(\d{4}-\d{2}-\d{2}T[\d:.]+Z)\]\s*([\s\S]*)/);
-                    if (!match) return;
-                    const [, timestamp, message] = match;
-                    timelineEntries.push({ timestamp, message, type: classify(message) });
+                  auditEntries.forEach(({ timestamp, message }) => {
+                    timelineEntries.push({ timestamp, message, type: classifyProcessNote(message) });
                   });
 
                   timelineEntries.sort((a, b) => {
@@ -6360,17 +6338,17 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                       </h3>
                     <div className='flex flex-col gap-3'>
                       {(() => {
-                        const auditPattern = /^\[\d{4}-\d{2}-\d{2}T[\d:.]+Z\]/;
-                        const chunks = (selectedApplication.notes || '').split('\n\n');
-                        const auditEntries = chunks.filter(c => auditPattern.test(c.trim()));
-                        const regularNotes = chunks.filter(c => !auditPattern.test(c.trim())).join('\n\n');
+                        // Only free text is editable; audit chunks are re-attached
+                        // verbatim on save, since /api/save-comments overwrites
+                        // the whole notes column with whatever we send.
+                        const { auditChunks, freeText: regularNotes } = splitProcessNotes(selectedApplication.notes);
                         return (
                           <textarea
                             value={regularNotes}
                             onChange={(e) => {
                               const newRegular = e.target.value;
-                              const combined = auditEntries.length > 0
-                                ? `${auditEntries.join('\n\n')}${newRegular ? '\n\n' + newRegular : ''}`
+                              const combined = auditChunks.length > 0
+                                ? `${auditChunks.join('\n\n')}${newRegular ? '\n\n' + newRegular : ''}`
                                 : newRegular;
                               setSelectedApplication({ ...selectedApplication, notes: combined });
                             }}

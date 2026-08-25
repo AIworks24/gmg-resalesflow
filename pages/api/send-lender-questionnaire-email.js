@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
+import { appendProcessNote, resolveActorName } from '../../lib/processHistoryServer';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -173,6 +174,18 @@ export default async function handler(req, res) {
       console.error('Failed to update application status:', updateError);
       // Don't fail the request if status update fails
     }
+
+    // Worded "emailed to ..." on purpose so it classifies as an 'email' event and
+    // renders identically to a resale certificate email entry.
+    const actor = await resolveActorName(req, res);
+    if (!actor.authenticated) {
+      console.warn(`[send-lq-email] unauthenticated call for application ${applicationId}`);
+    }
+    await appendProcessNote(
+      supabase,
+      applicationId,
+      `Lender questionnaire emailed to ${application.submitter_email} by ${actor.name}.`
+    );
 
     return res.status(200).json({
       success: true,

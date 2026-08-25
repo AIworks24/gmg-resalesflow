@@ -10,6 +10,33 @@ const TRANSFER_THRESHOLD_CENTS = 20000; // $200.00 — minimum base price to tri
 const TRANSFER_AMOUNT_PER_PROPERTY_CENTS = 2100; // $21.00 per additional property
 
 
+/**
+ * The assignee a property would produce on its own, using the same rule as
+ * autoAssignApplication: settlement applications route to the accounting user in
+ * settlement_assignee_email, everything else to the community manager in
+ * default_assignee_email (falling back to the first property owner email).
+ */
+function deriveAssigneeEmail(property, applicationType) {
+  if (!property) return null;
+
+  const isSettlement = applicationType === 'settlement_va' || applicationType === 'settlement_nc';
+  if (isSettlement) {
+    const settlementEmail = property.settlement_assignee_email?.trim();
+    if (settlementEmail) return settlementEmail;
+  }
+
+  const ownerEmails = parseEmails(property.property_owner_email);
+  if (!ownerEmails.length) return null;
+
+  const defaultEmail = (property.default_assignee_email || '').trim();
+  if (defaultEmail && ownerEmails.some(e => e.toLowerCase() === defaultEmail.toLowerCase())) {
+    return defaultEmail;
+  }
+  return ownerEmails[0];
+}
+
+const sameEmail = (a, b) => (a || '').trim().toLowerCase() === (b || '').trim().toLowerCase();
+
 function getDocumentLabel(applicationType) {
   if (applicationType === 'settlement_va' || applicationType === 'settlement_nc') return 'Settlement Statement';
   if (applicationType === 'lender_questionnaire') return 'Lender Questionnaire';
@@ -53,7 +80,7 @@ export default async function handler(req, res) {
     // Fetch the application
     const { data: application, error: appError } = await supabase
       .from('applications')
-      .select('id, hoa_property_id, application_type, package_type, payment_method, total_amount, notes, submitter_email, submitter_name, property_address, is_test_transaction, stripe_session_id, correction_stripe_session_id, status, payment_status')
+      .select('id, hoa_property_id, application_type, package_type, payment_method, total_amount, notes, submitter_email, submitter_name, property_address, is_test_transaction, stripe_session_id, correction_stripe_session_id, status, payment_status, assigned_to')
       .eq('id', applicationId)
       .single();
 
@@ -96,7 +123,7 @@ export default async function handler(req, res) {
     // Fetch old primary property name for audit trail
     const { data: oldPrimary } = await supabase
       .from('hoa_properties')
-      .select('name')
+      .select('name, property_owner_email, default_assignee_email, settlement_assignee_email')
       .eq('id', application.hoa_property_id)
       .single();
     const oldPrimaryName = oldPrimary?.name || `ID ${application.hoa_property_id}`;
@@ -104,7 +131,7 @@ export default async function handler(req, res) {
     // Fetch new primary property
     const { data: newPrimary, error: propError } = await supabase
       .from('hoa_properties')
-      .select('id, name, location, is_multi_community, property_owner_email')
+      .select('id, name, location, is_multi_community, property_owner_email, default_assignee_email, settlement_assignee_email')
       .eq('id', newPrimaryPropertyId)
       .is('deleted_at', null)
       .single();
@@ -294,6 +321,19 @@ export default async function handler(req, res) {
       }
     }
 
+    // The assignee follows the primary property, but only when it was auto-assigned.
+    // If an admin manually picked someone the current value won't match what the old
+    // property would have produced, and that deliberate choice is left alone.
+    const oldDerivedAssignee = deriveAssigneeEmail(oldPrimary, application.application_type);
+    const newDerivedAssignee = deriveAssigneeEmail(newPrimary, newApplicationType);
+    const wasAutoAssigned = !application.assigned_to?.trim()
+      || sameEmail(application.assigned_to, oldDerivedAssignee);
+
+    if (newDerivedAssignee && wasAutoAssigned && !sameEmail(application.assigned_to, newDerivedAssignee)) {
+      appUpdate.assigned_to = newDerivedAssignee;
+      console.log(`[correct-primary-property] Reassigning application ${applicationId} from ${application.assigned_to || 'unassigned'} to ${newDerivedAssignee}`);
+    }
+
     const { error: updateError } = await supabase
       .from('applications')
       .update(appUpdate)
@@ -350,6 +390,21 @@ export default async function handler(req, res) {
 
     if (insertError) {
       return res.status(500).json({ error: 'Failed to create new property groups', detail: insertError.message, hint: insertError.hint });
+    }
+
+    // 3.4 Rebuilding the groups above dropped their assigned_to. For settlement apps,
+    // re-stamp each group with its property's settlement assignee — same step
+    // create-property-groups.js runs after it builds groups. Non-fatal: the UI falls back
+    // to the property default when a group is unassigned.
+    const isSettlementApp = ['settlement_va', 'settlement_nc'].includes(newApplicationType);
+    if (isSettlementApp) {
+      try {
+        const { autoAssignSettlementMCGroups } = await import('../auto-assign-application');
+        await autoAssignSettlementMCGroups(applicationId, supabase);
+        console.log(`[correct-primary-property] Settlement group assignment complete for application ${applicationId}`);
+      } catch (assignError) {
+        console.warn(`[correct-primary-property] Failed to assign settlement groups for application ${applicationId}:`, assignError);
+      }
     }
 
     // 3.5 Create per-group property owner forms immediately (idempotent).
