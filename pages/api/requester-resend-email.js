@@ -7,6 +7,7 @@
 import { createPagesServerClient } from '@supabase/auth-helpers-nextjs';
 import { createClient } from '@supabase/supabase-js';
 import { sendApprovalEmail } from '../../lib/emailService';
+import { buildAttachmentDownloadLinks } from '../../lib/applicationAttachments';
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -412,25 +413,10 @@ async function buildDownloadLinks(
     }
   }
 
-  // 4. Application-specific attachments
+  // 4. Files uploaded for this application only: its property documents, then additional files.
+  // Multi-community: each property's files live in their own sub-folder and go only in its email.
   try {
-    const { data: appAttachmentsList } = await supabase.storage
-      .from('bucket0')
-      .list(`application_attachments/${applicationId}`, { limit: 100, offset: 0 });
-    for (const file of appAttachmentsList || []) {
-      const { data: urlData } = await supabase.storage
-        .from('bucket0')
-        .createSignedUrl(`application_attachments/${applicationId}/${file.name}`, EXPIRY_30_DAYS);
-      if (urlData?.signedUrl) {
-        downloadLinks.push({
-          filename: file.name.replace(/^\d+_/, ''),
-          downloadUrl: urlData.signedUrl,
-          type: 'document',
-          description: 'Additional Document',
-          size: file.metadata?.size || 'Unknown',
-        });
-      }
-    }
+    downloadLinks.push(...await buildAttachmentDownloadLinks(supabase, applicationId, propertyGroupId, EXPIRY_30_DAYS));
   } catch (err) {
     console.error('[requester-resend] Error adding application attachments:', err);
   }
