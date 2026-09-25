@@ -34,7 +34,9 @@ import {
   ArrowDown,
   Filter,
   Tag,
-  RotateCcw
+  RotateCcw,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 import { 
   getLinkedProperties, 
@@ -47,6 +49,8 @@ import { parseEmails, formatEmailsForStorage, validateEmails } from '../../lib/e
 import MultiEmailInput from '../common/MultiEmailInput';
 import AdminLayout from './AdminLayout';
 import useAdminAuthStore from '../../stores/adminAuthStore';
+import { countPropertyApplications } from '../../lib/propertyStatus';
+import PropertyLiveWarning from './PropertyLiveWarning';
 
 // Helper function to normalize location value for dropdown
 const normalizeLocation = (location) => {
@@ -545,6 +549,32 @@ function PerUserBuilderPricingPanel({ propertyId, userRole, supabase }) {
   );
 }
 
+// Draft badge, plus a warning when a published MC primary is hidden by a draft linked property
+function PropertyStatusBadges({ property }) {
+  const draftLinked = property.draft_linked_names || [];
+  return (
+    <>
+      {property.status === 'draft' && (
+        <span
+          className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-amber-50 text-amber-700 border border-amber-200"
+          title="Not visible to requesters until an admin publishes it"
+        >
+          Draft
+        </span>
+      )}
+      {property.status !== 'draft' && draftLinked.length > 0 && (
+        <span
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-orange-50 text-orange-700 border border-orange-200"
+          title={`Hidden from requesters: linked ${draftLinked.length === 1 ? 'property' : 'properties'} ${draftLinked.join(', ')} ${draftLinked.length === 1 ? 'is' : 'are'} in Draft`}
+        >
+          <AlertTriangle className="w-3 h-3" />
+          Hidden: linked Draft
+        </span>
+      )}
+    </>
+  );
+}
+
 // ─── Main component ───────────────────────────────────────────────────────────
 
 const AdminPropertiesManagement = () => {
@@ -554,7 +584,12 @@ const AdminPropertiesManagement = () => {
   const [sortOrder, setSortOrder] = useState('asc');
   const [locationFilter, setLocationFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
-  const [statusFilter, setStatusFilter] = useState('active'); // 'active' | 'retired'
+  const [statusFilter, setStatusFilter] = useState('active'); // 'active' | 'published' | 'draft' | 'retired'
+  const isAdminUser = userRole === 'admin';
+  // New properties start in Draft; only admins may publish on create
+  const [publishImmediately, setPublishImmediately] = useState(false);
+  const [statusChangeTarget, setStatusChangeTarget] = useState(null); // { property, status, inProgress }
+  const [isChangingStatus, setIsChangingStatus] = useState(false);
   const [showModal, setShowModal] = useState(false);
   const [modalMode, setModalMode] = useState('add'); // 'add' or 'edit'
   const [selectedProperty, setSelectedProperty] = useState(null);
@@ -767,6 +802,7 @@ const AdminPropertiesManagement = () => {
     setLinkedProperties([]);
     setOwnerNameFromGmg(false);
     setNewInfoPacketDomain('');
+    setPublishImmediately(false);
     setShowModal(true);
   };
 
@@ -908,6 +944,9 @@ const AdminPropertiesManagement = () => {
             force_price_value: formData.force_price_enabled ? (formData.force_price_value || null) : null,
             multi_community_comment: formData.multi_community_comment || null,
             settlement_assignee_email: formData.settlement_assignee_email || null,
+            // Non-admin inserts are forced to draft by a DB trigger regardless of this value
+            status: isAdminUser && publishImmediately ? 'published' : 'draft',
+            published_at: isAdminUser && publishImmediately ? new Date().toISOString() : null,
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString()
           }])
@@ -1028,7 +1067,12 @@ const AdminPropertiesManagement = () => {
       }
       
       // Show success message
-      showSnackbar('Property saved successfully!', 'success');
+      showSnackbar(
+        modalMode === 'add' && updatedProperty?.status === 'draft'
+          ? 'Property saved as Draft — requesters will not see it until an admin publishes it.'
+          : 'Property saved successfully!',
+        'success'
+      );
     } catch (error) {
       console.error('Error saving property:', error);
       console.error('Full error details:', JSON.stringify(error, null, 2));
@@ -1040,50 +1084,7 @@ const AdminPropertiesManagement = () => {
     }
   };
 
-  // Count the real orders attached to a property, counting each application once whether it is
-  // attached directly (single community) or through a multi-community group. Drafts and unpaid
-  // carts are not orders, so they are excluded the same way /api/admin/applications excludes them.
-  const countRelatedApplications = async (propertyId) => {
-    const [{ data: directApps }, { data: groupRows }] = await Promise.all([
-      supabase
-        .from('applications')
-        .select('id, status')
-        .eq('hoa_property_id', propertyId)
-        .is('deleted_at', null),
-      supabase
-        .from('application_property_groups')
-        .select('application_id')
-        .eq('property_id', propertyId),
-    ]);
-
-    const byId = new Map();
-    (directApps || []).forEach((app) => byId.set(app.id, app.status));
-
-    // Applications reached via a group need their status looked up separately.
-    const groupAppIds = (groupRows || [])
-      .map((row) => row.application_id)
-      .filter((id) => id && !byId.has(id));
-
-    if (groupAppIds.length > 0) {
-      const { data: groupApps } = await supabase
-        .from('applications')
-        .select('id, status')
-        .in('id', groupAppIds)
-        .is('deleted_at', null);
-      (groupApps || []).forEach((app) => byId.set(app.id, app.status));
-    }
-
-    const statuses = Array.from(byId.values()).filter(
-      (status) => status !== 'draft' && status !== 'pending_payment'
-    );
-
-    return {
-      total: statuses.length,
-      inProgress: statuses.filter(
-        (status) => status !== 'completed' && status !== 'rejected'
-      ).length,
-    };
-  };
+  const countRelatedApplications = (propertyId) => countPropertyApplications(supabase, propertyId);
 
   const openDeleteConfirm = async (property) => {
     setPropertyToDelete(property);
@@ -1163,13 +1164,82 @@ const AdminPropertiesManagement = () => {
       setIsRestoring(false);
       mutate();
 
-      showSnackbar(`"${restoredName}" restored and available for new orders again.`, 'success');
+      showSnackbar(
+        propertyToRestore.status === 'draft'
+          ? `"${restoredName}" restored. It is still in Draft — publish it to accept new orders.`
+          : `"${restoredName}" restored and available for new orders again.`,
+        'success'
+      );
     } catch (error) {
       console.error('Error restoring property:', error);
       showSnackbar('Error restoring property: ' + (error.message || 'Unknown error occurred'), 'error');
       setIsRestoring(false);
     }
   };
+
+  // Publish / Move to Draft (admin only). Moving to Draft pauses document emails for the
+  // property's open applications, so the confirm dialog shows how many are affected.
+  const openStatusChangeConfirm = async (property, status) => {
+    let inProgress = 0;
+    if (status === 'draft') {
+      try {
+        ({ inProgress } = await countRelatedApplications(property.id));
+      } catch (error) {
+        console.error('Error checking related applications:', error);
+      }
+    }
+    setStatusChangeTarget({ property, status, inProgress });
+  };
+
+  const handleStatusChange = async () => {
+    if (!statusChangeTarget || isChangingStatus) return;
+    const { property, status } = statusChangeTarget;
+
+    setIsChangingStatus(true);
+    try {
+      const response = await fetch('/api/admin/set-property-status', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ propertyId: property.id, status }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Failed to update property status');
+
+      setStatusChangeTarget(null);
+      mutate();
+      showSnackbar(
+        status === 'published'
+          ? `"${property.name}" is published and visible to requesters.`
+          : `"${property.name}" moved to Draft. Requesters can no longer see it and document emails are paused.`,
+        'success'
+      );
+    } catch (error) {
+      console.error('Error changing property status:', error);
+      showSnackbar('Error changing property status: ' + (error.message || 'Unknown error occurred'), 'error');
+    } finally {
+      setIsChangingStatus(false);
+    }
+  };
+
+  // Realtime: reflect publish/draft changes made by other admins without a refresh.
+  // mutate is bound to the current SWR key, so read it through a ref to follow filter changes.
+  const mutateRef = useRef(mutate);
+  mutateRef.current = mutate;
+  useEffect(() => {
+    let timer;
+    const channel = supabase
+      .channel('admin-properties-status')
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'hoa_properties' }, () => {
+        clearTimeout(timer);
+        timer = setTimeout(() => mutateRef.current(), 500);
+      })
+      .subscribe();
+
+    return () => {
+      clearTimeout(timer);
+      supabase.removeChannel(channel);
+    };
+  }, []);
 
   const handleSearch = (value) => {
     setSearchTerm(value);
@@ -1724,7 +1794,9 @@ const AdminPropertiesManagement = () => {
                       onChange={(e) => setStatusFilter(e.target.value)}
                       className="w-full pl-3 pr-8 py-2.5 bg-white border border-gray-200 rounded-lg text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 appearance-none transition-all"
                     >
-                      <option value="active">Active</option>
+                      <option value="active">All Active</option>
+                      <option value="published">Published</option>
+                      <option value="draft">Draft</option>
                       <option value="retired">Retired</option>
                     </select>
                     <div className="absolute inset-y-0 right-0 pr-2 flex items-center pointer-events-none">
@@ -1797,8 +1869,9 @@ const AdminPropertiesManagement = () => {
                 properties.map((property) => (
                 <tr key={property.id} className="hover:bg-blue-50/30 transition-colors">
                   <td className="px-6 py-4 whitespace-nowrap">
-                    <div className="text-sm font-semibold text-gray-900">
+                    <div className="flex items-center gap-2 text-sm font-semibold text-gray-900">
                       {property.name}
+                      <PropertyStatusBadges property={property} />
                     </div>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-center">
@@ -1877,6 +1950,26 @@ const AdminPropertiesManagement = () => {
                       </div>
                     ) : (
                     <div className="flex items-center justify-center gap-2">
+                      {isAdminUser && (
+                        property.status === 'draft' ? (
+                          <button
+                            onClick={() => openStatusChangeConfirm(property, 'published')}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg hover:bg-emerald-100 transition-colors"
+                            title="Publish — make visible to requesters"
+                          >
+                            <Eye className="w-3.5 h-3.5" />
+                            Publish
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => openStatusChangeConfirm(property, 'draft')}
+                            className="p-1.5 text-amber-600 hover:bg-amber-50 hover:shadow-[0_0_8px_rgba(217,119,6,0.4)] rounded-lg transition-all"
+                            title="Move to Draft — hide from requesters and pause document emails"
+                          >
+                            <EyeOff className="w-4 h-4" />
+                          </button>
+                        )
+                      )}
                       <button
                         onClick={() => router.push(`/admin/property-files/${property.id}`)}
                         className="p-1.5 text-green-600 hover:bg-green-50 hover:shadow-[0_0_8px_rgba(22,163,74,0.4)] rounded-lg transition-all"
@@ -1936,6 +2029,9 @@ const AdminPropertiesManagement = () => {
                   <div>
                     <h3 className="text-base font-semibold text-gray-900">{property.name}</h3>
                     <p className="text-sm text-gray-500 mt-0.5">{property.location || 'N/A'}</p>
+                    <div className="flex flex-wrap gap-1 mt-1">
+                      <PropertyStatusBadges property={property} />
+                    </div>
                   </div>
                   {property.is_multi_community ? (
                     <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-50 text-blue-700 border border-blue-100">
@@ -2001,6 +2097,19 @@ const AdminPropertiesManagement = () => {
                     </button>
                   ) : (
                     <>
+                      {isAdminUser && (
+                        <button
+                          onClick={() => openStatusChangeConfirm(property, property.status === 'draft' ? 'published' : 'draft')}
+                          className={`flex items-center justify-center p-2 rounded-lg transition-colors ${
+                            property.status === 'draft'
+                              ? 'text-emerald-700 bg-emerald-50 hover:bg-emerald-100'
+                              : 'text-amber-600 bg-amber-50 hover:bg-amber-100'
+                          }`}
+                          title={property.status === 'draft' ? 'Publish' : 'Move to Draft'}
+                        >
+                          {property.status === 'draft' ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
+                        </button>
+                      )}
                       <button
                         onClick={() => router.push(`/admin/property-files/${property.id}`)}
                         className="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 text-sm text-green-600 bg-green-50 rounded-lg hover:bg-green-100 transition-colors"
@@ -2127,6 +2236,17 @@ const AdminPropertiesManagement = () => {
               </div>
 
               <form onSubmit={handleSubmit} className="space-y-4">
+                {modalMode === 'edit' && (
+                  <PropertyLiveWarning
+                    property={selectedProperty}
+                    isAdmin={isAdminUser}
+                    onStatusChanged={(updated) => {
+                      setSelectedProperty((prev) => ({ ...prev, ...updated }));
+                      mutate();
+                    }}
+                  />
+                )}
+
                 {/* Property Information */}
                 <div className="grid grid-cols-1 gap-4">
                   <div>
@@ -2543,6 +2663,33 @@ const AdminPropertiesManagement = () => {
                   />
                 </div>
 
+                {/* Publish status — new properties start in Draft */}
+                {modalMode === 'add' && (
+                  <div className="border-t pt-4">
+                    {isAdminUser ? (
+                      <label className="flex items-start gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={publishImmediately}
+                          onChange={(e) => setPublishImmediately(e.target.checked)}
+                          className="mt-0.5 h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                        />
+                        <span className="text-sm text-gray-700">
+                          <span className="font-medium">Publish immediately</span>
+                          <span className="block text-xs text-gray-500">
+                            Leave unchecked to save as Draft — requesters won&apos;t see it until you publish it.
+                          </span>
+                        </span>
+                      </label>
+                    ) : (
+                      <p className="flex items-start gap-2 text-sm text-gray-600">
+                        <Info className="w-4 h-4 mt-0.5 text-gray-400 flex-shrink-0" />
+                        This property will be saved as Draft. An admin must publish it before requesters can order.
+                      </p>
+                    )}
+                  </div>
+                )}
+
                 <div className="flex justify-end gap-3 pt-4">
                   <button
                     type="button"
@@ -2593,6 +2740,15 @@ const AdminPropertiesManagement = () => {
 
               {/* Modal Body */}
               <div className="flex-1 overflow-y-auto p-6 space-y-8">
+                <PropertyLiveWarning
+                  property={linkingProperty}
+                  isAdmin={isAdminUser}
+                  onStatusChanged={(updated) => {
+                    setLinkingProperty((prev) => ({ ...prev, ...updated }));
+                    mutate();
+                  }}
+                />
+
                 {/* 1. Primary Property Section */}
                 <section>
                   <div className="flex items-center gap-2 mb-4">
@@ -2887,6 +3043,70 @@ const AdminPropertiesManagement = () => {
                     <RefreshCw className="w-4 h-4 animate-spin" />
                   )}
                   {isDeleting ? 'Removing...' : 'Remove Property'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Publish / Move to Draft Confirmation Modal */}
+        {statusChangeTarget && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+            <div className="bg-white rounded-lg max-w-md w-full p-6">
+              <div className="flex items-center gap-3 mb-4">
+                {statusChangeTarget.status === 'published'
+                  ? <Eye className="w-6 h-6 text-emerald-600" />
+                  : <EyeOff className="w-6 h-6 text-amber-600" />}
+                <h2 className="text-lg font-semibold">
+                  {statusChangeTarget.status === 'published' ? 'Publish Property' : 'Move to Draft'}
+                </h2>
+              </div>
+              {statusChangeTarget.status === 'published' ? (
+                <div className="text-gray-700 mb-6 space-y-2">
+                  <p>
+                    Publish <strong>&quot;{statusChangeTarget.property.name}&quot;</strong>? Requesters will be able to
+                    find it and place orders immediately, and paused document emails can be sent again.
+                  </p>
+                  {(statusChangeTarget.property.draft_linked_names || []).length > 0 && (
+                    <p className="text-sm text-orange-700 bg-orange-50 border border-orange-200 rounded p-2">
+                      Linked {statusChangeTarget.property.draft_linked_names.join(', ')} still in Draft — this
+                      multi-community property stays hidden until those are published too.
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <div className="text-gray-700 mb-6 space-y-2">
+                  <p>
+                    Move <strong>&quot;{statusChangeTarget.property.name}&quot;</strong> to Draft? Requesters will no
+                    longer see it (including multi-community properties it is linked to), and document emails for its
+                    existing applications will be paused until it is published again.
+                  </p>
+                  {statusChangeTarget.inProgress > 0 && (
+                    <p className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded p-2">
+                      {statusChangeTarget.inProgress} open application(s) will have document emails paused.
+                    </p>
+                  )}
+                </div>
+              )}
+              <div className="flex justify-end gap-3">
+                <button
+                  onClick={() => { if (!isChangingStatus) setStatusChangeTarget(null); }}
+                  disabled={isChangingStatus}
+                  className="px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleStatusChange}
+                  disabled={isChangingStatus}
+                  className={`px-4 py-2 text-white rounded-md disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 ${
+                    statusChangeTarget.status === 'published' ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-amber-600 hover:bg-amber-700'
+                  }`}
+                >
+                  {isChangingStatus && <RefreshCw className="w-4 h-4 animate-spin" />}
+                  {statusChangeTarget.status === 'published'
+                    ? (isChangingStatus ? 'Publishing...' : 'Publish')
+                    : (isChangingStatus ? 'Moving...' : 'Move to Draft')}
                 </button>
               </div>
             </div>

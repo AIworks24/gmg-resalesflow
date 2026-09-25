@@ -6,6 +6,7 @@ import { AdminAuthProvider } from '../providers/AdminAuthProvider'
 import { ApplicantAuthProvider } from '../providers/ApplicantAuthProvider'
 import PostHogProvider from '../providers/PostHogProvider'
 import ConnectionStatusIndicator from '../components/ConnectionStatusIndicator'
+import RealtimeProvider from '../components/admin/realtime/RealtimeProvider'
 
 function AppWithAuth({ Component, pageProps }) {
   const router = useRouter()
@@ -14,7 +15,9 @@ function AppWithAuth({ Component, pageProps }) {
   if (isAdminRoute) {
     return (
       <AdminAuthProvider>
-        <Component {...pageProps} />
+        <RealtimeProvider>
+          <Component {...pageProps} />
+        </RealtimeProvider>
       </AdminAuthProvider>
     )
   }

@@ -1,0 +1,34 @@
+{
+  // Realtime server for admin "who did what" events (see server.js header).
+  //
+  // Deploy (from this folder):
+  //   npx wrangler deploy --env test   -> gmg-resalesflow-party-test.<account>.workers.dev
+  //   npx wrangler deploy              -> gmg-resalesflow-party.<account>.workers.dev (live)
+  // Secrets (per env, add --env test for test):
+  //   npx wrangler secret put REALTIME_TICKET_SECRET
+  //   npx wrangler secret put REALTIME_PUBLISH_SECRET
+  // Local dev: create party/.dev.vars with both secrets, then `npx wrangler dev --port 1999`.
+  "name": "gmg-resalesflow-party",
+  "main": "server.js",
+  "compatibility_date": "2025-01-01",
+  "observability": { "enabled": true },
+  "vars": {
+    "ALLOWED_ORIGINS": "https://resales.gmgva.com"
+  },
+  "durable_objects": {
+    "bindings": [{ "name": "Main", "class_name": "Main" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Main"] }],
+  "env": {
+    "test": {
+      "name": "gmg-resalesflow-party-test",
+      // localhost + this project's Vercel previews (incl. gmg-resalesflow-git-test-…)
+      "vars": {
+        "ALLOWED_ORIGINS": "http://localhost:3000,https://gmg-resalesflow-*-matts-projects-445a3d16.vercel.app"
+      },
+      "durable_objects": {
+        "bindings": [{ "name": "Main", "class_name": "Main" }]
+      }
+    }
+  }
+}

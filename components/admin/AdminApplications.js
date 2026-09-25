@@ -68,6 +68,8 @@ import { useRouter } from 'next/router';
 import { mapFormDataToPDFFields } from '../../lib/pdfFieldMapper';
 import { formatDate, formatDateTime, formatDateTimeFull, formatFormCompletionDateTime } from '../../lib/timeUtils';
 import { parseEmails } from '../../lib/emailUtils';
+import { isPropertyDraft, PROPERTY_DRAFT_MESSAGE } from '../../lib/propertyStatus';
+import usePropertyWatch from './realtime/usePropertyWatch';
 import AdminPropertyInspectionForm from './AdminPropertyInspectionForm';
 import AdminResaleCertificateForm from './AdminResaleCertificateForm';
 import AdminSettlementForm from './AdminSettlementForm';
@@ -156,6 +158,17 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
   const [loadingFormKey, setLoadingFormKey] = useState(null); // scope loading to a specific button
   const [completingTaskKey, setCompletingTaskKey] = useState(null); // e.g. 'inspection:123' or 'resale:123' for Mark Complete loading
   const [propertyGroups, setPropertyGroups] = useState([]);
+  // Document emails are paused while the application's property (or an MC group's property) is in Draft
+  const draftGroupNames = propertyGroups.filter((g) => isPropertyDraft(g.hoa_properties)).map((g) => g.property_name);
+  const primaryPropertyDraft = isPropertyDraft(selectedApplication?.hoa_properties);
+  const documentEmailsPaused = primaryPropertyDraft || draftGroupNames.length > 0;
+  const allGroupsDraft = propertyGroups.length > 0 && draftGroupNames.length === propertyGroups.length;
+  // Realtime toast (PartyKit) when another admin publishes / drafts the open application's property
+  usePropertyWatch(
+    selectedApplication
+      ? [selectedApplication.hoa_property_id, ...propertyGroups.map((g) => g.property_id)]
+      : []
+  );
   const [loadingGroups, setLoadingGroups] = useState(false);
   const [sendingGroupEmail, setSendingGroupEmail] = useState(null);
   const [regeneratingGroupDocs, setRegeneratingGroupDocs] = useState(null);
@@ -478,13 +491,41 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
         }
       });
 
+    // Property publish/draft changes: refresh the open application so the "Draft — emails paused"
+    // banner and disabled send buttons follow the property's status live.
+    let propertyUpdateTimer = null;
+    const propertiesChannel = supabase
+      .channel('hoa-properties-status-changes')
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'hoa_properties' },
+        (payload) => {
+          const openApp = selectedApplicationRef.current;
+          if (!openApp) return;
+          const propertyId = payload.new?.id;
+          const affectsOpenApp =
+            openApp.hoa_property_id === propertyId ||
+            (openApp.application_property_groups || []).some((g) => g.property_id === propertyId);
+          if (!affectsOpenApp) return;
+          if (propertyUpdateTimer) clearTimeout(propertyUpdateTimer);
+          propertyUpdateTimer = setTimeout(() => {
+            refreshSelectedApplicationRef.current?.(openApp.id)?.catch(err =>
+              console.warn('Failed to refresh selected application after property update:', err)
+            );
+          }, 500);
+        }
+      )
+      .subscribe();
+
     // Cleanup subscriptions on unmount
     return () => {
       console.log('🧹 Cleaning up real-time subscriptions');
       if (groupInsertTimer) clearTimeout(groupInsertTimer);
       if (groupUpdateTimer) clearTimeout(groupUpdateTimer);
+      if (propertyUpdateTimer) clearTimeout(propertyUpdateTimer);
       supabase.removeChannel(channel);
       supabase.removeChannel(groupsChannel);
+      supabase.removeChannel(propertiesChannel);
     };
   }, [supabase, mutate]); // Removed swrData from dependencies to avoid recreating subscription
 
@@ -2234,7 +2275,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
         .from('applications')
         .select(`
           *,
-          hoa_properties(name, property_owner_email, property_owner_name, is_multi_community),
+          hoa_properties(name, status, property_owner_email, property_owner_name, is_multi_community),
           property_owner_forms(id, form_type, status, completed_at, form_data, response_data, property_group_id),
           notifications(id, notification_type, status, sent_at),
           application_property_groups(
@@ -2257,7 +2298,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
             form_data,
             property_id,
             updated_at,
-            hoa_properties(id, name, location, property_owner_email, property_owner_name, default_assignee_email, settlement_assignee_email)
+            hoa_properties(id, name, status, location, property_owner_email, property_owner_name, default_assignee_email, settlement_assignee_email)
           )
         `)
         .eq('id', application.id)
@@ -2359,7 +2400,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
             .from('applications')
             .select(`
               *,
-              hoa_properties(name, property_owner_email, property_owner_name, is_multi_community),
+              hoa_properties(name, status, property_owner_email, property_owner_name, is_multi_community),
               property_owner_forms(id, form_type, status, completed_at, form_data, response_data, property_group_id),
               notifications(id, notification_type, status, sent_at)
             `)
@@ -2391,7 +2432,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
         .from('applications')
         .select(`
           *,
-          hoa_properties(name, property_owner_email, property_owner_name, is_multi_community)
+          hoa_properties(name, status, property_owner_email, property_owner_name, is_multi_community)
         `)
         .eq('id', applicationId)
         .is('deleted_at', null) // Only get non-deleted applications
@@ -2557,12 +2598,12 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
         .from('applications')
         .select(`
           *,
-          hoa_properties(name, property_owner_email, property_owner_name, is_multi_community),
+          hoa_properties(name, status, property_owner_email, property_owner_name, is_multi_community),
           property_owner_forms(id, form_type, status, completed_at, form_data, response_data, property_group_id),
           notifications(id, notification_type, status, sent_at),
           application_property_groups(id, property_id, property_name, property_location, property_owner_email, assigned_to, is_primary, status, inspection_status, inspection_completed_at, resale_status, resale_completed_at,
             pdf_url, pdf_status, pdf_completed_at, email_status, email_completed_at, updated_at,
-            hoa_properties(id, name, location, property_owner_email, property_owner_name, default_assignee_email, settlement_assignee_email)
+            hoa_properties(id, name, status, location, property_owner_email, property_owner_name, default_assignee_email, settlement_assignee_email)
           )
         `)
         .eq('id', applicationId)
@@ -2931,6 +2972,8 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
       // Handle specific PDF validation errors with helpful messages
       if (error.message.includes('PDF has not been generated')) {
         showSnackbar('PDF has not been generated yet. Please generate the PDF first.', 'error');
+      } else if (error.message.includes('in Draft')) {
+        showSnackbar(error.message, 'error');
       } else {
         showSnackbar('Failed to send email. Please try again.', 'error');
       }
@@ -3224,7 +3267,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
     try {
       const { data, error } = await supabase
         .from('application_property_groups')
-        .select('id, property_id, property_name, property_location, property_owner_email, assigned_to, is_primary, status, inspection_status, inspection_completed_at, resale_status, resale_completed_at, pdf_status, pdf_url, pdf_completed_at, email_status, email_completed_at, form_data, updated_at, hoa_properties(id, name, location, property_owner_email, property_owner_name, default_assignee_email, settlement_assignee_email)')
+        .select('id, property_id, property_name, property_location, property_owner_email, assigned_to, is_primary, status, inspection_status, inspection_completed_at, resale_status, resale_completed_at, pdf_status, pdf_url, pdf_completed_at, email_status, email_completed_at, form_data, updated_at, hoa_properties(id, name, status, location, property_owner_email, property_owner_name, default_assignee_email, settlement_assignee_email)')
         .eq('application_id', applicationId)
         .order('is_primary', { ascending: false })
         .order('created_at', { ascending: true });
@@ -3816,12 +3859,13 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
 
         const { data: networkProperties } = await supabase
           .from('hoa_properties')
-          .select('id, name, location, is_multi_community')
+          .select('id, name, location, is_multi_community, status')
           .in('id', allIds)
           .is('deleted_at', null);
 
+        // Draft properties can't be a correction target (the API rejects them too)
         setMcNetworkProperties(
-          (networkProperties || []).filter(p => p.is_multi_community && p.id !== hoaPropertyId)
+          (networkProperties || []).filter(p => p.is_multi_community && p.id !== hoaPropertyId && !isPropertyDraft(p))
         );
       } catch (err) {
         console.error('Failed to fetch MC network:', err);
@@ -3956,7 +4000,10 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || 'Failed to send emails');
-      showSnackbar(result.message || `All ${result.sent} emails sent successfully`, 'success');
+      showSnackbar(
+        result.message || `All ${result.sent} emails sent successfully`,
+        result.skipped?.length ? 'warning' : 'success'
+      );
       await loadPropertyGroups(applicationId);
       await refreshSelectedApplication(applicationId);
       await forceRefreshWithBypass({ immediate: true });
@@ -4987,6 +5034,21 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
 
               {/* Modal Content */}
               <div className='flex-1 overflow-y-auto custom-scrollbar p-6 space-y-8 bg-gray-50/30'>
+                {/* Property Draft Banner — document emails paused */}
+                {documentEmailsPaused && (
+                  <div className='flex items-start gap-3 rounded-xl border border-amber-300 bg-amber-50 p-4 text-amber-900'>
+                    <AlertTriangle className='w-5 h-5 flex-shrink-0 text-amber-600 mt-0.5' />
+                    <div>
+                      <h3 className='text-sm font-bold'>Property is in Draft — document emails are paused</h3>
+                      <p className='text-sm mt-0.5'>
+                        {draftGroupNames.length > 0 && !primaryPropertyDraft
+                          ? `${draftGroupNames.join(', ')} ${draftGroupNames.length === 1 ? 'is' : 'are'} in Draft. Emails for ${draftGroupNames.length === 1 ? 'that property' : 'those properties'} can be sent once an admin publishes ${draftGroupNames.length === 1 ? 'it' : 'them'}.`
+                          : `${selectedApplication.hoa_properties?.name || 'This property'} is being set up or updated. Document emails can be sent once an admin publishes it. Other work on this application can continue.`}
+                      </p>
+                    </div>
+                  </div>
+                )}
+
                 {/* Processing Locked Banner */}
                 {selectedApplication.processing_locked && (
                   <div className={`rounded-2xl p-5 text-white shadow-lg flex flex-col md:flex-row md:items-center justify-between gap-4 border animate-in fade-in zoom-in-95 duration-300 ${lockCountdown === 'Expired' ? 'bg-red-600 shadow-red-200 border-red-700' : 'bg-amber-500 shadow-amber-200 border-amber-600'}`}>
@@ -5823,7 +5885,8 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                                       setSendingEmail(false);
                                     }
                                   }}
-                                  disabled={(!selectedApplication.lender_questionnaire_completed_file_path && !selectedApplication.lender_questionnaire_edited_file_path) || sendingEmail}
+                                  disabled={(!selectedApplication.lender_questionnaire_completed_file_path && !selectedApplication.lender_questionnaire_edited_file_path) || sendingEmail || documentEmailsPaused}
+                                  title={documentEmailsPaused ? PROPERTY_DRAFT_MESSAGE : undefined}
                                   className='flex items-center gap-2 px-4 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium shadow-sm disabled:opacity-50'
                                 >
                                   <Mail className='w-4 h-4' /> {sendingEmail ? 'Sending...' : 'Send Email'}
@@ -5934,7 +5997,8 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                               setSendingEmail(false);
                             }
                           }}
-                          disabled={sendingEmail}
+                          disabled={sendingEmail || documentEmailsPaused}
+                          title={documentEmailsPaused ? PROPERTY_DRAFT_MESSAGE : undefined}
                           className='flex items-center gap-2 px-4 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium shadow-sm disabled:opacity-50'
                         >
                           {sendingEmail ? (
@@ -6006,7 +6070,8 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                               setSendingEmail(false);
                             }
                           }}
-                          disabled={sendingEmail}
+                          disabled={sendingEmail || documentEmailsPaused}
+                          title={documentEmailsPaused ? PROPERTY_DRAFT_MESSAGE : undefined}
                           className='flex items-center gap-2 px-4 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium shadow-sm disabled:opacity-50'
                         >
                           {sendingEmail ? (
@@ -6071,7 +6136,8 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                             </p>
                             <button
                               onClick={() => handleSendAllMcEmails(selectedApplication.id)}
-                              disabled={sendingAllMcEmails}
+                              disabled={sendingAllMcEmails || allGroupsDraft}
+                              title={allGroupsDraft ? PROPERTY_DRAFT_MESSAGE : undefined}
                               className={`inline-flex items-center gap-2 px-4 py-2.5 text-white rounded-lg font-medium text-sm disabled:opacity-50 disabled:cursor-not-allowed ${allMcEmailsSent ? 'bg-green-600 hover:bg-green-700' : 'bg-blue-600 hover:bg-blue-700'}`}
                             >
                               {sendingAllMcEmails ? (
@@ -6536,7 +6602,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                              
                              <TaskCard step="3" status={taskStatuses.email} title="Send Email" description="Send details to settlement agent" completedAt={selectedApplication.email_completed_at || selectedApplication.notifications?.find(n => n.notification_type === 'application_approved')?.sent_at}>
                                 <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2">
-                                   <button onClick={() => handleSendApprovalEmail(selectedApplication.id)} disabled={!emailCanBeSent || sendingEmail || !!selectedApplication?.processing_locked} className="w-full sm:w-auto px-3 sm:px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 active:bg-blue-800 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed shadow-sm">
+                                   <button onClick={() => handleSendApprovalEmail(selectedApplication.id)} disabled={!emailCanBeSent || sendingEmail || !!selectedApplication?.processing_locked || documentEmailsPaused} title={documentEmailsPaused ? PROPERTY_DRAFT_MESSAGE : undefined} className="w-full sm:w-auto px-3 sm:px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 active:bg-blue-800 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed shadow-sm">
                                       {sendingEmail ? (
                                          <div className="flex items-center gap-1.5">
                                            <RefreshCw className="w-3 h-3 sm:w-4 sm:h-4 animate-spin" />
@@ -6618,7 +6684,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                               <TaskCard step="4" status={taskStatuses.email} title="Send Completion Email" description="Send PDF and files to applicant" completedAt={selectedApplication.email_completed_at || selectedApplication.notifications?.find(n => n.notification_type === 'application_approved')?.sent_at}>
                                  <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2">
                                     <button onClick={() => openAttachmentModal()} className="w-full sm:w-auto px-3 py-2 bg-gray-100 text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-200 active:bg-gray-300 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap">Attachments</button>
-                                    <button onClick={() => handleSendApprovalEmail(selectedApplication.id)} disabled={!emailCanBeSent || sendingEmail || taskStatuses.pdf === 'update_needed' || !!selectedApplication?.processing_locked} className="w-full sm:w-auto px-3 sm:px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 active:bg-blue-800 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed shadow-sm">
+                                    <button onClick={() => handleSendApprovalEmail(selectedApplication.id)} disabled={!emailCanBeSent || sendingEmail || taskStatuses.pdf === 'update_needed' || !!selectedApplication?.processing_locked || documentEmailsPaused} title={documentEmailsPaused ? PROPERTY_DRAFT_MESSAGE : undefined} className="w-full sm:w-auto px-3 sm:px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 active:bg-blue-800 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed shadow-sm">
                                        {sendingEmail ? (
                                           <div className="flex items-center gap-1.5">
                                             <RefreshCw className="w-3 h-3 sm:w-4 sm:h-4 animate-spin" />

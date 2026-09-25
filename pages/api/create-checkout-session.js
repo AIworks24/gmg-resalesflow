@@ -9,8 +9,13 @@ const {
 } = require('../../lib/applicationTypes');
 const { 
   getAllPropertiesForTransaction,
-  calculateMultiCommunityPricing 
+  calculateMultiCommunityPricing
 } = require('../../lib/multiCommunityUtils');
+const {
+  getPropertyOrderability,
+  PROPERTY_UNAVAILABLE_ERROR,
+  PROPERTY_UNAVAILABLE_MESSAGE
+} = require('../../lib/propertyStatus');
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -74,6 +79,12 @@ export default async function handler(req, res) {
         throw new Error('Could not determine property location');
       }
 
+      // Draft properties (or MC primaries with a draft linked property) are not orderable
+      const { orderable, reason } = await getPropertyOrderability(supabase, hoaProperty.id);
+      if (!orderable) {
+        throw Object.assign(new Error(PROPERTY_UNAVAILABLE_MESSAGE), { propertyUnavailable: true, reason });
+      }
+
       applicationType = determineApplicationType(formData.submitterType, hoaProperty, formData.publicOffering, formData.infoPacket);
       
       // Check if this is a multi-community property
@@ -99,6 +110,9 @@ export default async function handler(req, res) {
         allProperties = [hoaProperty];
       }
     } catch (error) {
+      if (error.propertyUnavailable) {
+        return res.status(409).json({ error: PROPERTY_UNAVAILABLE_ERROR, message: PROPERTY_UNAVAILABLE_MESSAGE });
+      }
       console.error('Error determining application type:', error);
         applicationType = 'single_property'; // Fallback to single property
       // Try to get the property for fallback

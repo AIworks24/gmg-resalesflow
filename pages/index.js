@@ -28,6 +28,7 @@ import { getPricing } from '../lib/pricingConfig';
 import { getLinkedProperties, calculateMultiCommunityPricing } from '../lib/multiCommunityUtils';
 import { formatDate, formatDateTime } from '../lib/timeUtils';
 import { parseEmails, formatEmailsForStorage, validateEmails } from '../lib/emailUtils';
+import { isPropertyDraft, PROPERTY_UNAVAILABLE_MESSAGE, PROPERTY_UNAVAILABLE_ERROR } from '../lib/propertyStatus';
 import Image from 'next/image';
 import companyLogo from '../assets/company_logo.png';
 import {
@@ -1438,6 +1439,12 @@ const PackagePaymentStep = ({
       return;
     }
 
+    // The property may have been moved to Draft by an admin while the requester was on this page
+    if (!(hoaProperties || []).some((h) => h.name === formData.hoaProperty)) {
+      setPaymentError(PROPERTY_UNAVAILABLE_MESSAGE);
+      return;
+    }
+
     setIsProcessing(true);
     setPaymentError(null);
 
@@ -1892,6 +1899,10 @@ const PackagePaymentStep = ({
         if (!response.ok) {
           const errorText = await response.text();
           console.error('Checkout session API error:', errorText);
+          if (response.status === 409 && errorText.includes(PROPERTY_UNAVAILABLE_ERROR)) {
+            setPaymentError(PROPERTY_UNAVAILABLE_MESSAGE);
+            return;
+          }
           throw new Error(`Failed to create checkout session: ${response.status} ${response.statusText}`);
         }
 
@@ -4349,7 +4360,8 @@ const ReviewSubmitStep = ({ formData, handleInputChange, stripePrices, applicati
 
 export default function GMGResaleFlow() {
   // Get static data from context
-  const { hoaProperties, stripePrices, isDataLoaded } = useAppContext();
+  // Requesters only see/order published properties (drafts are hidden, updated in realtime)
+  const { orderableHoaProperties: hoaProperties, stripePrices, isDataLoaded } = useAppContext();
   
   // Detect test mode from URL parameter (defaults to LIVE mode)
   const [isTestMode, setIsTestMode] = useState(false);
@@ -4715,7 +4727,7 @@ export default function GMGResaleFlow() {
     try {
       const { data, error } = await supabase
         .from('applications')
-        .select('*, hoa_properties(name, is_multi_community), application_property_groups(*)')
+        .select('*, hoa_properties(name, is_multi_community, status), application_property_groups(*)')
         .eq('id', appId)
         .is('deleted_at', null)
         .maybeSingle();
@@ -4724,6 +4736,12 @@ export default function GMGResaleFlow() {
 
       if (!data) {
         alert('Application not found. It may have been deleted or you don’t have access to it.');
+        return null;
+      }
+
+      // Unsubmitted orders can't be resumed while the property is in Draft (being set up/updated)
+      if (!isPaid(data) && isPropertyDraft(data.hoa_properties)) {
+        alert(PROPERTY_UNAVAILABLE_MESSAGE);
         return null;
       }
 
@@ -4829,7 +4847,8 @@ export default function GMGResaleFlow() {
 
     if (paymentCancelled === 'true' && appId) {
       // Load the application and go back to payment step
-      loadDraftApplication(appId).then(() => {
+      loadDraftApplication(appId).then((applicationData) => {
+        if (!applicationData) return;
         setCurrentStep(4); // Go back to payment step
       }).catch((error) => {
         console.error('Error loading application after payment cancellation:', error);
@@ -6271,6 +6290,7 @@ export default function GMGResaleFlow() {
                                     <button
                                       onClick={() => {
                                         loadDraftApplication(app.id).then((applicationData) => {
+                                          if (!applicationData) return;
                                           if (isPaid(applicationData)) {
                                             if (isLenderQuestionnaireApp(applicationData)) {
                                               // Paid lender questionnaire: finish on the success page,
@@ -6683,6 +6703,7 @@ export default function GMGResaleFlow() {
 
     const handleResume = (app) => {
       loadDraftApplication(app.id).then((applicationData) => {
+        if (!applicationData) return;
         if (isPaid(applicationData)) {
           if (isLenderQuestionnaireApp(applicationData)) {
             // Paid lender questionnaire: finish on the success page, where the
@@ -6963,6 +6984,14 @@ export default function GMGResaleFlow() {
       { number: 5, title: 'Review & Submit', icon: CheckCircle },
     ];
   }, [applicationType]);
+
+  // Selected property dropped out of the orderable list (an admin moved it, or a linked MC
+  // property, to Draft). hoaProperties updates in realtime. Paid orders (step 5 with an id) are unaffected.
+  const selectedPropertyUnavailable =
+    isDataLoaded &&
+    !!formData.hoaProperty &&
+    (currentStep < 5 || !applicationId) &&
+    !(hoaProperties || []).some((h) => h.name === formData.hoaProperty);
 
   const renderStepContent = () => {
     switch (currentStep) {
@@ -7399,6 +7428,16 @@ export default function GMGResaleFlow() {
           </div>
         </div>
 
+        {selectedPropertyUnavailable && (
+          <div className='mb-4 flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800'>
+            <AlertCircle className='h-5 w-5 flex-shrink-0 text-amber-600' />
+            <span>
+              <strong>{formData.hoaProperty}</strong> just became temporarily unavailable. Your details are saved —
+              you can continue once it is available again, or choose a different property.
+            </span>
+          </div>
+        )}
+
         {/* Form Content */}
         <div className='bg-white rounded-lg shadow-sm border border-gray-200 p-4 sm:p-6 md:p-8 mb-4 sm:mb-6 md:mb-8'>
           {renderStepContent()}
@@ -7425,6 +7464,7 @@ export default function GMGResaleFlow() {
                 <button
                   onClick={nextStep}
                   disabled={
+                    selectedPropertyUnavailable ||
                     (currentStep === 1 &&
                       (!formData.hoaProperty || !formData.propertyAddress)) ||
                     (currentStep === 2 &&
@@ -7445,9 +7485,9 @@ export default function GMGResaleFlow() {
               ) : currentStep === 5 && !applicationId ? (
                 <button
                   onClick={handleSubmit}
-                  disabled={isSubmitting}
+                  disabled={isSubmitting || selectedPropertyUnavailable}
                   className={`w-full md:w-auto px-4 sm:px-8 py-3 bg-green-700 text-white rounded-lg transition-colors flex items-center justify-center gap-2 text-sm sm:text-base font-medium ${
-                    isSubmitting 
+                    isSubmitting || selectedPropertyUnavailable
                       ? 'opacity-50 cursor-not-allowed' 
                       : 'hover:bg-green-800'
                   }`}

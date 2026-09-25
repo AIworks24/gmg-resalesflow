@@ -3,16 +3,22 @@ import { useRouter } from 'next/router';
 import { useSupabaseQuerySingle } from '../../../hooks/useSupabaseQuery';
 import AdminLayout from '../../../components/admin/AdminLayout';
 import PropertyFileManagement from '../../../components/admin/PropertyFileManagement';
+import PropertyLiveWarning from '../../../components/admin/PropertyLiveWarning';
+import usePropertyWatch from '../../../components/admin/realtime/usePropertyWatch';
+import useAdminAuthStore from '../../../stores/adminAuthStore';
 import { ArrowLeft, Building, AlertTriangle, RefreshCw } from 'lucide-react';
 
 const PropertyFilesPage = () => {
   const router = useRouter();
   const { id, docKey } = router.query;
+  const { role } = useAdminAuthStore();
   
   // Fetch property using the new hook - only when id is available
   const shouldFetch = id && router.isReady;
   // Parse ID as integer to ensure correct type
   const propertyId = id ? parseInt(id, 10) : null;
+  // Realtime toast when another admin publishes / drafts this property
+  usePropertyWatch(propertyId ? [propertyId] : []);
   const queryOptions = propertyId ? { eq: { id: propertyId } } : {};
   
   const { 
@@ -117,6 +123,13 @@ const PropertyFilesPage = () => {
             </div>
           )}
         </div>
+
+        <PropertyLiveWarning
+          property={property}
+          isAdmin={role === 'admin'}
+          onStatusChanged={() => mutate()}
+          className="mb-6"
+        />
 
         {/* File Management Component */}
         {isLoading ? (

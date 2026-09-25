@@ -1,9 +1,15 @@
 import handler from '../pages/api/send-approval-email';
 import { createPagesServerClient } from '@supabase/auth-helpers-nextjs';
 import { sendApprovalEmail } from '../lib/emailService';
+import { getDeliveryPause } from '../lib/propertyStatus';
 
 jest.mock('@supabase/auth-helpers-nextjs', () => ({ createPagesServerClient: jest.fn() }));
 jest.mock('../lib/emailService', () => ({ sendApprovalEmail: jest.fn() }));
+// Draft-pause lookup is covered separately below; attachment tests assume a published property.
+jest.mock('../lib/propertyStatus', () => ({
+  ...jest.requireActual('../lib/propertyStatus'),
+  getDeliveryPause: jest.fn(),
+}));
 
 const APP_ID = 563;
 
@@ -104,6 +110,7 @@ beforeEach(() => {
   jest.spyOn(console, 'log').mockImplementation(() => {});
   createPagesServerClient.mockReturnValue(mockSupabase({ folders }));
   sendApprovalEmail.mockResolvedValue({});
+  getDeliveryPause.mockResolvedValue({ paused: false, draftPropertyIds: [], draftPropertyNames: [] });
 });
 
 afterEach(() => {
@@ -190,5 +197,19 @@ describe('POST /api/send-approval-email attachments', () => {
 
     expect(sentLinkNames('Bylaws')).toEqual(['Bylaws.pdf']);
     expect(sentLinkNames('Bylaws')).not.toContain('app-level-bylaws.pdf');
+  });
+});
+
+describe('POST /api/send-approval-email while the property is in Draft', () => {
+  it('refuses to send and names the draft property', async () => {
+    getDeliveryPause.mockResolvedValue({ paused: true, draftPropertyIds: ['p-foxcreek'], draftPropertyNames: ['Foxcreek HOA'] });
+    const res = mockRes();
+
+    await handler({ method: 'POST', body: { applicationId: APP_ID, propertyGroupId: 'g1' } }, res);
+
+    expect(getDeliveryPause).toHaveBeenCalledWith(expect.anything(), APP_ID, 'g1');
+    expect(res.statusCode).toBe(409);
+    expect(res.body).toMatchObject({ code: 'PROPERTY_DRAFT', draftProperties: ['Foxcreek HOA'] });
+    expect(sendApprovalEmail).not.toHaveBeenCalled();
   });
 });

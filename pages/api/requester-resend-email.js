@@ -8,6 +8,7 @@ import { createPagesServerClient } from '@supabase/auth-helpers-nextjs';
 import { createClient } from '@supabase/supabase-js';
 import { sendApprovalEmail } from '../../lib/emailService';
 import { buildAttachmentDownloadLinks } from '../../lib/applicationAttachments';
+import { getDeliveryPause, PROPERTY_DRAFT_ERROR } from '../../lib/propertyStatus';
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -51,6 +52,15 @@ export default async function handler(req, res) {
 
     if (appError || !application) {
       return res.status(404).json({ error: 'Application not found' });
+    }
+
+    // Document emails are paused while the property is in Draft (files may be mid-update)
+    const pause = await getDeliveryPause(supabaseAdmin, applicationId);
+    if (pause.paused) {
+      return res.status(409).json({
+        code: PROPERTY_DRAFT_ERROR,
+        error: 'Documents for this property are being updated. Please try again later.',
+      });
     }
 
     const isSettlementApp =

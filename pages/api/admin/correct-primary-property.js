@@ -4,6 +4,7 @@ import { getConnectedAccountId } from '../../../lib/stripeMode';
 import { sendEmail } from '../../../lib/emailService';
 import { getPricing } from '../../../lib/pricingConfig';
 import { parseEmails } from '../../../lib/emailUtils';
+import { getPropertyOrderability, PROPERTY_DRAFT_ERROR } from '../../../lib/propertyStatus';
 
 const CONVENIENCE_FEE_CENTS = 995;   // $9.95 per property
 const TRANSFER_THRESHOLD_CENTS = 20000; // $200.00 — minimum base price to trigger transfer
@@ -138,6 +139,15 @@ export default async function handler(req, res) {
 
     if (propError || !newPrimary) {
       return res.status(404).json({ error: 'New primary property not found' });
+    }
+
+    // A Draft property (or MC primary with a Draft linked property) can't be a correction target
+    const { orderable } = await getPropertyOrderability(supabase, newPrimaryPropertyId);
+    if (!orderable) {
+      return res.status(409).json({
+        code: PROPERTY_DRAFT_ERROR,
+        error: 'The selected property (or one of its linked properties) is in Draft. Publish it before correcting to it.',
+      });
     }
 
     // Fetch linked properties for the new primary (empty array for non-MC properties)
@@ -881,7 +891,7 @@ export default async function handler(req, res) {
         const supabaseUrlEnv = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://dnivljiyahzxpyxjjifi.supabase.co';
         const logoUrl       = `${supabaseUrlEnv}/storage/v1/object/public/bucket0/assets/company_logo_white.png`;
         const brandColor    = '#0f4734';
-        const siteUrl       = process.env.NEXT_PUBLIC_SITE_URL || process.env.NEXT_PUBLIC_APP_URL || 'https://resalesflow.gmgva.com';
+        const siteUrl       = process.env.NEXT_PUBLIC_SITE_URL || process.env.NEXT_PUBLIC_APP_URL || 'https://resales.gmgva.com';
         const processingLabel = targetIsRush ? 'Rush — 5 business days' : 'Standard — 15 calendar days';
 
         const buildOwnerEmail = ({ heading, body, propertyName, nextStepNote, ctaUrl, ctaLabel }) => `<!DOCTYPE html>
