@@ -50,7 +50,6 @@ import MultiEmailInput from '../common/MultiEmailInput';
 import AdminLayout from './AdminLayout';
 import useAdminAuthStore from '../../stores/adminAuthStore';
 import { countPropertyApplications } from '../../lib/propertyStatus';
-import PropertyLiveWarning from './PropertyLiveWarning';
 
 // Helper function to normalize location value for dropdown
 const normalizeLocation = (location) => {
@@ -2236,17 +2235,6 @@ const AdminPropertiesManagement = () => {
               </div>
 
               <form onSubmit={handleSubmit} className="space-y-4">
-                {modalMode === 'edit' && (
-                  <PropertyLiveWarning
-                    property={selectedProperty}
-                    isAdmin={isAdminUser}
-                    onStatusChanged={(updated) => {
-                      setSelectedProperty((prev) => ({ ...prev, ...updated }));
-                      mutate();
-                    }}
-                  />
-                )}
-
                 {/* Property Information */}
                 <div className="grid grid-cols-1 gap-4">
                   <div>
@@ -2740,15 +2728,6 @@ const AdminPropertiesManagement = () => {
 
               {/* Modal Body */}
               <div className="flex-1 overflow-y-auto p-6 space-y-8">
-                <PropertyLiveWarning
-                  property={linkingProperty}
-                  isAdmin={isAdminUser}
-                  onStatusChanged={(updated) => {
-                    setLinkingProperty((prev) => ({ ...prev, ...updated }));
-                    mutate();
-                  }}
-                />
-
                 {/* 1. Primary Property Section */}
                 <section>
                   <div className="flex items-center gap-2 mb-4">
