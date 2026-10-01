@@ -134,9 +134,6 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
   const [uploadingOriginalLQ, setUploadingOriginalLQ] = useState(false);
   const [propertyFiles, setPropertyFiles] = useState([]);
   const [loadingPropertyFiles, setLoadingPropertyFiles] = useState(false);
-  // Property documents uploaded for the application (or MC property) being managed — never the property's main documents
-  const [applicationPropertyFiles, setApplicationPropertyFiles] = useState([]);
-  const [loadingApplicationPropertyFiles, setLoadingApplicationPropertyFiles] = useState(false);
   const [snackbar, setSnackbar] = useState({ show: false, message: '', type: 'success' });
   const [assignedToMe, setAssignedToMe] = useState(false);
   const [staffMembers, setStaffMembers] = useState([]);
@@ -147,8 +144,6 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
   const [showResaleFormModal, setShowResaleFormModal] = useState(false);
   const [showSettlementFormModal, setShowSettlementFormModal] = useState(false);
   const [selectedApplicationForSettlement, setSelectedApplicationForSettlement] = useState(null);
-  const [showPropertyFilesModal, setShowPropertyFilesModal] = useState(false);
-  const [selectedFilesForUpload, setSelectedFilesForUpload] = useState([]);
   const [inspectionFormData, setInspectionFormData] = useState(null);
   const [resaleFormData, setResaleFormData] = useState(null);
   const [loadingFormData, setLoadingFormData] = useState(false);
@@ -1349,10 +1344,8 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
     }
     if (showAttachmentModal && selectedApplication?.id) {
       loadApplicationAttachments(selectedApplication.id, attachmentGroup?.id);
-      loadApplicationPropertyFiles(selectedApplication.id, attachmentGroup?.id);
     } else if (showAttachmentModal && !selectedApplication?.id) {
       setApplicationAttachments([]);
-      setApplicationPropertyFiles([]);
     }
   }, [showAttachmentModal, selectedApplication?.hoa_property_id, selectedApplication?.id, attachmentGroup?.id, attachmentGroup?.property_id]);
 
@@ -3148,116 +3141,9 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
     }
   };
 
-  // Property documents uploaded for this application only (MC: for the property being managed).
-  const loadApplicationPropertyFiles = async (applicationId, propertyGroupId = null) => {
-    if (!applicationId) {
-      setApplicationPropertyFiles([]);
-      return;
-    }
-    setLoadingApplicationPropertyFiles(true);
-    try {
-      const files = await listAttachments(supabase, applicationId, propertyGroupId, 3600, 'property');
-      setApplicationPropertyFiles(files.map((file) => ({
-        ...file,
-        id: `app-property-file-${file.originalName}`
-      })));
-    } catch (error) {
-      console.error('Error loading additional property documents:', error);
-      setApplicationPropertyFiles([]);
-    } finally {
-      setLoadingApplicationPropertyFiles(false);
-    }
-  };
-
   // The property whose files the attachment modals show: the MC property being managed,
   // otherwise the application's property.
   const getAttachmentPropertyId = () => attachmentGroup?.property_id || selectedApplication?.hoa_property_id;
-
-  // Additional Property Documents modal: uploads for this application only, never the property's main documents
-  const openPropertyFilesModal = () => {
-    setShowPropertyFilesModal(true);
-    setSelectedFilesForUpload([]);
-    loadApplicationPropertyFiles(selectedApplication?.id, attachmentGroup?.id);
-  };
-
-  const handlePropertyFileSelect = (event) => {
-    const files = Array.from(event.target.files);
-    setSelectedFilesForUpload(files);
-  };
-
-  const uploadPropertyFiles = async () => {
-    if (!selectedApplication?.id || selectedFilesForUpload.length === 0) {
-      return;
-    }
-
-    setUploading(true);
-    try {
-      // Check authentication
-      const { data: { user }, error: authError } = await supabase.auth.getUser();
-      if (authError || !user) {
-        throw new Error('User not authenticated');
-      }
-
-      const folder = attachmentFolder(selectedApplication.id, attachmentGroup?.id, 'property');
-      
-      const uploadPromises = selectedFilesForUpload.map(async (file, index) => {
-        const fileName = `${Date.now()}_${file.name}`;
-        const filePath = `${folder}/${fileName}`;
-        
-
-        const { data, error } = await supabase.storage
-          .from('bucket0')
-          .upload(filePath, file);
-
-        if (error) {
-          console.error(`❌ Upload failed for ${file.name}:`, error);
-          throw error;
-        }
-        
-        return filePath;
-      });
-
-      await Promise.all(uploadPromises);
-
-      // Reload to show new uploads
-      await loadApplicationPropertyFiles(selectedApplication.id, attachmentGroup?.id);
-      
-      setSelectedFilesForUpload([]);
-      setSnackbar({ show: true, message: 'Files uploaded successfully!', type: 'success' });
-    } catch (error) {
-      console.error('💥 Upload error details:', {
-        message: error.message,
-        statusCode: error.statusCode,
-        error: error.error,
-        details: error.details,
-        hint: error.hint,
-        fullError: error
-      });
-      setSnackbar({ show: true, message: 'Error uploading files: ' + error.message, type: 'error' });
-    } finally {
-      setUploading(false);
-    }
-  };
-
-  const deletePropertyFile = async (fileName) => {
-    if (!selectedApplication?.id) return;
-
-    try {
-      const filePath = `${attachmentFolder(selectedApplication.id, attachmentGroup?.id, 'property')}/${fileName}`;
-
-      const { error } = await supabase.storage
-        .from('bucket0')
-        .remove([filePath]);
-
-      if (error) throw error;
-
-      await loadApplicationPropertyFiles(selectedApplication.id, attachmentGroup?.id);
-      setSnackbar({ show: true, message: 'File deleted successfully!', type: 'success' });
-    } catch (error) {
-      console.error('Error deleting file:', error);
-      setSnackbar({ show: true, message: 'Error deleting file: ' + error.message, type: 'error' });
-    }
-  };
 
   // Property Groups Functions
   const loadPropertyGroups = async (applicationId) => {
@@ -3369,7 +3255,6 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
     const allAttachments = [
       ...(pdfFile ? [pdfFile] : []),
       ...propertyFiles,
-      ...applicationPropertyFiles,
       ...applicationAttachments
     ];
 
@@ -3478,69 +3363,6 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                 ))}
               </div>
             )}
-          </div>
-
-          {/* Additional Property Documents (this application only; never added to the main documents) */}
-          <div>
-            <div className='mb-4'>
-              <h3 className='text-lg font-medium text-gray-900'>
-                Additional Property Documents {applicationPropertyFiles.length > 0 && `(${applicationPropertyFiles.length})`}
-              </h3>
-              <p className='text-sm text-gray-500'>
-                Sent with this application only and not added to the property&apos;s main documents
-              </p>
-            </div>
-            {loadingApplicationPropertyFiles ? (
-              <div className='text-center py-4 text-gray-500 border border-gray-200 rounded-lg bg-gray-50'>
-                <RefreshCw className='w-6 h-6 mx-auto mb-2 text-gray-300 animate-spin' />
-                <p className='text-sm'>Loading...</p>
-              </div>
-            ) : applicationPropertyFiles.length > 0 && (
-              <div className='space-y-3 mb-4'>
-                {applicationPropertyFiles.map((file) => (
-                  <div
-                    key={file.id}
-                    className='flex items-center justify-between p-3 border border-gray-200 rounded-lg hover:bg-gray-50'
-                  >
-                    <div className='flex items-center gap-3'>
-                      <FileText className='w-5 h-5 text-teal-500' />
-                      <div>
-                        <p className='font-medium text-gray-900'>{file.name}</p>
-                        <div className='flex items-center gap-2 text-sm text-gray-500'>
-                          {file.size > 0 && <span>{formatFileSize(file.size)}</span>}
-                          <span className='px-2 py-1 bg-teal-100 text-teal-700 rounded text-xs'>Additional Property Document</span>
-                        </div>
-                      </div>
-                    </div>
-                    <div className='flex items-center gap-1'>
-                      {file.url && (
-                        <button
-                          onClick={() => window.open(file.url, '_blank')}
-                          className='p-2 text-gray-400 hover:text-blue-600'
-                          title="View file"
-                        >
-                          <Eye className='w-4 h-4' />
-                        </button>
-                      )}
-                      <button
-                        onClick={() => deletePropertyFile(file.originalName)}
-                        className='p-2 text-gray-400 hover:text-red-600'
-                        title="Delete file"
-                      >
-                        <Trash2 className='w-4 h-4' />
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-            <button
-              onClick={openPropertyFilesModal}
-              className='inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 text-sm'
-            >
-              <Upload className='w-4 h-4' />
-              Upload Additional Property Documents
-            </button>
           </div>
 
           {/* Application-Specific Attachments */}
@@ -7313,145 +7135,6 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                       Reject Application
                     </>
                   )}
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Property Files Management Modal */}
-        {showPropertyFilesModal && (
-          <div className='fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-[70]'>
-            <div className='bg-white rounded-lg max-w-2xl w-full max-h-[90vh] flex flex-col'>
-              <div className='p-4 border-b flex justify-between items-center'>
-                <h2 className='text-xl font-bold text-gray-900'>
-                  Additional Property Documents - {attachmentGroup?.property_name || selectedApplication?.hoa_properties?.name || 'Property'}
-                </h2>
-                <button
-                  onClick={() => setShowPropertyFilesModal(false)}
-                  className='text-gray-400 hover:text-gray-600'
-                >
-                  <X className='w-6 h-6' />
-                </button>
-              </div>
-
-              <div className='flex-1 overflow-y-auto p-4'>
-                {/* Upload Section */}
-                <div className='mb-6'>
-                  <h3 className='text-lg font-medium text-gray-900 mb-1'>Upload New Files</h3>
-                  <p className='text-sm text-gray-500 mb-3'>For this application only. These are not added to the property&apos;s main documents.</p>
-                  <div className='space-y-3'>
-                    <input
-                      type='file'
-                      multiple
-                      onChange={handlePropertyFileSelect}
-                      className='block w-full text-sm text-gray-500 
-                               file:mr-4 file:py-2 file:px-4 
-                               file:rounded-md file:border-0 
-                               file:text-sm file:font-medium 
-                               file:bg-blue-50 file:text-blue-700 
-                               hover:file:bg-blue-100'
-                    />
-                    
-                    {selectedFilesForUpload.length > 0 && (
-                      <div>
-                        <p className='text-sm font-medium text-gray-700 mb-2'>
-                          Selected Files ({selectedFilesForUpload.length}):
-                        </p>
-                        <div className='space-y-1 max-h-32 overflow-y-auto'>
-                          {selectedFilesForUpload.map((file, index) => (
-                            <div key={index} className='text-sm text-gray-600 bg-gray-50 p-2 rounded'>
-                              {file.name} ({(file.size / 1024 / 1024).toFixed(2)} MB)
-                            </div>
-                          ))}
-                        </div>
-                        
-                        <button
-                          onClick={uploadPropertyFiles}
-                          disabled={uploading}
-                          className='mt-3 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2'
-                        >
-                          {uploading ? (
-                            <>
-                              <div className='animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent'></div>
-                              Uploading...
-                            </>
-                          ) : (
-                            <>
-                              <Upload className='w-4 h-4' />
-                              Upload Files
-                            </>
-                          )}
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {/* Existing Files Section */}
-                <div>
-                  <h3 className='text-lg font-medium text-gray-900 mb-3'>Existing Files</h3>
-                  {loadingApplicationPropertyFiles ? (
-                    <div className='text-center py-4'>
-                      <div className='animate-spin rounded-full h-6 w-6 border-2 border-blue-600 border-t-transparent mx-auto mb-2'></div>
-                      <p className='text-sm text-gray-600'>Loading files...</p>
-                    </div>
-                  ) : applicationPropertyFiles.length === 0 ? (
-                    <div className='text-center py-6 text-gray-500 border border-gray-200 rounded-lg bg-gray-50'>
-                      <FileText className='w-8 h-8 mx-auto mb-2 text-gray-300' />
-                      <p className='font-medium'>No files uploaded</p>
-                      <p className='text-sm'>Upload property documents for this application above</p>
-                    </div>
-                  ) : (
-                    <div className='space-y-2'>
-                      {applicationPropertyFiles.map((file) => (
-                        <div key={file.id} className='flex items-center justify-between p-3 border border-gray-200 rounded-lg hover:bg-gray-50'>
-                          <div className='flex items-center gap-3'>
-                            <FileText className='w-5 h-5 text-blue-600' />
-                            <div>
-                              <p className='text-sm font-medium text-gray-900'>
-                                {file.name}
-                              </p>
-                              {file.size > 0 && (
-                                <p className='text-xs text-gray-500'>{formatFileSize(file.size)}</p>
-                              )}
-                            </div>
-                          </div>
-                          <div className='flex items-center gap-2'>
-                            {file.url && (
-                              <button
-                                onClick={() => window.open(file.url, '_blank')}
-                                className='p-1 text-blue-600 hover:text-blue-800'
-                                title='View file'
-                              >
-                                <Eye className='w-4 h-4' />
-                              </button>
-                            )}
-                            <button
-                              onClick={() => {
-                                if (confirm('Are you sure you want to delete this file?')) {
-                                  deletePropertyFile(file.originalName);
-                                }
-                              }}
-                              className='p-1 text-red-600 hover:text-red-800'
-                              title='Delete file'
-                            >
-                              <Trash2 className='w-4 h-4' />
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              <div className='p-4 border-t flex justify-end'>
-                <button
-                  onClick={() => setShowPropertyFilesModal(false)}
-                  className='px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50'
-                >
-                  Close
                 </button>
               </div>
             </div>

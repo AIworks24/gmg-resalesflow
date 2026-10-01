@@ -89,14 +89,8 @@ const folders = {
   ],
   [`application_attachments/${APP_ID}/g1`]: [file('1700000001_foxcreek-only.pdf')],
   [`application_attachments/${APP_ID}/g2`]: [file('1700000002_greenwich-only.pdf')],
-  // Property documents uploaded for this application only (never in property_files/).
-  [`application_property_files/${APP_ID}`]: [
-    file('1700000003_app-level-bylaws.pdf'),
-    { id: null, name: 'g1', metadata: null },
-    { id: null, name: 'g2', metadata: null },
-  ],
-  [`application_property_files/${APP_ID}/g1`]: [file('1700000004_foxcreek-bylaws.pdf')],
-  [`application_property_files/${APP_ID}/g2`]: [file('1700000005_greenwich-bylaws.pdf')],
+  // Left over from the removed separate property-documents upload; must not be emailed.
+  [`application_property_files/${APP_ID}`]: [file('1700000003_app-level-bylaws.pdf')],
 };
 
 const sentLinkNames = (description) =>
@@ -166,37 +160,14 @@ describe('POST /api/send-approval-email attachments', () => {
     expect(sentAttachmentNames()).toEqual(['greenwich-only.pdf']);
   });
 
-  it("sends a multi-community property only its own additional property documents", async () => {
-    const res = mockRes();
-
-    await handler({
-      method: 'POST',
-      body: {
-        applicationId: APP_ID,
-        propertyGroupId: 'g1',
-        propertyName: 'Foxcreek Owners Association, Inc.',
-        pdfUrl: 'https://files.example/foxcreek.pdf',
-      },
-    }, res);
-
-    expect(sentLinkNames('Additional Property Document')).toEqual(['foxcreek-bylaws.pdf']);
-  });
-
-  it('sends a single-property application its application-level property documents', async () => {
+  it("sends the property's main documents and no separate application property documents", async () => {
     const res = mockRes();
 
     await handler({ method: 'POST', body: { applicationId: APP_ID } }, res);
 
-    expect(sentLinkNames('Additional Property Document')).toEqual(['app-level-bylaws.pdf']);
-  });
-
-  it("keeps the property's main documents alongside, labelled as main documents", async () => {
-    const res = mockRes();
-
-    await handler({ method: 'POST', body: { applicationId: APP_ID } }, res);
-
+    const sentNames = sendApprovalEmail.mock.calls[0][0].downloadLinks.map((link) => link.filename);
     expect(sentLinkNames('Bylaws')).toEqual(['Bylaws.pdf']);
-    expect(sentLinkNames('Bylaws')).not.toContain('app-level-bylaws.pdf');
+    expect(sentNames).not.toContain('app-level-bylaws.pdf');
   });
 });
 

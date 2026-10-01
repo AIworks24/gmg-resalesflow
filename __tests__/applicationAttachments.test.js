@@ -36,11 +36,6 @@ describe('attachmentFolder', () => {
   it('scopes a multi-community property to a sub-folder of its application', () => {
     expect(attachmentFolder('123', 'g1')).toBe('application_attachments/123/g1');
   });
-
-  it("keeps an application's property documents outside the shared property_files folder", () => {
-    expect(attachmentFolder('123', null, 'property')).toBe('application_property_files/123');
-    expect(attachmentFolder('123', 'g1', 'property')).toBe('application_property_files/123/g1');
-  });
 });
 
 describe('listAttachments', () => {
@@ -90,40 +85,23 @@ describe('listAttachments', () => {
 
     errorSpy.mockRestore();
   });
-
-  it("lists a property's application-only property documents from their own folder", async () => {
-    const { client, calls } = mockStorage({
-      folders: { 'application_property_files/123/g1': [file('1700000000_bylaws-amendment.pdf')] },
-    });
-
-    const result = await listAttachments(client, '123', 'g1', 3600, 'property');
-
-    expect(calls.list).toEqual(['application_property_files/123/g1']);
-    expect(result.map((f) => f.name)).toEqual(['bylaws-amendment.pdf']);
-  });
 });
 
 describe('buildAttachmentDownloadLinks', () => {
-  it("links a property's own property documents first, then its additional files", async () => {
+  it("links only a property's own additional files", async () => {
     const { client } = mockStorage({
       folders: {
-        'application_property_files/123/g1': [file('1700000000_bylaws-amendment.pdf', 4096)],
         'application_attachments/123/g1': [file('1700000001_addendum.pdf', 1024)],
-        'application_property_files/123/g2': [file('1700000002_other-property.pdf')],
-        'application_property_files/123': [file('1700000003_app-level.pdf')],
+        'application_attachments/123/g2': [file('1700000002_other-property.pdf')],
+        'application_attachments/123': [file('1700000003_app-level.pdf')],
+        // Former separate property-documents upload; no longer emailed.
+        'application_property_files/123/g1': [file('1700000000_bylaws-amendment.pdf', 4096)],
       },
     });
 
     const links = await buildAttachmentDownloadLinks(client, '123', 'g1', 2592000);
 
     expect(links).toEqual([
-      {
-        filename: 'bylaws-amendment.pdf',
-        downloadUrl: 'https://signed.example/application_property_files/123/g1/1700000000_bylaws-amendment.pdf',
-        type: 'document',
-        description: 'Additional Property Document',
-        size: 4096,
-      },
       {
         filename: 'addendum.pdf',
         downloadUrl: 'https://signed.example/application_attachments/123/g1/1700000001_addendum.pdf',
