@@ -49,6 +49,18 @@
     },
     "pages/api/jobs/run.js": {
       "maxDuration": 300
+    },
+    "pages/api/upload-lender-questionnaire.js": {
+      "maxDuration": 60
+    },
+    "pages/api/notifications/create.js": {
+      "maxDuration": 60
+    },
+    "pages/api/auto-assign-application.js": {
+      "maxDuration": 60
+    },
+    "pages/api/admin/create-property-groups.js": {
+      "maxDuration": 60
     }
   }
 }
