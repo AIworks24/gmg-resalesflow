@@ -7,6 +7,7 @@
 
 import { createClient } from '@supabase/supabase-js';
 import { sendApprovalEmail } from '../../lib/emailService';
+import { getDeliveryPause, propertyDraftErrorBody } from '../../lib/propertyStatus';
 
 /**
  * Build signed download links for the public offering statement document(s).
@@ -74,6 +75,12 @@ export default async function handler(req, res) {
     process.env.SUPABASE_SERVICE_ROLE_KEY,
     { auth: { autoRefreshToken: false, persistSession: false } }
   );
+
+  // Document emails are paused while the property is in Draft
+  const pause = await getDeliveryPause(supabase, applicationId);
+  if (pause.paused) {
+    return res.status(409).json(propertyDraftErrorBody(pause.draftPropertyNames));
+  }
 
   const { data: application, error: appError } = await supabase
     .from('applications')

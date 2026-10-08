@@ -10,6 +10,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { sendApprovalEmail } from '../../lib/emailService';
 import { getAllPropertiesForTransaction } from '../../lib/multiCommunityUtils';
+import { getDeliveryPause, propertyDraftErrorBody } from '../../lib/propertyStatus';
 
 function parseBuyerEmails(buyerEmail) {
   if (!buyerEmail) return [];
@@ -112,6 +113,12 @@ export default async function handler(req, res) {
     process.env.SUPABASE_SERVICE_ROLE_KEY,
     { auth: { autoRefreshToken: false, persistSession: false } }
   );
+
+  // Document emails are paused while the property (or any MC group property) is in Draft
+  const pause = await getDeliveryPause(supabase, applicationId);
+  if (pause.paused) {
+    return res.status(409).json(propertyDraftErrorBody(pause.draftPropertyNames));
+  }
 
   const { data: application, error: appError } = await supabase
     .from('applications')

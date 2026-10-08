@@ -1,4 +1,5 @@
 import { createPagesServerClient } from '@supabase/auth-helpers-nextjs';
+import { PROPERTY_DRAFT_ERROR } from '../../lib/propertyStatus';
 
 /**
  * Sends all property emails for a multi-community application in one batch.
@@ -102,6 +103,8 @@ export default async function handler(req, res) {
           groupId: group.id,
           propertyName: group.property_name,
           success: response.ok && result.success,
+          // Groups whose property is in Draft are paused, not failed
+          skipped: response.status === 409 && result.code === PROPERTY_DRAFT_ERROR,
           error: result.error,
         });
       } catch (err) {
@@ -116,17 +119,22 @@ export default async function handler(req, res) {
     }
 
     const successCount = results.filter((r) => r.success).length;
-    const failedCount = results.length - successCount;
+    const skipped = results.filter((r) => r.skipped);
+    const failedCount = results.length - successCount - skipped.length;
+    const skippedNote = skipped.length
+      ? ` ${skipped.length} paused (property in Draft: ${skipped.map((r) => r.propertyName).join(', ')})`
+      : '';
 
     return res.status(200).json({
       success: failedCount === 0,
       sent: successCount,
       total: results.length,
+      skipped: skipped.map((r) => r.propertyName),
       results,
       message:
-        failedCount === 0
+        failedCount === 0 && skipped.length === 0
           ? `All ${successCount} emails sent successfully`
-          : `${successCount} sent, ${failedCount} failed`,
+          : `${successCount} sent${failedCount ? `, ${failedCount} failed` : ''}.${skippedNote}`,
     });
   } catch (error) {
     console.error('send-all-mc-emails error:', error);

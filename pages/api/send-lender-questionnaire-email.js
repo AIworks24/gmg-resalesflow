@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import { appendProcessNote, resolveActorName } from '../../lib/processHistoryServer';
+import { getDeliveryPause, propertyDraftErrorBody } from '../../lib/propertyStatus';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -16,6 +17,12 @@ export default async function handler(req, res) {
 
     if (!applicationId) {
       return res.status(400).json({ error: 'Application ID is required' });
+    }
+
+    // Document emails are paused while the property is in Draft
+    const pause = await getDeliveryPause(supabase, applicationId);
+    if (pause.paused) {
+      return res.status(409).json(propertyDraftErrorBody(pause.draftPropertyNames));
     }
 
     // Get application details with property information

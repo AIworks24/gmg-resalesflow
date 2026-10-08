@@ -3,6 +3,7 @@ import { useRouter } from 'next/router';
 import { useSupabaseQuerySingle } from '../../../hooks/useSupabaseQuery';
 import AdminLayout from '../../../components/admin/AdminLayout';
 import PropertyFileManagement from '../../../components/admin/PropertyFileManagement';
+import usePropertyWatch from '../../../components/admin/realtime/usePropertyWatch';
 import { ArrowLeft, Building, AlertTriangle, RefreshCw } from 'lucide-react';
 
 const PropertyFilesPage = () => {
@@ -13,6 +14,8 @@ const PropertyFilesPage = () => {
   const shouldFetch = id && router.isReady;
   // Parse ID as integer to ensure correct type
   const propertyId = id ? parseInt(id, 10) : null;
+  // Realtime toast when another admin publishes / drafts this property
+  usePropertyWatch(propertyId ? [propertyId] : []);
   const queryOptions = propertyId ? { eq: { id: propertyId } } : {};
   
   const { 

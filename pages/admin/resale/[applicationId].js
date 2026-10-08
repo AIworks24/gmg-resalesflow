@@ -2,6 +2,7 @@ import { useRouter } from 'next/router';
 import { useState, useEffect } from 'react';
 import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
 import AdminResaleCertificateForm from '../../../components/admin/AdminResaleCertificateForm';
+import usePropertyWatch from '../../../components/admin/realtime/usePropertyWatch';
 
 export default function AdminResaleFormPage() {
   const router = useRouter();
@@ -9,6 +10,9 @@ export default function AdminResaleFormPage() {
   const [applicationData, setApplicationData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  // Realtime toast when another admin publishes / drafts this application's property
+  const [watchedPropertyIds, setWatchedPropertyIds] = useState([]);
+  usePropertyWatch(watchedPropertyIds);
   const [isAdmin, setIsAdmin] = useState(false);
 
   const supabase = createClientComponentClient();
@@ -53,7 +57,8 @@ const checkAuthAndLoadData = async () => {
       .from('applications')
       .select(`
         *,
-        hoa_properties(name, property_owner_email, property_owner_name, is_multi_community)
+        hoa_properties(name, property_owner_email, property_owner_name, is_multi_community),
+        application_property_groups(property_id)
       `)
       .eq('id', applicationId)
       .single();
@@ -62,6 +67,10 @@ const checkAuthAndLoadData = async () => {
       console.error('Application query error:', appError);
       throw appError;
     }
+    setWatchedPropertyIds([
+      appData.hoa_property_id,
+      ...(appData.application_property_groups || []).map((g) => g.property_id),
+    ]);
 
     // Get or create the resale certificate form separately
     let { data: formData, error: formError } = await supabase

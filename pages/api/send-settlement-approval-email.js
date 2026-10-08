@@ -1,4 +1,5 @@
 import { createPagesServerClient } from '@supabase/auth-helpers-nextjs';
+import { getDeliveryPause, propertyDraftErrorBody } from '../../lib/propertyStatus';
 
 // Helper function to format property address with unit number
 const formatPropertyAddress = (address, unitNumber) => {
@@ -37,6 +38,12 @@ export default async function handler(req, res) {
     const { applicationId, propertyGroupId } = req.body;
     if (!applicationId) {
       return res.status(400).json({ error: 'Application ID is required' });
+    }
+
+    // Document emails are paused while the property (or this MC group's property) is in Draft
+    const pause = await getDeliveryPause(supabase, applicationId, propertyGroupId || null);
+    if (pause.paused) {
+      return res.status(409).json(propertyDraftErrorBody(pause.draftPropertyNames));
     }
 
     // Get application data with settlement form (including pdf_url from applications table)

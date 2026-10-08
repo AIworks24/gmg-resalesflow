@@ -4,6 +4,7 @@ import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
 import AdminLayout from '../../../components/admin/AdminLayout';
 import AdminSettlementForm from '../../../components/admin/AdminSettlementForm';
 import { withAdminAuth } from '../../../providers/AdminAuthProvider';
+import usePropertyWatch from '../../../components/admin/realtime/usePropertyWatch';
 import { 
   ArrowLeft, 
   FileText, 
@@ -19,6 +20,9 @@ function SettlementFormPage() {
   const [application, setApplication] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  // Realtime toast when another admin publishes / drafts this application's property
+  const [watchedPropertyIds, setWatchedPropertyIds] = useState([]);
+  usePropertyWatch(watchedPropertyIds);
   const [snackbar, setSnackbar] = useState({ show: false, message: '', type: 'success' });
   const supabase = createClientComponentClient();
 
@@ -44,7 +48,8 @@ function SettlementFormPage() {
         .from('applications')
         .select(`
           *,
-          hoa_properties(name, location, property_owner_name, property_owner_email)
+          hoa_properties(name, location, property_owner_name, property_owner_email),
+          application_property_groups(property_id)
         `)
         .eq('id', applicationId)
         .single();
@@ -63,6 +68,10 @@ function SettlementFormPage() {
       }
 
       setApplication(appData);
+      setWatchedPropertyIds([
+        appData.hoa_property_id,
+        ...(appData.application_property_groups || []).map((g) => g.property_id),
+      ]);
 
     } catch (error) {
       console.error('Error loading application:', error);

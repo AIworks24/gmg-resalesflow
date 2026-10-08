@@ -175,3 +175,8 @@ CLAUDE.md
 /playwright-report/
 /blob-report/
 /playwright/.cache/
+
+# Realtime server (party/) local dev state
+.wrangler
+.dev.vars
+.env*

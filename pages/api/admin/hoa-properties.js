@@ -36,7 +36,10 @@ export default async function handler(req, res) {
     const sortOrder = req.query.sortOrder || 'asc';
     const locationFilter = req.query.locationFilter || '';
     const typeFilter = req.query.typeFilter || '';
-    const statusFilter = req.query.statusFilter === 'retired' ? 'retired' : 'active';
+    // active = every non-retired property; published/draft narrow it by publish status
+    const statusFilter = ['retired', 'published', 'draft'].includes(req.query.statusFilter)
+      ? req.query.statusFilter
+      : 'active';
     const bypassCache = req.query.bypassCache === 'true'; // Allow bypassing cache
 
     // Try to get from cache first (unless bypass is requested)
@@ -71,6 +74,10 @@ export default async function handler(req, res) {
     query = statusFilter === 'retired'
       ? query.not('deleted_at', 'is', null)
       : query.is('deleted_at', null);
+
+    if (statusFilter === 'published' || statusFilter === 'draft') {
+      query = query.eq('status', statusFilter);
+    }
 
     // Apply search filter if provided
     if (search && search.trim()) {
@@ -108,8 +115,28 @@ export default async function handler(req, res) {
       throw queryError;
     }
 
+    // A published multi-community primary is still hidden from requesters while any of its
+    // linked properties is in draft — flag those so the admin list can warn about it.
+    const draftLinkedByPrimary = new Map();
+    const primaryIds = (properties || []).filter((p) => p.is_multi_community).map((p) => p.id);
+    if (primaryIds.length > 0) {
+      const { data: links } = await supabase
+        .from('linked_properties')
+        .select('primary_property_id, hoa_properties!linked_properties_linked_property_id_fkey(name, status)')
+        .in('primary_property_id', primaryIds);
+      (links || []).forEach((link) => {
+        if (link.hoa_properties?.status !== 'draft') return;
+        const names = draftLinkedByPrimary.get(link.primary_property_id) || [];
+        names.push(link.hoa_properties.name);
+        draftLinkedByPrimary.set(link.primary_property_id, names);
+      });
+    }
+
     const result = {
-      properties: properties || [],
+      properties: (properties || []).map((p) => ({
+        ...p,
+        draft_linked_names: draftLinkedByPrimary.get(p.id) || [],
+      })),
       totalCount: count || 0,
       page,
       pageSize

@@ -70,6 +70,164 @@ function isFakeEmail(email) {
   return false;
 }
 
+// Owner/accounting emails go out a couple at a time. Microsoft Graph allows ~4 concurrent
+// requests per mailbox; firing every recipient at once got the rest throttled (429), and the
+// throttled retries were lost when the function returned (ClickUp 14ypaj0fzkt, LQ #3011).
+const EMAIL_CONCURRENCY = 2;
+
+/**
+ * Run fn over items with at most `limit` in flight. Never throws; returns
+ * Promise.allSettled-style results in input order.
+ */
+async function runWithConcurrency(items, limit, fn) {
+  const results = new Array(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const i = next++;
+      try {
+        results[i] = { status: 'fulfilled', value: await fn(items[i]) };
+      } catch (reason) {
+        results[i] = { status: 'rejected', reason };
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
+function isMultiCommunityApplication(application) {
+  return !!(application.hoa_properties?.is_multi_community ||
+    application.application_type === 'multi_community' ||
+    (application.application_type?.startsWith && application.application_type.startsWith('mc_')));
+}
+
+/**
+ * Load the application (with its primary property) and its MC property groups — everything
+ * needed to build notifications and their emails.
+ */
+export async function loadNotificationContext(applicationId, supabaseClient) {
+  const { data: application, error: appError } = await supabaseClient
+    .from('applications')
+    .select(`
+      *,
+      hoa_properties (
+        id,
+        name,
+        property_owner_email,
+        property_owner_name
+      )
+    `)
+    .eq('id', applicationId)
+    .single();
+
+  if (appError || !application) {
+    return { error: appError || new Error('Application not found') };
+  }
+
+  const { data: propertyGroups } = await supabaseClient
+    .from('application_property_groups')
+    .select('id, property_name, property_location, property_owner_email, assigned_to, is_primary, property_id, hoa_properties(property_owner_email, property_owner_name, default_assignee_email, location)')
+    .eq('application_id', applicationId);
+
+  return { application, propertyGroups: propertyGroups || [] };
+}
+
+/**
+ * Send the "New Application" email for one owner/accounting notification row. Shared by
+ * createNotifications and the resend_owner_email job step so both build the same email.
+ * Resolves with sendEmail's result ({ success, method }); throws if the send failed.
+ */
+export async function sendOwnerNotificationEmail({ notification, application, propertyGroups }) {
+  const isMultiCommunity = isMultiCommunityApplication(application);
+
+  // Linked properties for email content (all non-primary groups for MC)
+  let linkedProperties = [];
+  if (isMultiCommunity) {
+    linkedProperties = (propertyGroups || [])
+      .filter(g => !g.is_primary)
+      .map(prop => ({
+        property_name: prop.property_name,
+        location: prop.property_location || prop.hoa_properties?.location || '',
+        property_id: prop.property_id
+      }));
+  }
+
+  const isMCRecipient = notification.metadata?.is_multi_community_recipient === true;
+  const recipientPropNames = notification.metadata?.recipient_property_names;
+  const recipientPropertyName = Array.isArray(recipientPropNames) && recipientPropNames.length > 0
+    ? recipientPropNames[0]
+    : (application.hoa_properties?.name || null);
+
+  return sendPropertyManagerNotificationEmail({
+    to: normalizeEmail(notification.recipient_email),
+    applicationId: application.id,
+    propertyName: application.hoa_properties?.name || 'Unknown Property',
+    propertyAddress: application.property_address,
+    submitterName: application.submitter_name || 'Unknown',
+    submitterEmail: application.submitter_email || '',
+    packageType: application.package_type,
+    isRush: application.package_type === 'rush',
+    isMultiCommunity,
+    linkedProperties,
+    applicationType: application.application_type,
+    submitterType: application.submitter_type,
+    recipientPropertyName: isMCRecipient ? recipientPropertyName : null,
+    isPartOfMultiCommunityApplication: isMCRecipient,
+  });
+}
+
+/**
+ * Record an email send outcome on its notification row: delivered_at (+ which transport sent
+ * it) on success, error_message on failure. Never throws.
+ */
+export async function recordEmailOutcome(supabaseClient, notification, { result, error }) {
+  const update = error
+    ? { error_message: String(error?.message || error).slice(0, 1000) }
+    : {
+        delivered_at: new Date().toISOString(),
+        error_message: null,
+        metadata: { ...(notification.metadata || {}), email_method: result?.method || null },
+      };
+
+  const { error: updateError } = await supabaseClient
+    .from('notifications')
+    .update(update)
+    .eq('id', notification.id);
+
+  if (updateError) {
+    console.error(`[EMAIL_TRACE] Could not record email outcome for notification ${notification.id}:`, updateError.message);
+  }
+}
+
+/**
+ * Queue a resend_owner_email job per failed notification. The job worker (cron, every minute)
+ * retries with backoff and dead-letters after MAX_ATTEMPTS; failed jobs show in Admin Reports.
+ * Never throws.
+ */
+async function queueEmailResends(supabaseClient, applicationId, notifications) {
+  try {
+    const { enqueueJob } = await import('../../../lib/processing/enqueue');
+    for (const notification of notifications) {
+      try {
+        await enqueueJob({
+          supabase: supabaseClient,
+          applicationId,
+          jobType: 'resend_owner_email',
+          idempotencyKey: `notif-email:${notification.id}`,
+          payload: { notificationId: notification.id },
+          steps: ['resend_owner_email'],
+        });
+        console.log(`[EMAIL_RETRY] App ${applicationId}: queued resend for ${notification.recipient_email} (notification ${notification.id})`);
+      } catch (err) {
+        console.error(`[EMAIL_RETRY] App ${applicationId}: could not queue resend for notification ${notification.id}:`, err.message);
+      }
+    }
+  } catch (err) {
+    console.error(`[EMAIL_RETRY] App ${applicationId}: could not load job queue:`, err.message);
+  }
+}
+
 /**
  * Helper function to create notifications (can be called directly or via API)
  */
@@ -91,35 +249,15 @@ export async function createNotifications(applicationId, supabaseClient) {
       console.log(`[Notifications] ${existingRecipients.size} existing notification(s) for application ${applicationId}: ${[...existingRecipients].join(', ')}`);
     }
 
-    // Get full application data and property groups for multi-community
-    const { data: application, error: appError } = await supabaseClient
-      .from('applications')
-      .select(`
-        *,
-        hoa_properties (
-          id,
-          name,
-          property_owner_email,
-          property_owner_name
-        )
-      `)
-      .eq('id', applicationId)
-      .single();
+    // Get full application data and property groups for multi-community (all property owners)
+    const { application, propertyGroups, error: appError } = await loadNotificationContext(applicationId, supabaseClient);
 
-    if (appError || !application) {
+    if (appError) {
       console.error('Error fetching application for notifications:', appError);
       return { success: false, error: 'Application not found' };
     }
 
-    // Fetch application_property_groups for multi-community (all property owners)
-    const { data: propertyGroups } = await supabaseClient
-      .from('application_property_groups')
-      .select('id, property_name, property_location, property_owner_email, assigned_to, is_primary, property_id, hoa_properties(property_owner_email, property_owner_name, default_assignee_email, location)')
-      .eq('application_id', applicationId);
-
-    const isMultiCommunityApp = application.hoa_properties?.is_multi_community ||
-      application.application_type === 'multi_community' ||
-      (application.application_type?.startsWith && application.application_type.startsWith('mc_'));
+    const isMultiCommunityApp = isMultiCommunityApplication(application);
 
     console.log(`[Notifications] Creating notifications for application ${applicationId}`);
     console.log(`[Notifications] Property owner email:`, application.hoa_properties?.property_owner_email);
@@ -431,29 +569,12 @@ export async function createNotifications(applicationId, supabaseClient) {
 
       console.log(`[Notifications] Successfully created ${data.length} notifications for application ${applicationId}`);
 
-      // Send email notifications to all recipients
-      const emailPromises = [];
-      const isMultiCommunity = isMultiCommunityApp; // Same as notification creation: MC type or MC property
-      const isRush = application.package_type === 'rush';
-      
-      // Get linked properties for email content (all groups for MC)
-      let linkedProperties = [];
-      const isPropertyMultiCommunity = application.hoa_properties?.is_multi_community || false;
-      if (isPropertyMultiCommunity || isMultiCommunity) {
-        const groupsForEmail = propertyGroups || [];
-        linkedProperties = groupsForEmail
-          .filter(g => !g.is_primary)
-          .map(prop => ({
-            property_name: prop.property_name,
-            location: prop.property_location || prop.hoa_properties?.location || '',
-            property_id: prop.property_id
-          }));
-      }
+      // Pick which notification recipients also get an email (everyone above gets the in-app record)
+      const toEmail = [];
 
       // Build set of all property owner emails (primary + MC groups) for email-send check
-      const allPropertyOwnerEmails = new Set(ownerEmailMap ? [...ownerEmailMap.keys()] : parseEmails(application.hoa_properties?.property_owner_email || '').map(e => normalizeEmail(e.replace(/^owner\./, ''))));
+      const allPropertyOwnerEmails = new Set(ownerEmailMap.keys());
 
-      // Send emails to all notification recipients (with error handling)
       try {
         console.log(`[EMAIL_TRACE] App ${applicationId}: Starting email dispatch for ${data.length} notification(s)`);
         
@@ -506,48 +627,7 @@ export async function createNotifications(applicationId, supabaseClient) {
             // 2. Accounting users (for settlement requests only)
             // Staff/admin (non-accounting) will still receive in-app notifications, but no emails
             if ((isPropertyOwner && application.hoa_properties) || isAccountingNotification) {
-              // Normalize email before sending to ensure consistent delivery
-              const emailToSend = normalizeEmail(notification.recipient_email);
-              const emailType = isAccountingNotification ? 'accounting' : 'property_owner';
-              const isMCRecipient = notification.metadata?.is_multi_community_recipient === true;
-              const recipientPropNames = notification.metadata?.recipient_property_names;
-              const recipientPropertyName = Array.isArray(recipientPropNames) && recipientPropNames.length > 0
-                ? recipientPropNames[0]
-                : (application.hoa_properties?.name || null);
-              
-              console.log(`[EMAIL_ATTEMPT] App ${applicationId}: Attempting send to ${emailToSend} (type: ${emailType}${isMCRecipient ? ', MC recipient' : ''})`);
-              
-              // Send notification email
-              emailPromises.push(
-                sendPropertyManagerNotificationEmail({
-                  to: emailToSend,
-                  applicationId: applicationId,
-                  propertyName: application.hoa_properties?.name || 'Unknown Property',
-                  propertyAddress: application.property_address,
-                  submitterName: application.submitter_name || 'Unknown',
-                  submitterEmail: application.submitter_email || '',
-                  packageType: application.package_type,
-                  isRush: isRush,
-                  isMultiCommunity: isMultiCommunity,
-                  linkedProperties: linkedProperties,
-                  applicationType: application.application_type,
-                  submitterType: application.submitter_type,
-                  recipientPropertyName: isMCRecipient ? recipientPropertyName : null,
-                  isPartOfMultiCommunityApplication: isMCRecipient,
-                }).then(result => {
-                  console.log(`[EMAIL_SUCCESS] App ${applicationId}: ✓ Sent to ${emailToSend}`);
-                  return result;
-                }).catch(emailError => {
-                  console.error(`[EMAIL_FAILURE] App ${applicationId}: ✗ Failed to ${emailToSend}`, {
-                    error: emailError.message,
-                    stack: emailError.stack,
-                    recipient: emailToSend,
-                    type: emailType
-                  });
-                  // Don't throw - continue with other emails
-                  return { success: false, error: emailError.message, recipient: emailToSend };
-                })
-              );
+              toEmail.push(notification);
             } else {
               // Staff/admin (non-accounting): Skip email, they only get in-app notifications
               console.log(`[EMAIL_TRACE] App ${applicationId}: Skipped staff/admin (in-app only): ${notificationEmail}`);
@@ -562,34 +642,47 @@ export async function createNotifications(applicationId, supabaseClient) {
         // Don't fail notification creation if email loop fails
       }
 
-      // Send all emails (don't wait for them to complete - fire and forget)
-      console.log(`[EMAIL_DISPATCH] App ${applicationId}: Dispatched ${emailPromises.length} email(s) for async sending`);
-      
-      Promise.allSettled(emailPromises).then(results => {
-        const successful = results.filter(r => r.status === 'fulfilled' && r.value?.success !== false);
-        const failed = results.filter(r => r.status === 'rejected' || r.value?.success === false);
-        
-        console.log(`[EMAIL_SUMMARY] App ${applicationId}: Complete - ${successful.length} sent, ${failed.length} failed`);
-        
-        // Log detailed failure information
-        if (failed.length > 0) {
-          failed.forEach((result, index) => {
-            const failureInfo = result.status === 'rejected' 
-              ? { reason: result.reason?.message || result.reason, recipient: 'unknown' }
-              : { reason: result.value?.error, recipient: result.value?.recipient };
-            
-            console.error(`[EMAIL_FAILURE_DETAIL] App ${applicationId}: Failed email #${index + 1}:`, failureInfo);
-          });
+      // Send and WAIT for every email before returning. On Vercel, work still pending when the
+      // function returns gets frozen — owners got these late or never. Each outcome is recorded
+      // on its notification row; failures are retried by the job queue. A failed email never
+      // fails the request: callers have already saved the application.
+      console.log(`[EMAIL_DISPATCH] App ${applicationId}: Sending ${toEmail.length} email(s), ${EMAIL_CONCURRENCY} at a time`);
+
+      const results = await runWithConcurrency(toEmail, EMAIL_CONCURRENCY, (notification) =>
+        sendOwnerNotificationEmail({ notification, application, propertyGroups })
+      );
+
+      const failedNotifications = [];
+      for (let i = 0; i < toEmail.length; i++) {
+        const notification = toEmail[i];
+        const result = results[i];
+        if (result.status === 'fulfilled' && result.value?.success !== false) {
+          console.log(`[EMAIL_SUCCESS] App ${applicationId}: ✓ Sent to ${notification.recipient_email} (${result.value?.method || 'unknown'})`);
+          await recordEmailOutcome(supabaseClient, notification, { result: result.value });
+        } else {
+          const emailError = result.status === 'rejected'
+            ? result.reason
+            : new Error(result.value?.error || 'Email send reported failure');
+          console.error(`[EMAIL_FAILURE] App ${applicationId}: ✗ Failed to ${notification.recipient_email}:`, emailError?.message || emailError);
+          await recordEmailOutcome(supabaseClient, notification, { error: emailError });
+          failedNotifications.push(notification);
         }
-      }).catch(err => {
-        console.error(`[EMAIL_ERROR] App ${applicationId}: Promise handling error:`, err);
-      });
+      }
+
+      if (failedNotifications.length > 0) {
+        await queueEmailResends(supabaseClient, applicationId, failedNotifications);
+      }
+
+      const emailsSent = toEmail.length - failedNotifications.length;
+      console.log(`[EMAIL_SUMMARY] App ${applicationId}: Complete - ${emailsSent} sent, ${failedNotifications.length} failed`);
 
       return {
         success: true,
         notificationsCreated: data.length,
         notifications: data,
-        emailsQueued: emailPromises.length,
+        emailsQueued: toEmail.length,
+        emailsSent,
+        emailsFailed: failedNotifications.length,
       };
     }
 
