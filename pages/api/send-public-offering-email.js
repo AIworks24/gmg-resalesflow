@@ -8,6 +8,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { sendApprovalEmail } from '../../lib/emailService';
 import { getDeliveryPause, propertyDraftErrorBody } from '../../lib/propertyStatus';
+import { alreadySentErrorBody, isBlockedResend } from '../../lib/emailResendGuard';
 
 /**
  * Build signed download links for the public offering statement document(s).
@@ -95,6 +96,11 @@ export default async function handler(req, res) {
   if (appError || !application) {
     console.error('[send-public-offering-email] Application not found:', appError);
     return res.status(404).json({ error: 'Application not found' });
+  }
+
+  // Don't re-send delivered documents unless the admin confirmed a resend
+  if (isBlockedResend(application.email_completed_at, req.body)) {
+    return res.status(409).json(alreadySentErrorBody(application.email_completed_at));
   }
 
   const EXPIRY_30_DAYS = 30 * 24 * 60 * 60;

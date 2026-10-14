@@ -2,6 +2,7 @@ import { createPagesServerClient } from '@supabase/auth-helpers-nextjs';
 import { sendApprovalEmail } from '../../lib/emailService';
 import { buildAttachmentDownloadLinks } from '../../lib/applicationAttachments';
 import { getDeliveryPause, propertyDraftErrorBody } from '../../lib/propertyStatus';
+import { alreadySentErrorBody, isBlockedResend } from '../../lib/emailResendGuard';
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -71,6 +72,20 @@ export default async function handler(req, res) {
       // Import and call the settlement email handler directly
       const { default: sendSettlementEmailHandler } = await import('./send-settlement-approval-email');
       return await sendSettlementEmailHandler(req, res);
+    }
+
+    // Don't re-send a completed email unless the admin confirmed a resend
+    let sentAt = application.email_completed_at;
+    if (isPropertySpecific) {
+      const { data: sentGroup } = await supabase
+        .from('application_property_groups')
+        .select('email_completed_at')
+        .eq('id', propertyGroupId)
+        .maybeSingle();
+      sentAt = sentGroup?.email_completed_at;
+    }
+    if (isBlockedResend(sentAt, req.body)) {
+      return res.status(409).json(alreadySentErrorBody(sentAt));
     }
 
     // Check if PDF exists (either from application or property-specific)
@@ -414,9 +429,9 @@ export default async function handler(req, res) {
         console.log('Email sent successfully to submitter:', application.submitter_email);
       }
     } catch (emailError) {
+      // Nothing was delivered — don't mark the task complete or log "Email sent"
       console.error('Email sending failed:', emailError);
-      // Don't throw here - we still want to mark as success if notification was created
-      // The notification record shows intent to send, even if delivery failed
+      return res.status(500).json({ error: `Email could not be sent: ${emailError.message}` });
     }
 
     // Build audit note

@@ -38,6 +38,7 @@ import {
 import { useRouter } from 'next/router';
 import { mapFormDataToPDFFields } from '../../lib/pdfFieldMapper';
 import { parseEmails, formatEmailsForStorage, validateEmails } from '../../lib/emailUtils';
+import { confirmResendIfNeeded } from '../../lib/emailResendGuard';
 import MultiEmailInput from '../common/MultiEmailInput';
 import AdminLayout from './AdminLayout';
 
@@ -890,6 +891,10 @@ const AdminDashboard = ({ userRole }) => {
   };
 
   const handleSendApprovalEmail = async (applicationId) => {
+    // Ask before re-sending a completed email (requesters were getting duplicates from re-clicks)
+    const { proceed, resend } = confirmResendIfNeeded(selectedApplication?.email_completed_at, selectedApplication?.submitter_email);
+    if (!proceed) return;
+
     setSendingEmail(true);
     try {
       // Check if this is a settlement application
@@ -907,6 +912,7 @@ const AdminDashboard = ({ userRole }) => {
         },
         body: JSON.stringify({ 
           applicationId,
+          resend,
           temporaryAttachments: temporaryAttachments.map(att => ({
             name: att.name,
             size: att.size,
@@ -1214,7 +1220,7 @@ const AdminDashboard = ({ userRole }) => {
                               className='px-4 py-2 bg-white text-current border border-current rounded-md hover:opacity-80 transition-opacity text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed'
                               title={!settlementFormCompleted ? 'Settlement form must be completed first' : ''}
                             >
-                              {sendingEmail ? 'Sending...' : 'Send Email'}
+                              {sendingEmail ? 'Sending...' : selectedApplication.email_completed_at ? 'Resend Email' : 'Send Email'}
                             </button>
                           </div>
                           {selectedApplication.email_completed_at && (
@@ -1388,7 +1394,7 @@ const AdminDashboard = ({ userRole }) => {
                                         : ''
                                 }
                               >
-                                {sendingEmail ? 'Sending...' : 'Send Email'}
+                                {sendingEmail ? 'Sending...' : selectedApplication.email_completed_at ? 'Resend Email' : 'Send Email'}
                               </button>
                             </div>
                           </div>
