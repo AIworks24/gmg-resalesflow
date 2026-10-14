@@ -69,7 +69,8 @@ import { mapFormDataToPDFFields } from '../../lib/pdfFieldMapper';
 import { formatDate, formatDateTime, formatDateTimeFull, formatFormCompletionDateTime } from '../../lib/timeUtils';
 import { parseEmails } from '../../lib/emailUtils';
 import { isPropertyDraft, PROPERTY_DRAFT_MESSAGE } from '../../lib/propertyStatus';
-import { confirmResendIfNeeded, EMAIL_ALREADY_SENT_ERROR } from '../../lib/emailResendGuard';
+import { EMAIL_ALREADY_SENT_ERROR } from '../../lib/emailResendGuard';
+import { useResendConfirm, SEND_WITHOUT_CONFIRM } from './ResendConfirmModal';
 import usePropertyWatch from './realtime/usePropertyWatch';
 import AdminPropertyInspectionForm from './AdminPropertyInspectionForm';
 import AdminResaleCertificateForm from './AdminResaleCertificateForm';
@@ -136,6 +137,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
   const [propertyFiles, setPropertyFiles] = useState([]);
   const [loadingPropertyFiles, setLoadingPropertyFiles] = useState(false);
   const [snackbar, setSnackbar] = useState({ show: false, message: '', type: 'success' });
+  const { confirmResend, resendConfirmModal } = useResendConfirm();
   const [assignedToMe, setAssignedToMe] = useState(false);
   const [staffMembers, setStaffMembers] = useState([]);
   const [assigningApplication, setAssigningApplication] = useState(null);
@@ -2936,7 +2938,9 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
   const handleSendApprovalEmail = async (applicationId, group = null) => {
     // Ask before re-sending a completed email (requesters were getting duplicates from re-clicks)
     const sentAt = group ? group.email_completed_at : selectedApplication?.email_completed_at;
-    const { proceed, resend } = confirmResendIfNeeded(sentAt, selectedApplication?.submitter_email);
+    const { proceed, resend } = sentAt
+      ? await confirmResend(sentAt, selectedApplication)
+      : SEND_WITHOUT_CONFIRM;
     if (!proceed) return;
 
     // Stays true until the refreshed state shows the email as sent, so the button can't be re-clicked meanwhile
@@ -3571,7 +3575,9 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
   };
 
   const handleSendEmailForProperty = async (applicationId, group) => {
-    const { proceed, resend } = confirmResendIfNeeded(group.email_completed_at, selectedApplication?.submitter_email);
+    const { proceed, resend } = group.email_completed_at
+      ? await confirmResend(group.email_completed_at, selectedApplication)
+      : SEND_WITHOUT_CONFIRM;
     if (!proceed) return;
 
     setSendingEmailForProperty(group.id); // Set specific property as sending email
@@ -3814,7 +3820,9 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
     const lastSentAt = readyGroups.length > 0 && readyGroups.every((g) => g.email_completed_at)
       ? readyGroups.map((g) => g.email_completed_at).sort().pop()
       : null;
-    const { proceed, resend } = confirmResendIfNeeded(lastSentAt, selectedApplication?.submitter_email);
+    const { proceed, resend } = lastSentAt
+      ? await confirmResend(lastSentAt, selectedApplication)
+      : SEND_WITHOUT_CONFIRM;
     if (!proceed) return;
 
     setSendingAllMcEmails(true);
@@ -5686,7 +5694,9 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                                 </div>
                                 <button
                                   onClick={async () => {
-                                      const { proceed, resend } = confirmResendIfNeeded(selectedApplication.email_completed_at, selectedApplication.submitter_email);
+                                      const { proceed, resend } = selectedApplication.email_completed_at
+                                        ? await confirmResend(selectedApplication.email_completed_at, selectedApplication)
+                                        : SEND_WITHOUT_CONFIRM;
                                       if (!proceed) return;
                                       try {
                                       setSendingEmail(true);
@@ -5805,7 +5815,9 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                         </div>
                         <button
                           onClick={async () => {
-                            const { proceed, resend } = confirmResendIfNeeded(selectedApplication.email_completed_at, selectedApplication.buyer_email || selectedApplication.submitter_email);
+                            const { proceed, resend } = selectedApplication.email_completed_at
+                              ? await confirmResend(selectedApplication.email_completed_at, selectedApplication)
+                              : SEND_WITHOUT_CONFIRM;
                             if (!proceed) return;
                             try {
                               setSendingEmail(true);
@@ -5880,7 +5892,9 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                         </div>
                         <button
                           onClick={async () => {
-                            const { proceed, resend } = confirmResendIfNeeded(selectedApplication.email_completed_at, selectedApplication.submitter_email);
+                            const { proceed, resend } = selectedApplication.email_completed_at
+                              ? await confirmResend(selectedApplication.email_completed_at, selectedApplication)
+                              : SEND_WITHOUT_CONFIRM;
                             if (!proceed) return;
                             try {
                               setSendingEmail(true);
@@ -6557,6 +6571,9 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
             {renderAttachmentModal()}
           </div>
         )}
+
+        {/* Resend confirmation (duplicate document emails) */}
+        {resendConfirmModal}
 
         {/* Snackbar Notification */}
         {snackbar.show && (

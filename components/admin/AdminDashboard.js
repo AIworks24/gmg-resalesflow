@@ -38,7 +38,7 @@ import {
 import { useRouter } from 'next/router';
 import { mapFormDataToPDFFields } from '../../lib/pdfFieldMapper';
 import { parseEmails, formatEmailsForStorage, validateEmails } from '../../lib/emailUtils';
-import { confirmResendIfNeeded } from '../../lib/emailResendGuard';
+import { useResendConfirm, SEND_WITHOUT_CONFIRM } from './ResendConfirmModal';
 import MultiEmailInput from '../common/MultiEmailInput';
 import AdminLayout from './AdminLayout';
 
@@ -98,6 +98,7 @@ const AdminDashboard = ({ userRole }) => {
   const [propertyFiles, setPropertyFiles] = useState([]);
   const [loadingPropertyFiles, setLoadingPropertyFiles] = useState(false);
   const [snackbar, setSnackbar] = useState({ show: false, message: '', type: 'success' });
+  const { confirmResend, resendConfirmModal } = useResendConfirm();
 
   const supabase = createClientComponentClient();
   const router = useRouter();
@@ -892,7 +893,9 @@ const AdminDashboard = ({ userRole }) => {
 
   const handleSendApprovalEmail = async (applicationId) => {
     // Ask before re-sending a completed email (requesters were getting duplicates from re-clicks)
-    const { proceed, resend } = confirmResendIfNeeded(selectedApplication?.email_completed_at, selectedApplication?.submitter_email);
+    const { proceed, resend } = selectedApplication?.email_completed_at
+      ? await confirmResend(selectedApplication?.email_completed_at, selectedApplication)
+      : SEND_WITHOUT_CONFIRM;
     if (!proceed) return;
 
     setSendingEmail(true);
@@ -2638,6 +2641,9 @@ const AdminDashboard = ({ userRole }) => {
             {renderPropertyEditModal()}
           </div>
         )}
+
+        {/* Resend confirmation (duplicate document emails) */}
+        {resendConfirmModal}
 
         {/* Snackbar Notification */}
         {snackbar.show && (
