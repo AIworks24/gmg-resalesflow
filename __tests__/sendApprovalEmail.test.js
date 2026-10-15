@@ -15,7 +15,8 @@ const APP_ID = 563;
 
 /**
  * Stand-in for the Supabase client the handler builds. Every query chain resolves to
- * the canned row(s) for its table, whether it ends in .single() or is awaited directly.
+ * the canned row(s) for its table, whether it ends in .single()/.maybeSingle() or is
+ * awaited directly.
  * Storage list() answers per folder path.
  */
 function mockSupabase({ folders = {} } = {}) {
@@ -54,6 +55,7 @@ function mockSupabase({ folders = {} } = {}) {
       neq: () => builder,
       not: () => builder,
       single: async () => result,
+      maybeSingle: async () => result,
       then: (resolve, reject) => Promise.resolve(result).then(resolve, reject),
     };
     return builder;
