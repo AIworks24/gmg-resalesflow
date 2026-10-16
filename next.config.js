@@ -5,7 +5,7 @@ const { PHASE_DEVELOPMENT_SERVER } = require('next/constants');
 
 // Roll-out switch: send the CSP as Report-Only while checking flows for violations, then enforce.
 // The audit scanner only accepts the enforcing header.
-const CSP_REPORT_ONLY = true;
+const CSP_REPORT_ONLY = false;
 
 const originOf = (url) => {
   try {
