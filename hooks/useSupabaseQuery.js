@@ -1,5 +1,4 @@
 import useSWR from 'swr';
-import crypto from 'crypto';
 import React from 'react';
 import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
 
@@ -28,11 +27,9 @@ import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
 export function useSupabaseQuery(table, select, options = {}, swrOptions = {}) {
   // Generate unique cache key for this query
   // Add timestamp to force refetch after auth state changes
-  const cacheKeyData = { table, select, options };
-  const cacheKeyHash = crypto
-    .createHash('md5')
-    .update(JSON.stringify(cacheKeyData))
-    .digest('hex');
+  // The serialized query is the key itself. Hashing it with Node's crypto pulled the crypto/util
+  // browser polyfills into the bundle, whose Function() probe violates the CSP (no unsafe-eval).
+  const cacheKeyHash = JSON.stringify({ table, select, options });
   
   // Add a version to force cache invalidation on meaningful auth changes
   const [authVersion, setAuthVersion] = React.useState(0);
