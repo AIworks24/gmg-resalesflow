@@ -1,6 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { appendProcessNote, resolveActorName } from '../../lib/processHistoryServer';
 import { getDeliveryPause, propertyDraftErrorBody } from '../../lib/propertyStatus';
+import { alreadySentErrorBody, isBlockedResend } from '../../lib/emailResendGuard';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -37,6 +38,11 @@ export default async function handler(req, res) {
 
     if (appError || !application) {
       return res.status(404).json({ error: 'Application not found' });
+    }
+
+    // Don't re-send a completed email unless the admin confirmed a resend
+    if (isBlockedResend(application.email_completed_at, req.body)) {
+      return res.status(409).json(alreadySentErrorBody(application.email_completed_at));
     }
 
     // Use edited file if available, otherwise use completed file
@@ -160,9 +166,9 @@ export default async function handler(req, res) {
         console.log('Lender questionnaire email sent successfully to submitter');
       }
     } catch (emailError) {
+      // Nothing was delivered — don't mark the task complete or log it as emailed
       console.error('Failed to send lender questionnaire email:', emailError);
-      // Don't throw - continue with status updates even if email fails
-      // The process should complete successfully even if email delivery fails
+      return res.status(500).json({ error: `Email could not be sent: ${emailError.message}` });
     }
 
     // Notification creation removed - no longer needed

@@ -1,5 +1,6 @@
 import { createPagesServerClient } from '@supabase/auth-helpers-nextjs';
 import { PROPERTY_DRAFT_ERROR } from '../../lib/propertyStatus';
+import { EMAIL_ALREADY_SENT_ERROR } from '../../lib/emailResendGuard';
 
 /**
  * Sends all property emails for a multi-community application in one batch.
@@ -30,7 +31,7 @@ export default async function handler(req, res) {
       return res.status(403).json({ error: 'Forbidden' });
     }
 
-    const { applicationId } = req.body;
+    const { applicationId, resend = false } = req.body;
     if (!applicationId) {
       return res.status(400).json({ error: 'Application ID is required' });
     }
@@ -76,18 +77,32 @@ export default async function handler(req, res) {
 
     const cookie = req.headers.cookie || '';
 
-    // Include all PDF-ready groups regardless of email_status so admins can resend at any time.
-    const readyGroups = groups.filter((g) => g.pdf_url || g.pdf_status === 'completed');
-    if (readyGroups.length === 0) {
+    const pdfReadyGroups = groups.filter((g) => g.pdf_url || g.pdf_status === 'completed');
+    if (pdfReadyGroups.length === 0) {
       return res.status(400).json({ error: 'No properties have PDFs ready to send' });
+    }
+
+    // Already-emailed groups are only re-sent when the admin confirmed a resend
+    const alreadySent = resend ? [] : pdfReadyGroups.filter((g) => g.email_completed_at);
+    const readyGroups = resend ? pdfReadyGroups : pdfReadyGroups.filter((g) => !g.email_completed_at);
+    if (readyGroups.length === 0) {
+      return res.status(200).json({
+        success: true,
+        sent: 0,
+        total: 0,
+        skipped: [],
+        alreadySent: alreadySent.map((g) => g.property_name),
+        results: [],
+        message: 'All property emails were already sent — confirm to resend.',
+      });
     }
 
     const results = [];
     for (const group of readyGroups) {
       try {
         const body = isSettlementApp
-          ? { applicationId, propertyGroupId: group.id }
-          : { applicationId, propertyGroupId: group.id, propertyName: group.property_name, pdfUrl: group.pdf_url };
+          ? { applicationId, propertyGroupId: group.id, resend }
+          : { applicationId, propertyGroupId: group.id, propertyName: group.property_name, pdfUrl: group.pdf_url, resend };
 
         const response = await fetch(`${baseUrl}${apiEndpoint}`, {
           method: 'POST',
@@ -105,6 +120,7 @@ export default async function handler(req, res) {
           success: response.ok && result.success,
           // Groups whose property is in Draft are paused, not failed
           skipped: response.status === 409 && result.code === PROPERTY_DRAFT_ERROR,
+          alreadySent: response.status === 409 && result.code === EMAIL_ALREADY_SENT_ERROR,
           error: result.error,
         });
       } catch (err) {
@@ -120,9 +136,16 @@ export default async function handler(req, res) {
 
     const successCount = results.filter((r) => r.success).length;
     const skipped = results.filter((r) => r.skipped);
-    const failedCount = results.length - successCount - skipped.length;
+    const alreadySentNames = [
+      ...alreadySent.map((g) => g.property_name),
+      ...results.filter((r) => r.alreadySent).map((r) => r.propertyName),
+    ];
+    const failedCount = results.length - successCount - skipped.length - results.filter((r) => r.alreadySent).length;
     const skippedNote = skipped.length
       ? ` ${skipped.length} paused (property in Draft: ${skipped.map((r) => r.propertyName).join(', ')})`
+      : '';
+    const alreadySentNote = alreadySentNames.length
+      ? ` ${alreadySentNames.length} already sent, not re-sent: ${alreadySentNames.join(', ')}.`
       : '';
 
     return res.status(200).json({
@@ -130,11 +153,12 @@ export default async function handler(req, res) {
       sent: successCount,
       total: results.length,
       skipped: skipped.map((r) => r.propertyName),
+      alreadySent: alreadySentNames,
       results,
       message:
-        failedCount === 0 && skipped.length === 0
+        failedCount === 0 && skipped.length === 0 && alreadySentNames.length === 0
           ? `All ${successCount} emails sent successfully`
-          : `${successCount} sent${failedCount ? `, ${failedCount} failed` : ''}.${skippedNote}`,
+          : `${successCount} sent${failedCount ? `, ${failedCount} failed` : ''}.${skippedNote}${alreadySentNote}`,
     });
   } catch (error) {
     console.error('send-all-mc-emails error:', error);

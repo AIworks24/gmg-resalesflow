@@ -1,5 +1,6 @@
 import { createPagesServerClient } from '@supabase/auth-helpers-nextjs';
 import { getDeliveryPause, propertyDraftErrorBody } from '../../lib/propertyStatus';
+import { alreadySentErrorBody, isBlockedResend } from '../../lib/emailResendGuard';
 
 // Helper function to format property address with unit number
 const formatPropertyAddress = (address, unitNumber) => {
@@ -62,6 +63,20 @@ export default async function handler(req, res) {
 
     if (appError) {
       throw appError;
+    }
+
+    // Don't re-send a completed email unless the admin confirmed a resend
+    let sentAt = application.email_completed_at;
+    if (propertyGroupId) {
+      const { data: sentGroup } = await supabase
+        .from('application_property_groups')
+        .select('email_completed_at')
+        .eq('id', propertyGroupId)
+        .maybeSingle();
+      sentAt = sentGroup?.email_completed_at;
+    }
+    if (isBlockedResend(sentAt, req.body)) {
+      return res.status(409).json(alreadySentErrorBody(sentAt));
     }
 
     // Get settlement form - filter by property_group_id for multi-community
@@ -291,9 +306,9 @@ export default async function handler(req, res) {
         console.log('Settlement approval email sent successfully to submitter');
       }
     } catch (emailError) {
+      // Nothing was delivered — don't mark the task complete or log "Email sent"
       console.error('Failed to send settlement approval email:', emailError);
-      // Don't throw - continue with status updates even if email fails
-      // The process should complete successfully even if email delivery fails
+      return res.status(500).json({ error: `Email could not be sent: ${emailError.message}` });
     }
 
     // Notification creation removed - no longer needed

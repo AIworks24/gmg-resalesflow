@@ -69,6 +69,8 @@ import { mapFormDataToPDFFields } from '../../lib/pdfFieldMapper';
 import { formatDate, formatDateTime, formatDateTimeFull, formatFormCompletionDateTime } from '../../lib/timeUtils';
 import { parseEmails } from '../../lib/emailUtils';
 import { isPropertyDraft, PROPERTY_DRAFT_MESSAGE } from '../../lib/propertyStatus';
+import { EMAIL_ALREADY_SENT_ERROR } from '../../lib/emailResendGuard';
+import { useResendConfirm, SEND_WITHOUT_CONFIRM } from './ResendConfirmModal';
 import usePropertyWatch from './realtime/usePropertyWatch';
 import AdminPropertyInspectionForm from './AdminPropertyInspectionForm';
 import AdminResaleCertificateForm from './AdminResaleCertificateForm';
@@ -135,6 +137,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
   const [propertyFiles, setPropertyFiles] = useState([]);
   const [loadingPropertyFiles, setLoadingPropertyFiles] = useState(false);
   const [snackbar, setSnackbar] = useState({ show: false, message: '', type: 'success' });
+  const { confirmResend, resendConfirmModal } = useResendConfirm();
   const [assignedToMe, setAssignedToMe] = useState(false);
   const [staffMembers, setStaffMembers] = useState([]);
   const [assigningApplication, setAssigningApplication] = useState(null);
@@ -2933,12 +2936,17 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
   };
 
   const handleSendApprovalEmail = async (applicationId, group = null) => {
+    // Ask before re-sending a completed email (requesters were getting duplicates from re-clicks)
+    const sentAt = group ? group.email_completed_at : selectedApplication?.email_completed_at;
+    const { proceed, resend } = sentAt
+      ? await confirmResend(sentAt, selectedApplication)
+      : SEND_WITHOUT_CONFIRM;
+    if (!proceed) return;
+
+    // Stays true until the refreshed state shows the email as sent, so the button can't be re-clicked meanwhile
     setSendingEmail(true);
-    
-    let emailSentSuccessfully = false;
-    
+
     try {
-      // Include temporary attachments in the email request
       const response = await fetch('/api/send-approval-email', {
         method: 'POST',
         headers: {
@@ -2946,73 +2954,60 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
         },
         body: JSON.stringify({ 
           applicationId,
-          propertyGroupId: group?.id || null // Pass property_group_id for multi-community
+          propertyGroupId: group?.id || null, // Pass property_group_id for multi-community
+          resend,
         }),
       });
 
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.error || 'Failed to send approval email');
+        const error = new Error(data.error || 'Failed to send approval email');
+        error.code = data.code;
+        throw error;
       }
 
-      // Mark email as sent successfully
-      emailSentSuccessfully = true;
-      
+      showSnackbar('Email sent successfully!', 'success');
+
+      // Reflect the send immediately, then refresh from the database
+      if (selectedApplication && selectedApplication.id === applicationId) {
+        setSelectedApplication(prev => ({
+          ...prev,
+          email_completed_at: new Date().toISOString(),
+          status: 'approved',
+          updated_at: new Date().toISOString(),
+          notifications: prev.notifications || []
+        }));
+      }
+
+      try {
+        await refreshSelectedApplication(applicationId);
+      } catch (refreshError) {
+        console.warn('Database refresh failed after email send, but UI was already updated:', refreshError);
+      }
+
+      try {
+        await mutate();
+      } catch (mutateError) {
+        console.warn('Failed to refresh applications list:', mutateError);
+      }
     } catch (error) {
       console.error('❌ Failed to send approval email:', error);
       
-      // Handle specific PDF validation errors with helpful messages
-      if (error.message.includes('PDF has not been generated')) {
+      // Handle specific errors with helpful messages
+      if (error.code === EMAIL_ALREADY_SENT_ERROR) {
+        // Sent from elsewhere (another tab/user) since this view loaded
+        showSnackbar(error.message, 'warning');
+        refreshSelectedApplication(applicationId).catch(() => {});
+      } else if (error.message.includes('PDF has not been generated')) {
         showSnackbar('PDF has not been generated yet. Please generate the PDF first.', 'error');
-      } else if (error.message.includes('in Draft')) {
+      } else if (error.message.includes('in Draft') || error.message.includes('could not be sent')) {
         showSnackbar(error.message, 'error');
       } else {
         showSnackbar('Failed to send email. Please try again.', 'error');
       }
-    }
-    
-    // Always clear the sending state first, regardless of what happened
-    setSendingEmail(false);
-    
-    // If email was sent successfully, do the post-processing
-    if (emailSentSuccessfully) {
-      try {
-        // PRIMARY: Immediately update the selected application's email status
-        // This ensures the UI updates instantly and consistently
-        if (selectedApplication && selectedApplication.id === applicationId) {
-          setSelectedApplication(prev => ({
-            ...prev,
-            // Update email completion fields
-            email_completed_at: new Date().toISOString(),
-            status: 'approved',
-            updated_at: new Date().toISOString(),
-            // Notification creation removed - no longer needed
-            notifications: prev.notifications || []
-          }));
-        }
-        
-        // SECONDARY: Try to refresh from database (optional, runs in background)
-        try {
-          await refreshSelectedApplication(applicationId);
-        } catch (refreshError) {
-          console.warn('Database refresh failed after email send, but UI was already updated:', refreshError);
-        }
-        
-        // Refresh applications list immediately (with error handling)
-        try {
-          await mutate();
-        } catch (mutateError) {
-          console.warn('Failed to refresh applications list:', mutateError);
-          // Don't throw - email was sent successfully
-        }
-        
-        showSnackbar('Email sent successfully!', 'success');
-        
-      } catch (postProcessingError) {
-        console.warn('Post-processing failed, but email was sent successfully:', postProcessingError);
-        showSnackbar('Email sent successfully!', 'success');
-      }
+    } finally {
+      setSendingEmail(false);
     }
   };
 
@@ -3580,6 +3575,11 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
   };
 
   const handleSendEmailForProperty = async (applicationId, group) => {
+    const { proceed, resend } = group.email_completed_at
+      ? await confirmResend(group.email_completed_at, selectedApplication)
+      : SEND_WITHOUT_CONFIRM;
+    if (!proceed) return;
+
     setSendingEmailForProperty(group.id); // Set specific property as sending email
     
     try {
@@ -3595,7 +3595,8 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
           applicationId,
           propertyGroupId: group.id,
           propertyName: group.property_name,
-          pdfUrl: group.pdf_url
+          pdfUrl: group.pdf_url,
+          resend,
         }),
       });
       
@@ -3604,6 +3605,8 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
       if (!result.success) {
         throw new Error(result.error || 'Failed to send email');
       }
+
+      showSnackbar(`Email sent successfully for ${group.property_name}!`, 'success');
 
       // Refresh the property groups to get updated status
       
@@ -3626,12 +3629,10 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
             : g
         ));
       }
-
-      showSnackbar(`Email sent successfully for ${group.property_name}!`, 'success');
       
     } catch (error) {
       console.error(`❌ Failed to send email for property ${group.property_name}:`, error);
-      showSnackbar(`Failed to send email for ${group.property_name}. Please try again.`, 'error');
+      showSnackbar(error.message || `Failed to send email for ${group.property_name}. Please try again.`, 'error');
     } finally {
       setSendingEmailForProperty(null); // Clear the sending state for this property
     }
@@ -3813,18 +3814,29 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
   };
 
   const handleSendAllMcEmails = async (applicationId) => {
+    // Without confirmation the server only sends groups not yet emailed; once every
+    // ready group has been sent, a resend of all of them needs explicit confirmation.
+    const readyGroups = propertyGroups.filter((g) => g.pdf_url || g.pdf_status === 'completed');
+    const lastSentAt = readyGroups.length > 0 && readyGroups.every((g) => g.email_completed_at)
+      ? readyGroups.map((g) => g.email_completed_at).sort().pop()
+      : null;
+    const { proceed, resend } = lastSentAt
+      ? await confirmResend(lastSentAt, selectedApplication)
+      : SEND_WITHOUT_CONFIRM;
+    if (!proceed) return;
+
     setSendingAllMcEmails(true);
     try {
       const response = await fetch('/api/send-all-mc-emails', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ applicationId }),
+        body: JSON.stringify({ applicationId, resend }),
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || 'Failed to send emails');
       showSnackbar(
         result.message || `All ${result.sent} emails sent successfully`,
-        result.skipped?.length ? 'warning' : 'success'
+        result.skipped?.length || result.alreadySent?.length ? 'warning' : 'success'
       );
       await loadPropertyGroups(applicationId);
       await refreshSelectedApplication(applicationId);
@@ -5682,7 +5694,10 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                                 </div>
                                 <button
                                   onClick={async () => {
-                                      /* ... existing email logic ... */
+                                      const { proceed, resend } = selectedApplication.email_completed_at
+                                        ? await confirmResend(selectedApplication.email_completed_at, selectedApplication)
+                                        : SEND_WITHOUT_CONFIRM;
+                                      if (!proceed) return;
                                       try {
                                       setSendingEmail(true);
                                       const response = await fetch('/api/send-lender-questionnaire-email', {
@@ -5690,6 +5705,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                                         headers: { 'Content-Type': 'application/json' },
                                         body: JSON.stringify({
                                           applicationId: selectedApplication.id,
+                                          resend,
                                         }),
                                       });
 
@@ -5711,7 +5727,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                                   title={documentEmailsPaused ? PROPERTY_DRAFT_MESSAGE : undefined}
                                   className='flex items-center gap-2 px-4 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium shadow-sm disabled:opacity-50'
                                 >
-                                  <Mail className='w-4 h-4' /> {sendingEmail ? 'Sending...' : 'Send Email'}
+                                  <Mail className='w-4 h-4' /> {sendingEmail ? 'Sending...' : selectedApplication.email_completed_at ? 'Resend Email' : 'Send Email'}
                                 </button>
                               </div>
                               <div className='mt-4 p-4 border border-blue-100 rounded-lg bg-blue-50/50'>
@@ -5799,12 +5815,16 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                         </div>
                         <button
                           onClick={async () => {
+                            const { proceed, resend } = selectedApplication.email_completed_at
+                              ? await confirmResend(selectedApplication.email_completed_at, selectedApplication)
+                              : SEND_WITHOUT_CONFIRM;
+                            if (!proceed) return;
                             try {
                               setSendingEmail(true);
                               const response = await fetch('/api/send-info-packet-email', {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ applicationId: selectedApplication.id }),
+                                body: JSON.stringify({ applicationId: selectedApplication.id, resend }),
                               });
                               if (!response.ok) {
                                 const err = await response.json();
@@ -5872,12 +5892,16 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                         </div>
                         <button
                           onClick={async () => {
+                            const { proceed, resend } = selectedApplication.email_completed_at
+                              ? await confirmResend(selectedApplication.email_completed_at, selectedApplication)
+                              : SEND_WITHOUT_CONFIRM;
+                            if (!proceed) return;
                             try {
                               setSendingEmail(true);
                               const response = await fetch('/api/send-public-offering-email', {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ applicationId: selectedApplication.id }),
+                                body: JSON.stringify({ applicationId: selectedApplication.id, resend }),
                               });
                               if (!response.ok) {
                                 const err = await response.json();
@@ -6430,7 +6454,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                                            <RefreshCw className="w-3 h-3 sm:w-4 sm:h-4 animate-spin" />
                                            <span>Sending...</span>
                                          </div>
-                                      ) : 'Send Email'}
+                                      ) : (selectedApplication.email_completed_at ? 'Resend Email' : 'Send Email')}
                                    </button>
                                 </div>
                              </TaskCard>
@@ -6512,7 +6536,7 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
                                             <RefreshCw className="w-3 h-3 sm:w-4 sm:h-4 animate-spin" />
                                             <span>Sending...</span>
                                           </div>
-                                       ) : 'Send Email'}
+                                       ) : (selectedApplication.email_completed_at ? 'Resend Email' : 'Send Email')}
                                     </button>
                                     {taskStatuses.email !== 'completed' && (
                                        <button onClick={() => handleCompleteTask(selectedApplication.id, 'email')} disabled={!!selectedApplication?.processing_locked} className="w-full sm:w-auto px-3 py-2 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 active:bg-green-300 text-xs sm:text-sm font-medium transition-colors whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed">Mark Done</button>
@@ -6547,6 +6571,9 @@ const AdminApplications = ({ userRole: userRoleProp }) => {
             {renderAttachmentModal()}
           </div>
         )}
+
+        {/* Resend confirmation (duplicate document emails) */}
+        {resendConfirmModal}
 
         {/* Snackbar Notification */}
         {snackbar.show && (
