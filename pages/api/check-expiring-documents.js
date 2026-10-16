@@ -1,5 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
-import nodemailer from 'nodemailer';
+import { sendEmail } from '../../lib/emailService';
+import { parseEmails } from '../../lib/emailUtils';
+import { runWithConcurrency } from '../../lib/concurrency';
 
 // Initialize Supabase client with service role key for admin operations
 const supabase = createClient(
@@ -7,7 +9,22 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
-// Note: Transporter is initialized inside the handler to ensure required env vars are present
+// Microsoft Graph allows ~4 concurrent requests per mailbox; stay under it so sends aren't throttled
+const EMAIL_CONCURRENCY = 2;
+
+// Skip fake/placeholder emails
+const isFakeEmail = (email) => {
+  if (!email || typeof email !== 'string') return true;
+  const normalized = email.toLowerCase().trim();
+  const fakePatterns = [
+    /^test@/i, /@example\./i, /@test\./i, /@placeholder\./i, /@dummy\./i,
+    /^noreply@/i, /^no-reply@/i, /^fake@/i, /^placeholder@/i, /^dummy@/i,
+    /^temp@/i, /^temporary@/i, /@localhost/i, /@test\.com$/i,
+    /@example\.com$/i, /@example\.org$/i, /@example\.net$/i,
+  ];
+  return fakePatterns.some(pattern => pattern.test(normalized)) ||
+         normalized.length < 5 || !normalized.includes('@') || !normalized.includes('.');
+};
 
 export default async function handler(req, res) {
   // This endpoint should be called by a cron job daily
@@ -31,21 +48,6 @@ export default async function handler(req, res) {
   }
 
   try {
-    // Create email transporter
-    const transporter = nodemailer.createTransport({
-      host: process.env.SMTP_HOST,
-      port: process.env.SMTP_PORT,
-      secure: process.env.SMTP_SECURE === "true",
-      auth: {
-        user: process.env.GMAIL_USER,
-        pass: process.env.GMAIL_APP_PASSWORD,
-      },
-      tls: {
-        ciphers: process.env.CIPHERS || "SSLv3",
-        rejectUnauthorized: false,
-      },
-    });
-
     // Get all documents expiring within 30 days, but filter for >20 days (21-30 days) for admin notifications
     const thirtyDaysFromNow = new Date();
     thirtyDaysFromNow.setDate(thirtyDaysFromNow.getDate() + 30);
@@ -118,8 +120,8 @@ export default async function handler(req, res) {
 
     // Admin email notification - include ALL documents expiring within 30 days
     // (not just >20 days, so admins see urgent documents too)
-    const emailPromises = [];
-    let adminEmailsSent = 0;
+    // Emails to send: { kind: 'admin' | 'owner', label, to, subject, html }
+    const emails = [];
     
     // Collect all documents for admin summary (all documents within 30 days)
     const allAdminDocs = [];
@@ -273,49 +275,23 @@ export default async function handler(req, res) {
                            approachingCount > 0 ? `⚡ ${approachingCount} Document${approachingCount === 1 ? '' : 's'} Approaching` :
                            `${documentCount} Document${documentCount === 1 ? '' : 's'} Expiring`;
       
-      const adminMailOptions = {
-        from: `"GMG Resale Flow Admin" <${process.env.GMAIL_USER}>`,
+      emails.push({
+        kind: 'admin',
+        label: 'Admin summary',
         to: adminEmail,
         subject: `Admin Alert: ${subjectUrgency} (${documentCount} total within 30 days)`,
         html: adminEmailHtml
-      };
-
-      emailPromises.push(
-        transporter.sendMail(adminMailOptions).then(() => {
-          adminEmailsSent = 1;
-          console.log(`✅ Admin email sent to ${adminEmail} for ${documentCount} expiring documents`);
-        }).catch((error) => {
-          console.error(`❌ Failed to send admin email to ${adminEmail}:`, error);
-        })
-      );
+      });
     }
 
     // Property owner emails (for documents expiring within 30 days)
     for (const propertyData of Object.values(propertiesWithExpiringDocs)) {
       const { property, documents } = propertyData;
       
-      // Determine recipient emails (owner only as management fields removed)
-      const recipients = [];
-      if (property.property_owner_email) {
-        const ownerEmail = property.property_owner_email.replace(/^owner\./, '');
-        // Skip fake/placeholder emails
-        const isFakeEmail = (email) => {
-          if (!email || typeof email !== 'string') return true;
-          const normalized = email.toLowerCase().trim();
-          const fakePatterns = [
-            /^test@/i, /@example\./i, /@test\./i, /@placeholder\./i, /@dummy\./i,
-            /^noreply@/i, /^no-reply@/i, /^fake@/i, /^placeholder@/i, /^dummy@/i,
-            /^temp@/i, /^temporary@/i, /@localhost/i, /@test\.com$/i,
-            /@example\.com$/i, /@example\.org$/i, /@example\.net$/i,
-          ];
-          return fakePatterns.some(pattern => pattern.test(normalized)) ||
-                 normalized.length < 5 || !normalized.includes('@') || !normalized.includes('.');
-        };
-        
-        if (!isFakeEmail(ownerEmail)) {
-          recipients.push(ownerEmail);
-        }
-      }
+      // Recipients: every owner address on the property (stored comma-separated), minus placeholders
+      const recipients = parseEmails(property.property_owner_email)
+        .map(email => email.replace(/^owner\./, ''))
+        .filter(email => !isFakeEmail(email));
       
       if (recipients.length === 0) continue;
       
@@ -409,19 +385,35 @@ export default async function handler(req, res) {
         </div>
       `;
       
-      // Send email
-      const mailOptions = {
-        from: `"GMG Resale Flow Admin" <${process.env.GMAIL_USER}>`,
-        to: recipients.join(', '),
+      emails.push({
+        kind: 'owner',
+        label: property.name,
+        to: recipients,
         subject: `Document Expiration Alert - ${property.name}`,
         html: emailHtml
-      };
-      
-      emailPromises.push(transporter.sendMail(mailOptions));
+      });
     }
     
-    // Send all emails
-    await Promise.allSettled(emailPromises);
+    // Send all emails, a couple at a time
+    const results = await runWithConcurrency(emails, EMAIL_CONCURRENCY, (email) =>
+      sendEmail({ to: email.to, subject: email.subject, html: email.html, context: 'ExpiringDocs' })
+    );
+
+    const failures = [];
+    results.forEach((result, i) => {
+      const email = emails[i];
+      const to = [].concat(email.to).join(', ');
+      if (result.status === 'fulfilled') {
+        console.log(`✅ Expiring documents email sent (${email.label}) to ${to} via ${result.value?.method}`);
+      } else {
+        console.error(`❌ Failed to send expiring documents email (${email.label}) to ${to}:`, result.reason);
+        failures.push({ kind: email.kind, label: email.label, to, error: result.reason?.message || String(result.reason) });
+      }
+    });
+
+    const sentOf = (kind) => results.filter((r, i) => emails[i].kind === kind && r.status === 'fulfilled').length;
+    const adminEmailsSent = sentOf('admin');
+    const ownerEmailsSent = sentOf('owner');
     
     // Log results
     const totalProperties = Object.keys(propertiesWithExpiringDocs).length;
@@ -429,17 +421,20 @@ export default async function handler(req, res) {
     const adminDocCount = allAdminDocs.length;
     const urgentDocCount = allAdminDocs.filter(doc => doc.days_until_expiration <= 7).length;
     
-    res.status(200).json({
-      success: true,
-      message: `Checked ${totalDocuments} expiring documents across ${totalProperties} properties. Sent ${adminEmailsSent} admin email(s) for ${adminDocCount} document(s) expiring within 30 days (${urgentDocCount} urgent ≤7 days).`,
+    // Any failed send makes the run fail, so a broken mail setup shows up in the cron's status
+    res.status(failures.length > 0 ? 500 : 200).json({
+      success: failures.length === 0,
+      message: `Checked ${totalDocuments} expiring documents across ${totalProperties} properties. Sent ${adminEmailsSent} admin email(s) for ${adminDocCount} document(s) expiring within 30 days (${urgentDocCount} urgent ≤7 days) and ${ownerEmailsSent} property owner email(s). ${failures.length} email(s) failed.`,
       summary: {
         properties_notified: totalProperties,
         documents_expiring: totalDocuments,
         admin_documents_count: adminDocCount,
         admin_urgent_documents: urgentDocCount,
         admin_emails_sent: adminEmailsSent,
-        property_owner_emails_sent: emailPromises.length - adminEmailsSent
-      }
+        property_owner_emails_sent: ownerEmailsSent,
+        emails_failed: failures.length
+      },
+      failures
     });
     
   } catch (error) {

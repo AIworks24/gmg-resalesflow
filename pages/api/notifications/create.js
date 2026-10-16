@@ -1,6 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { sendPropertyManagerNotificationEmail, sendInfoPacketPropertyNotificationEmail } from '../../../lib/emailService';
 import { parseEmails, normalizeEmail } from '../../../lib/emailUtils';
+import { runWithConcurrency } from '../../../lib/concurrency';
 
 /**
  * Format application type for display in notifications
@@ -74,27 +75,6 @@ function isFakeEmail(email) {
 // requests per mailbox; firing every recipient at once got the rest throttled (429), and the
 // throttled retries were lost when the function returned (ClickUp 14ypaj0fzkt, LQ #3011).
 const EMAIL_CONCURRENCY = 2;
-
-/**
- * Run fn over items with at most `limit` in flight. Never throws; returns
- * Promise.allSettled-style results in input order.
- */
-async function runWithConcurrency(items, limit, fn) {
-  const results = new Array(items.length);
-  let next = 0;
-  const worker = async () => {
-    while (next < items.length) {
-      const i = next++;
-      try {
-        results[i] = { status: 'fulfilled', value: await fn(items[i]) };
-      } catch (reason) {
-        results[i] = { status: 'rejected', reason };
-      }
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
-  return results;
-}
 
 function isMultiCommunityApplication(application) {
   return !!(application.hoa_properties?.is_multi_community ||

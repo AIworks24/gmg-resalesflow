@@ -9,7 +9,7 @@
  * Make sure you have:
  * 1. CRON_SECRET in your .env.local
  * 2. NEXT_PUBLIC_SITE_URL or NEXT_PUBLIC_APP_URL (optional, defaults to http://localhost:3000)
- * 3. All email configuration (SMTP_HOST, SMTP_PORT, GMAIL_USER, GMAIL_APP_PASSWORD)
+ * 3. Microsoft Graph email configuration (MICROSOFT_CLIENT_ID, MICROSOFT_CLIENT_SECRET, MICROSOFT_TENANT_ID, MICROSOFT_FROM_EMAIL)
  * 4. ADMIN_EMAIL (optional, defaults to resales@gmgva.com)
  */
 
