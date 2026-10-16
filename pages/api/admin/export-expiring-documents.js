@@ -4,6 +4,7 @@ import { createPagesServerClient } from '@supabase/auth-helpers-nextjs';
 import { componentToPdf } from '../../../lib/reactPdfService';
 import { ReportPdfDocument } from '../../../lib/components/ReportPdfDocument';
 import { parsePropertyId } from '../../../lib/reports/propertyFilter';
+import { onlyActivePropertyDocs } from '../../../lib/propertyStatus';
 
 function escapeCSV(val) {
   const s = String(val ?? '');
@@ -57,7 +58,7 @@ export default async function handler(req, res) {
       .from('property_documents')
       .select(`
         id, document_name, document_key, expiration_date,
-        property:property_id ( id, name, location, property_owner_email, property_owner_name )
+        property:property_id ( id, name, location, property_owner_email, property_owner_name, deleted_at )
       `)
       .not('expiration_date', 'is', null)
       .eq('is_not_applicable', false)
@@ -71,8 +72,8 @@ export default async function handler(req, res) {
 
     if (error) throw error;
 
-    const documents = docs
-      .filter((d) => d.property?.id)
+    // Retired properties are left out of the expiring-documents report
+    const documents = onlyActivePropertyDocs(docs)
       .map((d) => {
         const exp = new Date(d.expiration_date);
         exp.setHours(0, 0, 0, 0);

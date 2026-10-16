@@ -26,6 +26,11 @@ import useAdminAuthStore from '../../stores/adminAuthStore';
 import { useApplications } from '../../hooks/useApplications';
 import { useAppContext } from '../../lib/AppContext';
 import AdminLayout from './AdminLayout';
+import {
+  getComparisonWindows,
+  serializeComparisonWindows,
+  formatWindowRange,
+} from '../../lib/reports/comparisonWindows';
 import useSWR from 'swr';
 
 // ─── formatting helpers ────────────────────────────────────────────────────
@@ -233,7 +238,7 @@ function DeltaBadge({ pct }) {
   );
 }
 
-function ComparisonCard({ label, current, previous, deltaCount, deltaRevenue, loading }) {
+function ComparisonCard({ label, subtitle, current, previous, deltaCount, deltaRevenue, loading }) {
   if (loading) {
     return (
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5 animate-pulse">
@@ -257,8 +262,9 @@ function ComparisonCard({ label, current, previous, deltaCount, deltaRevenue, lo
   return (
     <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
       {/* Header */}
-      <div className="flex items-center justify-between mb-4">
+      <div className="mb-4">
         <h3 className="text-sm font-semibold text-gray-700">{label.current} vs {label.previous}</h3>
+        {subtitle && <p className="text-xs text-gray-400 mt-0.5">{subtitle}</p>}
       </div>
 
       {/* Applications row */}
@@ -493,7 +499,7 @@ function ExportReportsTab({
   exportDateFilter, setExportDateFilter,
   exportCustomRange, setExportCustomRange,
   exportPeriodLabel,
-  exportExpiringDays, setExportExpiringDays,
+  expiringDays, setExpiringDays,
   exportPropertyFilter, setExportPropertyFilter,
   exportPropertyLabel, hoaProperties,
   exportLoading, handleDownload,
@@ -587,13 +593,13 @@ function ExportReportsTab({
             <span className="text-xs text-gray-500">Window:</span>
             <div className="relative">
               <select
-                value={exportExpiringDays}
-                onChange={(e) => setExportExpiringDays(Number(e.target.value))}
+                value={expiringDays}
+                onChange={(e) => setExpiringDays(Number(e.target.value))}
                 className="pl-2.5 pr-7 py-1 bg-white border border-gray-200 rounded-md text-xs text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 appearance-none"
               >
-                <option value={30}>30 days</option>
-                <option value={60}>60 days</option>
-                <option value={90}>90 days</option>
+                <option value={30}>Next 30 days</option>
+                <option value={60}>Next 60 days</option>
+                <option value={90}>Next 90 days</option>
               </select>
               <ChevronDown className="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 w-3 h-3 text-gray-400" />
             </div>
@@ -610,13 +616,13 @@ const AdminReports = () => {
   const [dateFilter, setDateFilter]         = useState('all');
   const [customDateRange, setCustomDateRange] = useState({ startDate: '', endDate: '' });
   const [activeTab, setActiveTab]           = useState('reports');
+  // One 30/60/90 window shared by the Expiring Documents tab (list + badge) and its exports
   const [expiringDays, setExpiringDays]     = useState(30);
   const [propertyFilter, setPropertyFilter] = useState('all');
 
   // Export Reports tab state
   const [exportDateFilter, setExportDateFilter]         = useState('month');
   const [exportCustomRange, setExportCustomRange]       = useState({ startDate: '', endDate: '' });
-  const [exportExpiringDays, setExportExpiringDays]     = useState(30);
   const [exportPropertyFilter, setExportPropertyFilter] = useState('all');
   const [exportLoading, setExportLoading]               = useState({});
 
@@ -663,7 +669,7 @@ const AdminReports = () => {
       case 'custom':
         if (customDateRange.startDate && customDateRange.endDate) {
           return {
-            start: new Date(customDateRange.startDate).toISOString(),
+            start: new Date(customDateRange.startDate + 'T00:00:00').toISOString(),
             end:   new Date(customDateRange.endDate + 'T23:59:59').toISOString(),
           };
         }
@@ -717,16 +723,28 @@ const AdminReports = () => {
     retry: (count, err) => err?.status >= 500 && count < 1,
   });
 
-  // Comparison is period-independent — always this week/month vs previous.
-  // It does honour the property filter so the deltas match the filtered KPIs.
+  // Comparison follows the selected period (this quarter vs last quarter, …), comparing the
+  // same elapsed span; All Time shows week + month. Honours the property filter like the KPIs.
+  const comparisonWindows = useMemo(
+    () => getComparisonWindows(dateFilter, customDateRange),
+    [dateFilter, customDateRange],
+  );
+
+  const comparisonParams = useMemo(() => {
+    if (comparisonWindows.length === 0) return '';
+    const p = new URLSearchParams({ windows: serializeComparisonWindows(comparisonWindows) });
+    if (propertyFilter !== 'all') p.set('propertyId', propertyFilter);
+    return p.toString();
+  }, [comparisonWindows, propertyFilter]);
+
   const comparisonQuery = useQuery({
-    queryKey: ['reports-comparison', propertyFilter],
+    queryKey: ['reports-comparison', comparisonParams],
     queryFn: async ({ signal }) => {
-      const params = propertyFilter !== 'all' ? `?propertyId=${propertyFilter}` : '';
-      const res = await fetch(`/api/admin/reports/comparison${params}`, { signal });
+      const res = await fetch(`/api/admin/reports/comparison?${comparisonParams}`, { signal });
       if (!res.ok) throw new Error('Failed to load comparison');
       return res.json();
     },
+    enabled: comparisonParams !== '',
     placeholderData: (prev) => prev,
     staleTime: 5 * 60 * 1000,
     gcTime:    15 * 60 * 1000,
@@ -869,7 +887,7 @@ const AdminReports = () => {
       case 'custom':
         if (exportCustomRange.startDate && exportCustomRange.endDate) {
           return {
-            start: new Date(exportCustomRange.startDate).toISOString(),
+            start: new Date(exportCustomRange.startDate + 'T00:00:00').toISOString(),
             end:   new Date(exportCustomRange.endDate + 'T23:59:59').toISOString(),
           };
         }
@@ -922,7 +940,7 @@ const AdminReports = () => {
 
       const params = new URLSearchParams({ format });
       if (reportKey === 'expiring-documents') {
-        params.set('days', opts.days ?? exportExpiringDays);
+        params.set('days', opts.days ?? expiringDays);
       } else {
         if (exportDateRange?.start) params.set('dateStart', exportDateRange.start);
         if (exportDateRange?.end)   params.set('dateEnd',   exportDateRange.end);
@@ -946,7 +964,7 @@ const AdminReports = () => {
     } finally {
       setExportLoading((prev) => ({ ...prev, [`${reportKey}-${format}`]: false }));
     }
-  }, [exportDateRange, exportExpiringDays, exportPropertyFilter]);
+  }, [exportDateRange, expiringDays, exportPropertyFilter]);
 
   function triggerDownload(blob, filename) {
     const url  = URL.createObjectURL(blob);
@@ -964,7 +982,7 @@ const AdminReports = () => {
   const handleRefresh = () => {
     summaryQuery.refetch();
     recentQuery.refetch();
-    comparisonQuery.refetch();
+    if (comparisonParams) comparisonQuery.refetch();
     // Disabled while a property is selected — refetch() would fire it anyway
     if (propertyFilter === 'all') stripeQuery.refetch();
   };
@@ -1241,8 +1259,8 @@ const AdminReports = () => {
             exportCustomRange={exportCustomRange}
             setExportCustomRange={setExportCustomRange}
             exportPeriodLabel={exportPeriodLabel}
-            exportExpiringDays={exportExpiringDays}
-            setExportExpiringDays={setExportExpiringDays}
+            expiringDays={expiringDays}
+            setExpiringDays={setExpiringDays}
             exportPropertyFilter={exportPropertyFilter}
             setExportPropertyFilter={setExportPropertyFilter}
             exportPropertyLabel={exportPropertyLabel}
@@ -1393,24 +1411,26 @@ const AdminReports = () => {
             </div>
 
             {/* Period comparison */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 mb-6">
-              <ComparisonCard
-                label={comparison?.week?.label || { current: 'This Week', previous: 'Last Week' }}
-                current={comparison?.week?.current   || { count: 0, revenue: 0 }}
-                previous={comparison?.week?.previous  || { count: 0, revenue: 0 }}
-                deltaCount={comparison?.week?.deltaCount   ?? 0}
-                deltaRevenue={comparison?.week?.deltaRevenue ?? 0}
-                loading={isLoadingComparison}
-              />
-              <ComparisonCard
-                label={comparison?.month?.label || { current: 'This Month', previous: 'Last Month' }}
-                current={comparison?.month?.current   || { count: 0, revenue: 0 }}
-                previous={comparison?.month?.previous  || { count: 0, revenue: 0 }}
-                deltaCount={comparison?.month?.deltaCount   ?? 0}
-                deltaRevenue={comparison?.month?.deltaRevenue ?? 0}
-                loading={isLoadingComparison}
-              />
-            </div>
+            {comparisonWindows.length > 0 && (
+              <div className={`grid grid-cols-1 gap-6 mb-6 ${comparisonWindows.length > 1 ? 'sm:grid-cols-2' : ''}`}>
+                {comparisonWindows.map((w) => {
+                  // Placeholder data from the previous period may not hold this card yet
+                  const stats = comparison?.comparisons?.find((c) => c.key === w.key);
+                  return (
+                    <ComparisonCard
+                      key={w.key}
+                      label={w.label}
+                      subtitle={`${formatWindowRange(w.current)} vs ${formatWindowRange(w.previous)}`}
+                      current={stats?.current   || { count: 0, revenue: 0 }}
+                      previous={stats?.previous || { count: 0, revenue: 0 }}
+                      deltaCount={stats?.deltaCount     ?? 0}
+                      deltaRevenue={stats?.deltaRevenue ?? 0}
+                      loading={isLoadingComparison || (!stats && comparisonQuery.isFetching)}
+                    />
+                  );
+                })}
+              </div>
+            )}
 
             {/* Monthly trend */}
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">

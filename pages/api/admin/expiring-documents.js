@@ -1,4 +1,5 @@
 import { createPagesServerClient } from '@supabase/auth-helpers-nextjs';
+import { onlyActivePropertyDocs } from '../../../lib/propertyStatus';
 
 export default async function handler(req, res) {
   if (req.method !== 'GET') {
@@ -50,7 +51,8 @@ export default async function handler(req, res) {
           name,
           location,
           property_owner_email,
-          property_owner_name
+          property_owner_name,
+          deleted_at
         )
       `)
       .not('expiration_date', 'is', null)
@@ -60,9 +62,8 @@ export default async function handler(req, res) {
 
     if (error) throw error;
 
-    // Filter out documents without properties and calculate days until expiration
-    const documentsWithDetails = expiringDocs
-      .filter(doc => doc.property && doc.property.id)
+    // Drop documents without a property or on a retired property, then calculate days until expiration
+    const documentsWithDetails = onlyActivePropertyDocs(expiringDocs)
       .map(doc => {
         const expirationDate = new Date(doc.expiration_date);
         const today = new Date();

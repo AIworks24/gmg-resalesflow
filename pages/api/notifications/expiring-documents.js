@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
+import { onlyActivePropertyDocs } from '../../../lib/propertyStatus';
 
 // Initialize Supabase client with service role key for admin operations
 const supabase = createClient(
@@ -36,7 +37,8 @@ export default async function handler(req, res) {
           name,
           location,
           property_owner_email,
-          property_owner_name
+          property_owner_name,
+          deleted_at
         )
       `)
       .gte('expiration_date', today)
@@ -46,9 +48,8 @@ export default async function handler(req, res) {
 
     if (error) throw error;
 
-    // Filter documents by property owner email (case-insensitive)
-    const userExpiringDocs = expiringDocs.filter(doc => {
-      if (!doc.property) return false;
+    // Filter documents by property owner email (case-insensitive); retired properties are skipped
+    const userExpiringDocs = onlyActivePropertyDocs(expiringDocs).filter(doc => {
       const docEmail = (doc.property.property_owner_email || '').toLowerCase().trim();
       const userEmailLower = userEmail.toLowerCase().trim();
       // Also handle "owner." prefix that might be in the database

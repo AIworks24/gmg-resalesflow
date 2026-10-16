@@ -2,6 +2,7 @@ import { createClient } from '@supabase/supabase-js';
 import { sendEmail } from '../../lib/emailService';
 import { parseEmails } from '../../lib/emailUtils';
 import { runWithConcurrency } from '../../lib/concurrency';
+import { onlyActivePropertyDocs } from '../../lib/propertyStatus';
 
 // Initialize Supabase client with service role key for admin operations
 const supabase = createClient(
@@ -59,7 +60,7 @@ export default async function handler(req, res) {
     const twentyDaysLater = twentyDaysFromNow.toISOString().split('T')[0];
     const thirtyDaysLater = thirtyDaysFromNow.toISOString().split('T')[0];
 
-    const { data: expiringDocs, error } = await supabase
+    const { data: allExpiringDocs, error } = await supabase
       .from('property_documents')
       .select(`
         *,
@@ -68,7 +69,8 @@ export default async function handler(req, res) {
           name,
           location,
           property_owner_email,
-          property_owner_name
+          property_owner_name,
+          deleted_at
         )
       `)
       .gte('expiration_date', today)
@@ -77,6 +79,9 @@ export default async function handler(req, res) {
       .not('expiration_date', 'is', null);
 
     if (error) throw error;
+
+    // Retired properties get no expiring-document alerts (admin summary or owner emails)
+    const expiringDocs = onlyActivePropertyDocs(allExpiringDocs);
 
     // Generate base URL once for all document links
     const baseUrl = process.env.NEXT_PUBLIC_SITE_URL || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';

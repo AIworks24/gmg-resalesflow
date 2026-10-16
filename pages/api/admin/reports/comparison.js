@@ -6,25 +6,31 @@ import { excludeDrafts, REPORT_SCOPE_VERSION } from '../../../../lib/reports/rep
 const ALLOWED_ROLES = ['admin', 'staff', 'accounting'];
 const CACHE_TTL = 5 * 60; // 5 minutes
 
-function startOfWeek(date) {
-  const d = new Date(date);
-  const day = d.getDay(); // 0 = Sunday
-  d.setDate(d.getDate() - day);
-  d.setHours(0, 0, 0, 0);
-  return d;
-}
+const MAX_WINDOWS = 2;
 
-function startOfMonth(date) {
-  const d = new Date(date);
-  d.setDate(1);
-  d.setHours(0, 0, 0, 0);
-  return d;
-}
+/**
+ * Parse the `windows` query param: a JSON array of { key, cs, ce, ps, pe } ISO timestamps
+ * (current/previous start + end), built by lib/reports/comparisonWindows.js in the browser so
+ * the periods match the KPI date range. Returns null when anything is malformed.
+ */
+function parseWindows(raw) {
+  let list;
+  try {
+    list = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(list) || list.length === 0 || list.length > MAX_WINDOWS) return null;
 
-function endOfDay(date) {
-  const d = new Date(date);
-  d.setHours(23, 59, 59, 999);
-  return d;
+  const windows = [];
+  for (const w of list) {
+    if (!w || typeof w.key !== 'string') return null;
+    const [cs, ce, ps, pe] = [w.cs, w.ce, w.ps, w.pe].map((v) => new Date(v));
+    if ([cs, ce, ps, pe].some((d) => Number.isNaN(d.getTime()))) return null;
+    if (cs > ce || ps > pe) return null;
+    windows.push({ key: w.key, current: { start: cs, end: ce }, previous: { start: ps, end: pe } });
+  }
+  return windows;
 }
 
 async function fetchWindowStats(supabase, start, end, propertyScope = null) {
@@ -76,66 +82,41 @@ export default async function handler(req, res) {
     }
 
     const propertyId = parsePropertyId(req.query.propertyId);
+    const windowsParam = typeof req.query.windows === 'string' ? req.query.windows : '';
+    const windows = parseWindows(windowsParam);
+    if (!windows) {
+      return res.status(400).json({ error: 'windows must be a JSON array of 1-2 { key, cs, ce, ps, pe } date ranges' });
+    }
 
-    const cacheKey = `reports:comparison:${REPORT_SCOPE_VERSION}:${new Date().toISOString().slice(0, 13)}:prop:${propertyId ?? 'all'}`; // hourly cache
+    const cacheKey = `reports:comparison:${REPORT_SCOPE_VERSION}:${windowsParam}:prop:${propertyId ?? 'all'}`;
     const cached = await getCache(cacheKey);
     if (cached) {
       res.setHeader('X-Cache', 'HIT');
       return res.status(200).json(cached);
     }
 
-    const now = new Date();
-
-    // ── Week windows ──────────────────────────────────────────────────────────
-    const thisWeekStart  = startOfWeek(now);
-    const thisWeekEnd    = endOfDay(now);
-
-    const lastWeekStart  = new Date(thisWeekStart);
-    lastWeekStart.setDate(lastWeekStart.getDate() - 7);
-    const lastWeekEnd    = new Date(thisWeekStart);
-    lastWeekEnd.setMilliseconds(-1);
-
-    // ── Month windows ─────────────────────────────────────────────────────────
-    const thisMonthStart = startOfMonth(now);
-    const thisMonthEnd   = endOfDay(now);
-
-    const lastMonthStart = startOfMonth(new Date(now.getFullYear(), now.getMonth() - 1, 1));
-    const lastMonthEnd   = new Date(thisMonthStart);
-    lastMonthEnd.setMilliseconds(-1);
-
-    // Resolve the property scope once — all four windows reuse it
+    // Resolve the property scope once — every window reuses it
     const propertyScope = await resolvePropertyScope(supabase, propertyId);
-
-    // Run all four queries in parallel
-    const [thisWeek, lastWeek, thisMonth, lastMonth] = await Promise.all([
-      fetchWindowStats(supabase, thisWeekStart,  thisWeekEnd,   propertyScope),
-      fetchWindowStats(supabase, lastWeekStart,  lastWeekEnd,   propertyScope),
-      fetchWindowStats(supabase, thisMonthStart, thisMonthEnd,  propertyScope),
-      fetchWindowStats(supabase, lastMonthStart, lastMonthEnd,  propertyScope),
-    ]);
-
-    const formatMonthLabel = (d) =>
-      d.toLocaleString('en-US', { month: 'long', year: 'numeric' });
 
     const deltaCount   = (curr, prev) => prev === 0 ? (curr > 0 ? 100 : 0) : Math.round(((curr - prev) / prev) * 100);
     const deltaRevenue = (curr, prev) => prev === 0 ? (curr > 0 ? 100 : 0) : Math.round(((curr - prev) / prev) * 100);
 
-    const payload = {
-      week: {
-        label:        { current: 'This Week',  previous: 'Last Week' },
-        current:      thisWeek,
-        previous:     lastWeek,
-        deltaCount:   deltaCount(thisWeek.count,   lastWeek.count),
-        deltaRevenue: deltaRevenue(thisWeek.revenue, lastWeek.revenue),
-      },
-      month: {
-        label:        { current: formatMonthLabel(now), previous: formatMonthLabel(lastMonthStart) },
-        current:      thisMonth,
-        previous:     lastMonth,
-        deltaCount:   deltaCount(thisMonth.count,   lastMonth.count),
-        deltaRevenue: deltaRevenue(thisMonth.revenue, lastMonth.revenue),
-      },
-    };
+    // Current + previous stats for every window, all in parallel
+    const comparisons = await Promise.all(windows.map(async (w) => {
+      const [current, previous] = await Promise.all([
+        fetchWindowStats(supabase, w.current.start,  w.current.end,  propertyScope),
+        fetchWindowStats(supabase, w.previous.start, w.previous.end, propertyScope),
+      ]);
+      return {
+        key:          w.key,
+        current,
+        previous,
+        deltaCount:   deltaCount(current.count, previous.count),
+        deltaRevenue: deltaRevenue(current.revenue, previous.revenue),
+      };
+    }));
+
+    const payload = { comparisons };
 
     await setCache(cacheKey, payload, CACHE_TTL);
     res.setHeader('X-Cache', 'MISS');
