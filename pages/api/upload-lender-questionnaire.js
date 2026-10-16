@@ -3,6 +3,7 @@ import formidable from 'formidable';
 import fs from 'fs';
 import { resolveActingUser } from '../../lib/impersonation';
 import { isJsonRequest, readJsonBody } from '../../lib/readJsonBody';
+import { sendEmail } from '../../lib/emailService';
 
 // Disable body parsing, we'll handle it with formidable (multipart) or read the
 // raw JSON body ourselves (direct-to-storage mode).
@@ -238,26 +239,10 @@ export default async function handler(req, res) {
         const expectedDate = new Date();
         expectedDate.setDate(expectedDate.getDate() + processingDays);
 
-        // Use nodemailer directly for simple email
-        const nodemailer = await import('nodemailer');
-        const transporter = nodemailer.createTransport({
-          host: process.env.SMTP_HOST || 'smtp.gmail.com',
-          port: Number(process.env.SMTP_PORT) || 587,
-          secure: Number(process.env.SMTP_PORT) === 465,
-          auth: {
-            user: process.env.SMTP_USER || process.env.GMAIL_USER,
-            pass: process.env.SMTP_PASS || process.env.GMAIL_APP_PASSWORD,
-          },
-          tls: {
-            rejectUnauthorized: false,
-          },
-        });
-
         const hoaName = applicationData.hoa_properties?.name || 'Unknown HOA';
-        const emailFrom = process.env.EMAIL_FROM || process.env.EMAIL_USERNAME || process.env.GMAIL_USER;
 
-        await transporter.sendMail({
-          from: `"GMG ResaleFlow" <${emailFrom}>`,
+        await sendEmail({
+          context: 'Lender Questionnaire',
           to: applicationData.submitter_email,
           subject: `Lender Questionnaire Received - #${applicationId}`,
           html: `

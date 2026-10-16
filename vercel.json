@@ -5,10 +5,6 @@
       "schedule": "0 13 * * *"
     },
     {
-      "path": "/api/send-daily-email",
-      "schedule": "0 0 * * *"
-    },
-    {
       "path": "/api/check-deadline-reminders",
       "schedule": "0 5 * * *"
     },
@@ -27,10 +23,7 @@
   ],
   "functions": {
     "pages/api/check-expiring-documents.js": {
-      "maxDuration": 30
-    },
-    "pages/api/send-daily-email.js": {
-      "maxDuration": 30
+      "maxDuration": 300
     },
     "pages/api/check-deadline-reminders.js": {
       "maxDuration": 30

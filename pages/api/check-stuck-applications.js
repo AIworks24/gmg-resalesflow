@@ -1,5 +1,5 @@
-import nodemailer from 'nodemailer';
 import { createClient } from '@supabase/supabase-js';
+import { sendEmail } from '../../lib/emailService';
 
 const ALERT_RECIPIENTS = [
   'matt@aiworks-consulting.com',
@@ -108,25 +108,11 @@ export default async function handler(req, res) {
 </body>
 </html>`;
 
-    const transporter = nodemailer.createTransport({
-      host: process.env.SMTP_HOST,
-      port: process.env.SMTP_PORT || 587,
-      secure: process.env.SMTP_SECURE === 'true',
-      auth: {
-        user: process.env.SMTP_USER || process.env.GMAIL_USER,
-        pass: process.env.SMTP_PASS || process.env.GMAIL_APP_PASSWORD,
-      },
-      tls: {
-        ciphers: process.env.CIPHERS || 'SSLv3',
-        rejectUnauthorized: false,
-      },
-    });
-
-    await transporter.sendMail({
-      from: `"ResalesFlow Alerts" <${process.env.MICROSOFT_FROM_EMAIL || process.env.GMAIL_USER}>`,
-      to: ALERT_RECIPIENTS.join(', '),
+    await sendEmail({
+      to: ALERT_RECIPIENTS,
       subject: `⚠️ ${stuckApps.length} Stuck Application${stuckApps.length > 1 ? 's' : ''} — Action Required`,
       html,
+      context: 'StuckCheck',
     });
 
     console.log(`[StuckCheck] Alert sent for ${stuckApps.length} stuck application(s) to ${ALERT_RECIPIENTS.join(', ')}`);
